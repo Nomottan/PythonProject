@@ -22,28 +22,27 @@ class CompareWindow(QMainWindow):
     def __init__(self, parent=None, logger: ILogger = None, app_paths: AppPaths = None):
         super().__init__(parent)
         self.main_window = parent
+        self.app_paths = app_paths or AppPaths()
+
+        # Переменные состояния
+        self.target_dir = parent.config.get("target_dir", None)
+        self.supply_file = None
+        self.supply_files = []
 
         # ---- Настройка логгера ----
         if logger is not None:
             self.logger = logger
         else:
-            # Создаём свой логгер, если не передан
-            self.logger = CompositeLogger()
-            debug_logger = FileLogger(
-                (app_paths or AppPaths()).get_logs_path() / "debug.log",
-                level="debug"
-            )
-            self.logger.add_logger(debug_logger)
-            self.ui_logger = QtStatusLogger(min_level=1)
-            self.ui_logger.log_signal.connect(self._on_log_message)
-            self.logger.add_logger(self.ui_logger)
+            if hasattr(self.main_window, 'app_logger'):
+                self.logger = self.main_window.app_logger
+            else:
+                self.logger = CompositeLogger()
+                debug_logger = FileLogger(self.app_paths.get_logs_path() / "debug.log", level="debug")
+                self.logger.add_logger(debug_logger)
+                self.ui_logger = QtStatusLogger(min_level=1)
+                self.ui_logger.log_signal.connect(self._on_log_message)
+                self.logger.add_logger(self.ui_logger)
 
-        self.app_paths = app_paths or AppPaths()
-
-        # Переменные состояния
-        self.target_dir = parent.config.get("target_dir", None)
-        self.supply_file = None          # путь к файлу листа поставки
-        self.supply_files = []           # список путей к файлам поставок
 
         # ---- Подготовка множества брендов для CompareService ----
         brands = parent.config.get_brands_objects()
@@ -53,7 +52,7 @@ class CompareWindow(QMainWindow):
             for key in b.keys:
                 brands_set.add(key.lower())
 
-        # ---- Сервис сравнения (передаём логгер и пути) ----
+        # ---- Сервис сравнения ----
         self.service = CompareService(
             logger=self.logger,
             brands_set=brands_set,
@@ -70,7 +69,6 @@ class CompareWindow(QMainWindow):
         # ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ
         # ============================================================
 
-        # ---- Текстовая инструкция ----
         self.instruction_label = LabelFactory.create_label(
             self,
             text="Подготовка к сравнению поставок\n"
@@ -89,7 +87,6 @@ class CompareWindow(QMainWindow):
         )
         main_layout.addWidget(self.instruction_label)
 
-        # ---- Виджет выбора пути ----
         self.path_selector = PathSelector(
             self,
             initial_path=self.target_dir,
@@ -98,7 +95,6 @@ class CompareWindow(QMainWindow):
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
         main_layout.addWidget(self.path_selector)
 
-        # ---- Строка выбора файла листа поставки ----
         self.btn_choose_file = ButtonFactory.create_button(
             self, "Выбрать Лист сверки", (100, 120, 100, 0.8)
         )
@@ -124,7 +120,6 @@ class CompareWindow(QMainWindow):
         columns_layout = QHBoxLayout()
         columns_layout.setSpacing(10)
 
-        # Левая колонка (кнопки)
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -140,7 +135,6 @@ class CompareWindow(QMainWindow):
         )
         left_layout.addWidget(self.step_label)
 
-        # Кнопки действий
         self.btn_prepare = ButtonFactory.create_button(
             self, "Подготовить для работы", (70, 120, 160, 0.8),
             padding="8px 16px", fixed_size=(220, 35)
@@ -178,11 +172,9 @@ class CompareWindow(QMainWindow):
         )
         self.btn_report.clicked.connect(self.on_generate_report)
         self.btn_report.setEnabled(False)
-
         left_layout.addWidget(self.btn_report)
         left_layout.addStretch()
 
-        # Правая колонка (список файлов поставок)
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -241,14 +233,12 @@ class CompareWindow(QMainWindow):
         self.status_display.setMinimumHeight(100)
         main_layout.addWidget(self.status_display)
 
-        # Стартовое сообщение
         self.logger.info("Окно сравнения поставок готово к работе.")
 
     # ============================================================
-    # СЛОТ ДЛЯ ЛОГГЕРА (вывод в статусную область)
+    # СЛОТ ДЛЯ ЛОГГЕРА
     # ============================================================
-    def _on_log_message(self, msg: str, level: int) -> None:
-        """Принимает сообщения от логгера и выводит в статусную область."""
+    def _on_log_message(self, msg: str, level: int):
         self.status_display.append(msg)
 
     # ============================================================
@@ -308,17 +298,14 @@ class CompareWindow(QMainWindow):
 
         self.logger.info("=== ПОДГОТОВКА ДАННЫХ ===")
         try:
-            # 1. Копирование листа поставки
             self.logger.info("Шаг 1: Копирование листа поставки...")
             copied_path = self.service.copy_supply_sheet(self.supply_file, self.target_dir)
             self.logger.info(f"  Копия создана: {copied_path}")
 
-            # 2. Сборный файл поставок
             self.logger.info("Шаг 2: Формирование сборного файла поставок...")
             consolidated_path = self.service.build_consolidated_supply(self.supply_files, self.target_dir)
             self.logger.info(f"  Сборный файл создан: {consolidated_path}")
 
-            # 3. Загрузка данных в сервис
             self.logger.info("Шаг 3: Загрузка данных...")
             self.service.load_data()
             self.logger.info(
@@ -408,14 +395,13 @@ class CompareWindow(QMainWindow):
         self.logger.info("=== ФОРМИРОВАНИЕ ОТЧЁТА ===")
         try:
             self.service.generate_report(self.target_dir)
-            self.service.save_mappings()  # сохранение маппингов
+            self.service.save_mappings()
             self.logger.info("Отчёт и сопоставления сохранены.")
         except Exception as e:
             self.logger.error(f"Ошибка при формировании отчёта: {e}")
             return
 
     def _open_mappings_window(self):
-        """Открывает окно редактирования сохранённых сопоставлений."""
         from ui.windows.mappings_window import BrandMappingsWindow
         window = BrandMappingsWindow(
             parent=self,

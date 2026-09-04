@@ -1,3 +1,4 @@
+# services/compare_service.py
 import re
 import json
 from pathlib import Path
@@ -730,12 +731,44 @@ class CompareService:
                 self.logger.error(f"Ошибка загрузки сопоставлений: {e}")
             return {}
 
-    def save_mappings(self, mappings=None) -> None:
-        if mappings is None:
-            if self.logger:
-                self.logger.info("Нет данных для сохранения сопоставлений")
-            return
+    def _collect_mappings(self) -> dict:
+        """
+        Собирает текущие сопоставления из найденных товаров.
+        Возвращает словарь вида {brand: {article: {"shk": ..., "supply_name": ..., "candidate_name": ...}}}
+        """
+        mappings = {}
+        all_items = []
+        all_items.extend(self.found_stage1)
+        all_items.extend(self.found_stage2)
+        all_items.extend(self.final_items)
 
+        for item in all_items:
+            if item.found and item.matched_candidate and item.article:
+                brand = item.brand or "Без бренда"
+                article = item.article
+                shk = item.matched_candidate.shk or ""
+                supply_name = item.matched_candidate.name or ""
+                candidate_name = item.name or ""
+
+                if brand not in mappings:
+                    mappings[brand] = {}
+                mappings[brand][article] = {
+                    "shk": shk,
+                    "supply_name": supply_name,
+                    "candidate_name": candidate_name
+                }
+        return mappings
+
+    def save_mappings(self, mappings=None) -> None:
+        """Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных."""
+        if mappings is None:
+            mappings = self._collect_mappings()
+            if not mappings:
+                if self.logger:
+                    self.logger.info("Нет сопоставлений для сохранения")
+                return
+
+        # Нормализуем имена брендов, если есть brands_from_config
         if self.brands_from_config:
             mappings = self._normalize_brand_names(mappings, self.brands_from_config)
 
