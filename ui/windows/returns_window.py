@@ -222,44 +222,30 @@ class ReturnsWindow(QMainWindow):
     # РЕГИСТРАЦИЯ ШАГОВ
     # ============================================================
     def _register_steps(self):
-        """Регистрирует шаги процесса в контроллере."""
-        checker = self.controller.condition_checker
+        from ui.instructions.returns_instruction import ReturnsInstruction
 
-        # 1. Подготовка (первый шаг)
         self.controller.register_step(
             step_id="prepare",
             button_text="Подготовка",
-            condition_func=lambda: (True, ""),  # всегда активна, если есть файлы
+            condition_func=lambda: ReturnsInstruction.can_prepare(self.source_file),
             action_func=self._do_prepare,
-            action_kwargs={
-                "target_dir": self.target_dir,
-                "source_file": self.source_file,
-                "sellers": self.sellers
-            },
             is_first=True
         )
 
-        # 2. Выгрузка КИЗов
         self.controller.register_step(
             step_id="export_kiz",
             button_text="Выгрузить КИЗы",
-            condition_func=checker.can_export_kiz_returns,
+            condition_func=lambda: ReturnsInstruction.can_export_kiz(self.controller.run_manager),
             action_func=self._do_export_kiz,
-            action_kwargs={"target_dir": self.target_dir},
             depends_on=["prepare"]
         )
 
-        # 3. Подготовка передач (финальный)
         self.controller.register_step(
             step_id="prepare_transfer",
             button_text="Подготовить передачу",
-            condition_func=checker.can_prepare_transfer_returns,
+            condition_func=lambda: ReturnsInstruction.can_prepare_transfer(self.controller.run_manager),
             action_func=self._do_prepare_transfer,
-            action_kwargs={
-                "target_dir": self.target_dir,
-                "sellers": self.sellers
-            },
-            depends_on=["export_kiz"],
+            depends_on=["prepare"],  # <-- тоже зависит только от prepare
             is_final=True,
             auto_open_folder=True
         )

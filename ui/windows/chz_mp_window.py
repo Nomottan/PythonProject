@@ -244,64 +244,54 @@ class ChzMPWindow(QMainWindow):
     # РЕГИСТРАЦИЯ ШАГОВ
     # ============================================================
     def _register_steps(self):
-        """Регистрирует шаги процесса в контроллере."""
-        checker = self.controller.condition_checker
+        from ui.instructions.chz_mp_instruction import ChzMPInstruction
 
-        # 1. Подготовка (первый шаг, всегда активен при наличии файлов)
         self.controller.register_step(
             step_id="prepare",
             button_text="Подготовка",
-            condition_func=lambda: (bool(self.fbs_files or self.mp_files), ""),
+            condition_func=lambda: ChzMPInstruction.can_prepare(
+                self.controller.run_manager, self.fbs_files, self.mp_files
+            ),
             action_func=self._do_prepare,
-            action_kwargs={
-                "fbs_files": self.fbs_files,
-                "mp_files": self.mp_files,
-                "sellers": self.sellers
-            },
             is_first=True
         )
 
-        # 2. Выгрузка для обработки
         self.controller.register_step(
             step_id="export_kiz",
             button_text="Выгрузка для обработки",
-            condition_func=checker.can_export_kiz_chz,
+            condition_func=lambda: ChzMPInstruction.can_export_kiz(self.controller.run_manager),
             action_func=self._do_export_kiz,
-            action_kwargs={"sellers": self.sellers},
             depends_on=["prepare"]
         )
 
-        # 3. Сбор данных (фильтрация предитоговых)
         self.controller.register_step(
             step_id="filter_prefinal",
             button_text="Сбор данных",
-            condition_func=checker.can_filter_prefinal_chz,
+            condition_func=lambda: ChzMPInstruction.can_filter_prefinal(
+                self.controller.run_manager, self.sellers
+            ),
             action_func=self._do_filter_prefinal,
-            action_kwargs={"sellers": self.sellers},
             depends_on=["export_kiz"]
         )
 
-        # 4. Продажи
         self.controller.register_step(
             step_id="generate_sales",
             button_text="Продажи",
-            condition_func=checker.can_generate_sales_chz,
+            condition_func=lambda: ChzMPInstruction.can_generate_sales(
+                self.controller.run_manager, self.sellers
+            ),
             action_func=self._do_generate_sales,
-            action_kwargs={"sellers": self.sellers},
             depends_on=["filter_prefinal"]
         )
 
-        # 5. Установка цен (финальный шаг)
         self.controller.register_step(
             step_id="finalize_prices",
             button_text="Установка цен",
-            condition_func=checker.can_finalize_prices_chz,
+            condition_func=lambda: ChzMPInstruction.can_finalize_prices(
+                self.controller.run_manager, self.sellers
+            ),
             action_func=self._do_finalize_prices,
-            action_kwargs={
-                "sellers": self.sellers,
-                "saved_prices": self.main_window.config.get("seller_prices", {})
-            },
-            depends_on=["generate_sales"],
+            depends_on=["filter_prefinal"],
             is_final=True,
             auto_open_folder=True
         )
@@ -309,36 +299,36 @@ class ChzMPWindow(QMainWindow):
     # ============================================================
     # МЕТОДЫ ДЕЙСТВИЙ (вызываются контроллером)
     # ============================================================
-    def _do_prepare(self, fbs_files: list, mp_files: list, sellers):
+    def _do_prepare(self):
         """Запускает подготовку (копирование файлов)."""
         service = PreparationService(self.logger, self.controller.run_manager)
         service.prepare(
             target_dir=self.target_dir,
-            fbs_files=fbs_files,
-            mp_files=mp_files,
-            sellers=sellers
+            fbs_files=self.fbs_files,
+            mp_files=self.mp_files,
+            sellers=self.sellers
         )
 
-    def _do_export_kiz(self, sellers):
+    def _do_export_kiz(self):
         """Запускает выгрузку КИЗов для обработки."""
         service = ExportKizService(self.logger, self.controller.run_manager)
-        service.export(self.target_dir, sellers)
+        service.export(self.target_dir, self.sellers)
 
-    def _do_filter_prefinal(self, sellers):
+    def _do_filter_prefinal(self):
         """Запускает фильтрацию предитоговых файлов."""
         service = FilterPreFinalService(self.logger, self.controller.run_manager)
-        service.filter_files(self.target_dir, sellers)
+        service.filter_files(self.target_dir, self.sellers)
 
-    def _do_generate_sales(self, sellers):
+    def _do_generate_sales(self):
         """Запускает формирование файлов продаж."""
         service = GenerateSalesService(self.logger, self.controller.run_manager)
-        service.generate(self.target_dir, sellers)
+        service.generate(self.target_dir, self.sellers)
 
-    def _do_finalize_prices(self, sellers, saved_prices: dict):
+    def _do_finalize_prices(self):
         """Запускает установку цен и финализацию."""
         service = FinalizePricesService(self.logger, self.controller.run_manager)
-        updated_prices = service.finalize(self.target_dir, sellers, saved_prices)
-        # Сохраняем обновлённые цены в конфиг
+        saved_prices = self.main_window.config.get("seller_prices", {})
+        updated_prices = service.finalize(self.target_dir, self.sellers, saved_prices)
         if updated_prices:
             self.main_window.config.set("seller_prices", updated_prices)
 

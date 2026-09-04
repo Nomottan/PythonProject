@@ -8,6 +8,10 @@ from PySide6.QtWidgets import (
     QTextEdit, QSpinBox, QDateTimeEdit, QAbstractSpinBox, QDateEdit
 )
 
+from ui.widgets.process_button import ProcessButton, ButtonState
+from typing import Callable, Tuple
+from utils.logger import ILogger
+
 
 class BaseWidgetFactory:
     """Базовый класс для фабрик виджетов. Предоставляет общие методы стилизации и настройки."""
@@ -121,48 +125,20 @@ class ButtonFactory(BaseWidgetFactory):
     """Фабрика для создания кнопок."""
 
     @staticmethod
+    @staticmethod
     def create_button(parent, text, bg_color, text_color=None,
                       padding="8px 16px", fixed_size=None, alignment=None,
-                      object_name=None, cursor_shape=None,
-                      hover_color=None, border_radius=5, border="none",
-                      font_size=None, font_weight=None,
+                      object_name=None, cursor_shape=None, border_radius=5,
+                      border="none", font_size=None, font_weight=None,
                       extra_style="", checkable=False, checked=False,
-                      tooltip=None, min_size=None, max_size=None):
-        """
-        Универсальное создание стилизованной кнопки.
-
-        Параметры:
-            parent          – родительский виджет.
-            text            – текст на кнопке.
-            bg_color        – цвет фона (кортеж (r,g,b) или (r,g,b,a) или строка).
-            text_color      – цвет текста (если None, подбирается автоматически).
-            padding         – внутренние отступы (CSS-подобная строка).
-            fixed_size      – фиксированный размер (width, height) или None.
-            alignment       – выравнивание текста (значение Qt.Align... или строкой).
-            object_name     – objectName для селекторной стилизации.
-            cursor_shape    – форма курсора (например, Qt.PointingHandCursor).
-            hover_color     – цвет фона при наведении (если None, вычисляется).
-            border_radius   – радиус скругления углов (целое число, в пикселях).
-            border          – стиль рамки (например, "1px solid #5a4a5c").
-            font_size       – размер шрифта (в пикселях).
-            font_weight     – насыщенность шрифта (например, "bold").
-            extra_style     – дополнительный CSS, добавляемый к стилю.
-            checkable       – если True, кнопка становится переключателем.
-            checked         – начальное состояние checked (если checkable=True).
-            tooltip         – всплывающая подсказка.
-            min_size        – минимальный размер (width, height) или None.
-            max_size        – максимальный размер (width, height) или None.
-        """
+                      tooltip=None, min_size=None, max_size=None,
+                      hover_color=None):
         btn = QPushButton(text, parent)
-
-        # Устанавливаем objectName до применения стиля, чтобы селектор работал
+        # Устанавливаем общие параметры
         if object_name:
             btn.setObjectName(object_name)
-        if cursor_shape is not None:
+        if cursor_shape:
             btn.setCursor(cursor_shape)
-        if checkable:
-            btn.setCheckable(True)
-            btn.setChecked(checked)
         if tooltip:
             btn.setToolTip(tooltip)
         if min_size:
@@ -171,45 +147,86 @@ class ButtonFactory(BaseWidgetFactory):
             btn.setMaximumSize(*max_size)
         if fixed_size:
             btn.setFixedSize(*fixed_size)
+        if checkable:
+            btn.setCheckable(True)
+            btn.setChecked(checked)
+        if alignment:
+            btn.setStyleSheet(f"text-align: {alignment};")
 
-        # Получаем цветовые строки
-        bg_c = BaseWidgetFactory.color_to_str(bg_color)
-        text_c = BaseWidgetFactory.calc_text_color(bg_color, text_color)
-        hover_c = hover_color if hover_color else BaseWidgetFactory.calc_hover_color(bg_color)
+        # Применяем стиль через общий метод
+        ButtonFactory._apply_button_style(
+            btn, bg_color, text_color, padding, border_radius, border,
+            font_size, font_weight, extra_style, hover_color
+        )
+        return btn
 
-        # Определяем селектор: используем object_name для точечного стиля
-        selector = f"QPushButton#{object_name}" if object_name else "QPushButton"
-
-        # Собираем основной стиль
-        style = f"""
-            {selector} {{
-                background-color: {bg_c};
-                color: {text_c};
-                padding: {padding};
-                border: {border};
-                border-radius: {border_radius}px;
+    @staticmethod
+    def create_process_button(
+            parent,
+            step_id: str,
+            text: str,
+            condition_checker: Callable[[], Tuple[bool, str]],
+            action: Callable,
+            logger: ILogger,
+            bg_color,
+            text_color=None,
+            padding="8px 16px",
+            fixed_size=None,
+            alignment=None,
+            object_name=None,
+            cursor_shape=None,
+            border_radius=5,
+            border="none",
+            font_size=None,
+            font_weight=None,
+            extra_style="",
+            hover_color=None,
+            tooltip=None,
+            min_size=None,
+            max_size=None,
+            initial_state: ButtonState = ButtonState.GRAY,
+    ) -> ProcessButton:
         """
-        if alignment is not None:
-            style += f"text-align: {alignment};"
-        if font_size is not None:
-            style += f"font-size: {font_size}px;"
-        if font_weight is not None:
-            style += f"font-weight: {font_weight};"
-        style += "}"
+        Создаёт ProcessButton с заданным стилем.
+        """
+        # Создаём кнопку с передачей bg_color
+        btn = ProcessButton(
+            step_id=step_id,
+            text=text,
+            condition_checker=condition_checker,
+            action=action,
+            logger=logger,
+            bg_color=bg_color,
+            parent=parent,
+            initial_state=initial_state,
+        )
+        # Общие настройки (object_name, tooltip, размеры и т.д.)
+        if object_name:
+            btn.setObjectName(object_name)
+        if cursor_shape:
+            btn.setCursor(cursor_shape)
+        if tooltip:
+            btn.setToolTip(tooltip)
+        if min_size:
+            btn.setMinimumSize(*min_size)
+        if max_size:
+            btn.setMaximumSize(*max_size)
+        if fixed_size:
+            btn.setFixedSize(*fixed_size)
+        if alignment:
+            btn.setStyleSheet(f"text-align: {alignment};")
 
-        # Hover-эффект
-        if hover_c:
-            style += f"""
-            {selector}:hover {{
-                background-color: {hover_c};
-            }}
-            """
-        # Применяем стиль
-        btn.setStyleSheet(style)
+        # Применяем базовый стиль через общий метод
+        ButtonFactory._apply_button_style(
+            btn, bg_color, text_color, padding, border_radius, border,
+            font_size, font_weight, extra_style, hover_color
+        )
 
-        # Добавляем дополнительный CSS, если он задан
-        if extra_style:
-            btn.setStyleSheet(btn.styleSheet() + extra_style)
+        # Сохраняем базовый стиль в кнопке (для последующего использования в состояниях)
+        btn._base_style = btn.styleSheet()
+
+        # Применяем начальное состояние (перерисовывает кнопку)
+        btn.update_state(initial_state)
 
         return btn
 
@@ -240,6 +257,44 @@ class ButtonFactory(BaseWidgetFactory):
         )
         btn.clicked.connect(callback)
         return btn
+
+    @staticmethod
+    def _apply_button_style(btn, bg_color, text_color=None, padding="8px 16px",
+                            border_radius=5, border="none", font_size=None,
+                            font_weight=None, extra_style="", hover_color=None):
+        """
+        Применяет стиль к любой кнопке (QPushButton или ProcessButton).
+        """
+        bg_c = BaseWidgetFactory.color_to_str(bg_color)
+        text_c = BaseWidgetFactory.calc_text_color(bg_color, text_color)
+        hover_c = hover_color if hover_color else BaseWidgetFactory.calc_hover_color(bg_color)
+
+        selector = f"QPushButton#{btn.objectName()}" if btn.objectName() else "QPushButton"
+
+        style = f"""
+                {selector} {{
+                    background-color: {bg_c};
+                    color: {text_c};
+                    padding: {padding};
+                    border: {border};
+                    border-radius: {border_radius}px;
+            """
+        if font_size:
+            style += f"font-size: {font_size}px;"
+        if font_weight:
+            style += f"font-weight: {font_weight};"
+        style += "}"
+
+        if hover_c:
+            style += f"""
+                {selector}:hover {{
+                    background-color: {hover_c};
+                }}
+                """
+        if extra_style:
+            style += extra_style
+
+        btn.setStyleSheet(style)
 
     @staticmethod
     def create_buttons_from_config(parent, configs, handlers=None):

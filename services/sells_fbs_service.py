@@ -12,14 +12,14 @@ from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
 from utils.path_utils import AppPaths
-
+from utils.run_manager import RunManager
 
 class PreparationService:
     """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
 
-    def __init__(self, logger: ILogger, app_paths: Optional[AppPaths] = None):
+    def __init__(self, logger: ILogger, run_manager: RunManager):
         self.logger = logger
-        self.app_paths = app_paths or AppPaths()
+        self.run_manager = run_manager
 
     def prepare(self, target_dir: str, fbs_files=None, mp_files=None, sellers=None):
         if sellers is None:
@@ -29,11 +29,7 @@ class PreparationService:
         if mp_files is None:
             mp_files = []
 
-        # Создаём рабочую папку
-        today = date.today()
-        date_str = f"{today.day}_{today.month}_{today.year}"
-        work_folder = Path(target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        work_folder.mkdir(parents=True, exist_ok=True)
+        work_folder = self.run_manager.get_work_folder()
 
         # Отчётный логгер
         report_path = work_folder / "log_подготовка.txt"
@@ -57,7 +53,6 @@ class PreparationService:
 
     # ---------- Приватные методы ----------
     def _copy_fbs_files(self, work_folder: Path, fbs_files: List[str]):
-        """Копирует файлы ЧЗ МП с последовательным переименованием."""
         if not fbs_files:
             self.logger.info("Нет файлов ЧЗ МП для копирования")
             return
@@ -72,7 +67,6 @@ class PreparationService:
             FileHelper.copy_file_with_log(src_path, dst, self.logger, "ЧЗ МП", overwrite=False)
 
     def _copy_mp_files(self, work_folder: Path, mp_files: List[str], sellers):
-        """Копирует отчёты МП, определяя продавца по ключам в имени файла."""
         if not mp_files:
             self.logger.info("Нет отчётов МП для копирования")
             return
@@ -98,7 +92,6 @@ class PreparationService:
             FileHelper.copy_file_with_log(src_path, dst, self.logger, "отчёт", overwrite=False)
 
     def _determine_seller_for_mp_file(self, file_name_lower: str, sellers):
-        """Ищет продавца по вхождению любого ключа в имя файла."""
         for seller in sellers:
             if any(key.lower() in file_name_lower for key in seller.keys):
                 return seller
@@ -108,15 +101,12 @@ class PreparationService:
 class ExportKizService:
     """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы."""
 
-    def __init__(self, logger: ILogger, app_paths: Optional[AppPaths] = None):
+    def __init__(self, logger: ILogger, run_manager: RunManager):
         self.logger = logger
-        self.app_paths = app_paths or AppPaths()
+        self.run_manager = run_manager
 
     def export(self, target_dir: str, sellers):
-        today = date.today()
-        date_str = f"{today.day}_{today.month}_{today.year}"
-        work_folder = Path(target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        work_folder.mkdir(parents=True, exist_ok=True)
+        work_folder = self.run_manager.get_work_folder()
 
         report_path = work_folder / "log_выгрузка_кизов.txt"
         report_logger = ReportFileLogger(report_path)
@@ -267,15 +257,12 @@ class ExportKizService:
 class FilterPreFinalService:
     """Сервис фильтрации предитоговых файлов по статусу и владельцу."""
 
-    def __init__(self, logger: ILogger, app_paths: Optional[AppPaths] = None):
+    def __init__(self, logger: ILogger, run_manager: RunManager):
         self.logger = logger
-        self.app_paths = app_paths or AppPaths()
+        self.run_manager = run_manager
 
     def filter_files(self, target_dir: str, sellers):
-        today = date.today()
-        date_str = f"{today.day}_{today.month}_{today.year}"
-        work_folder = Path(target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        work_folder.mkdir(parents=True, exist_ok=True)
+        work_folder = self.run_manager.get_work_folder()
 
         report_path = work_folder / "log_фильтрация.txt"
         report_logger = ReportFileLogger(report_path)
@@ -349,15 +336,12 @@ class FilterPreFinalService:
 class GenerateSalesService:
     """Сервис формирования файлов продаж на основе владельца (company) КИЗов."""
 
-    def __init__(self, logger: ILogger, app_paths: Optional[AppPaths] = None):
+    def __init__(self, logger: ILogger, run_manager: RunManager):
         self.logger = logger
-        self.app_paths = app_paths or AppPaths()
+        self.run_manager = run_manager
 
     def generate(self, target_dir: str, sellers):
-        today = date.today()
-        date_str = f"{today.day}_{today.month}_{today.year}"
-        work_folder = Path(target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        work_folder.mkdir(parents=True, exist_ok=True)
+        work_folder = self.run_manager.get_work_folder()
 
         report_path = work_folder / "log_продажи.txt"
         report_logger = ReportFileLogger(report_path)
@@ -459,18 +443,15 @@ class GenerateSalesService:
 class FinalizePricesService:
     """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""
 
-    def __init__(self, logger: ILogger, app_paths: Optional[AppPaths] = None):
+    def __init__(self, logger: ILogger, run_manager: RunManager):
         self.logger = logger
-        self.app_paths = app_paths or AppPaths()
+        self.run_manager = run_manager
 
     def finalize(self, target_dir: str, sellers, saved_prices: dict = None):
         if saved_prices is None:
             saved_prices = {}
 
-        today = date.today()
-        date_str = f"{today.day}_{today.month}_{today.year}"
-        work_folder = Path(target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        work_folder.mkdir(parents=True, exist_ok=True)
+        work_folder = self.run_manager.get_work_folder()
 
         report_path = work_folder / "log_цены.txt"
         report_logger = ReportFileLogger(report_path)

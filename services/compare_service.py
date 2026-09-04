@@ -760,27 +760,45 @@ class CompareService:
         return mappings
 
     def save_mappings(self, mappings=None) -> None:
-        """Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных."""
+        """Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных.
+        Если файл уже существует, новые сопоставления добавляются к существующим.
+        """
+        # 1. Загружаем существующие маппинги из файла
+        existing = self.load_mappings()
+
+        # 2. Определяем новые маппинги
         if mappings is None:
-            mappings = self._collect_mappings()
-            if not mappings:
-                if self.logger:
-                    self.logger.info("Нет сопоставлений для сохранения")
-                return
+            new_mappings = self._collect_mappings()
+        else:
+            new_mappings = mappings
 
-        # Нормализуем имена брендов, если есть brands_from_config
+        # 3. Если новых нет, выходим (сохраняем как есть, но можно ничего не делать)
+        if not new_mappings:
+            if existing:
+                self.logger.info("Нет новых сопоставлений для добавления")
+            else:
+                self.logger.info("Нет сопоставлений для сохранения")
+            return
+
+        # 4. Объединяем: добавляем/обновляем статьи для каждого бренда
+        for brand, articles in new_mappings.items():
+            if brand in existing:
+                existing[brand].update(articles)  # обновляем существующие статьи
+            else:
+                existing[brand] = articles  # добавляем новый бренд
+
+        # 5. Нормализуем имена брендов (если есть конфиг)
         if self.brands_from_config:
-            mappings = self._normalize_brand_names(mappings, self.brands_from_config)
+            existing = self._normalize_brand_names(existing, self.brands_from_config)
 
+        # 6. Сохраняем объединённый словарь
         mappings_path = self._get_mappings_path()
         try:
             with open(mappings_path, "w", encoding="utf-8") as f:
-                json.dump(mappings, f, ensure_ascii=False, indent=4)
-            if self.logger:
-                self.logger.info(f"Сохранено брендов: {len(mappings)}")
+                json.dump(existing, f, ensure_ascii=False, indent=4)
+            self.logger.info(f"Сохранено брендов: {len(existing)} (добавлено из текущей сессии)")
         except IOError as e:
-            if self.logger:
-                self.logger.error(f"Ошибка сохранения сопоставлений: {e}")
+            self.logger.error(f"Ошибка сохранения сопоставлений: {e}")
 
     def _apply_mappings(self, items: List[SupplyItem], candidates: List[Candidate]) -> Tuple[
         List[SupplyItem], List[Candidate]]:

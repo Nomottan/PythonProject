@@ -11,9 +11,12 @@ from ui.factories.factories import (
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.path_selector import PathSelector
 from pathlib import Path
+from ui.instructions.compare_instruction import CompareInstruction
 from services.compare_service import CompareService
 from utils.logger import ILogger, CompositeLogger, FileLogger, QtStatusLogger
 from utils.path_utils import AppPaths
+from utils.process_controller import ProcessController
+from ui.widgets.process_button import ButtonState
 
 
 class CompareWindow(QMainWindow):
@@ -23,11 +26,6 @@ class CompareWindow(QMainWindow):
         super().__init__(parent)
         self.main_window = parent
         self.app_paths = app_paths or AppPaths()
-
-        # Переменные состояния
-        self.target_dir = parent.config.get("target_dir", None)
-        self.supply_file = None
-        self.supply_files = []
 
         # ---- Настройка логгера ----
         if logger is not None:
@@ -39,12 +37,14 @@ class CompareWindow(QMainWindow):
                 self.logger = CompositeLogger()
                 debug_logger = FileLogger(self.app_paths.get_logs_path() / "debug.log", level="debug")
                 self.logger.add_logger(debug_logger)
+                self.ui_logger = QtStatusLogger(min_level=1)
+                self.ui_logger.log_signal.connect(self._on_log_message)
+                self.logger.add_logger(self.ui_logger)
 
-        self.ui_logger = QtStatusLogger(min_level=1)
-        self.ui_logger.log_signal.connect(self._on_log_message)
-        self.logger.add_logger(self.ui_logger)
-
-
+        # ---- Переменные состояния ----
+        self.target_dir = parent.config.get("target_dir", None)
+        self.supply_file = None
+        self.supply_files = []
 
         # ---- Подготовка множества брендов для CompareService ----
         brands = parent.config.get_brands_objects()
@@ -61,14 +61,29 @@ class CompareWindow(QMainWindow):
             app_paths=self.app_paths
         )
 
-        # Настройка окна через WindowFactory
+        # ---- Контроллер процесса ----
+        self.controller = ProcessController(
+            process_name="Сравнение",
+            target_dir=self.target_dir,
+            config_manager=parent.config,
+            logger=self.logger,
+            parent_widget=self
+        )
+        self.controller.state_changed.connect(self._on_state_changed)
+        self.controller.log_message.connect(self._on_log_message)
+        self.controller.open_folder.connect(self._on_open_folder)
+
+        # ---- Регистрация шагов ----
+        self._register_steps()
+
+        # ---- Настройка окна ----
         main_layout = WindowFactory.setup_child_window(
             self, "Сравнение поставок",
             bg_color=(45, 55, 70, 0.95)
         )
 
         # ============================================================
-        # ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ
+        # ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ UI
         # ============================================================
 
         self.instruction_label = LabelFactory.create_label(
@@ -97,6 +112,7 @@ class CompareWindow(QMainWindow):
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
         main_layout.addWidget(self.path_selector)
 
+        # ---- Строка выбора файла листа поставки ----
         self.btn_choose_file = ButtonFactory.create_button(
             self, "Выбрать Лист сверки", (100, 120, 100, 0.8)
         )
@@ -118,7 +134,7 @@ class CompareWindow(QMainWindow):
         )
         main_layout.addWidget(file_row)
 
-        # ---- ДВЕ КОЛОНКИ ----
+        # ---- Две колонки ----
         columns_layout = QHBoxLayout()
         columns_layout.setSpacing(10)
 
@@ -137,46 +153,87 @@ class CompareWindow(QMainWindow):
         )
         left_layout.addWidget(self.step_label)
 
-        self.btn_prepare = ButtonFactory.create_button(
-            self, "Подготовить для работы", (70, 120, 160, 0.8),
-            padding="8px 16px", fixed_size=(220, 35)
+        # ---- Кнопки процесса (через фабрику кнопок процесса) ----
+        # Подготовка
+        self.btn_prepare = ButtonFactory.create_process_button(
+            parent=self,
+            step_id="prepare",
+            text="Подготовить для работы",
+            condition_checker=lambda: CompareInstruction.can_prepare(
+                self.controller.run_manager, self.supply_file, self.supply_files
+            ),
+            action=self._do_prepare,
+            logger=self.logger,
+            bg_color=(70, 120, 160),
+            fixed_size=(220, 35),
+            padding="8px 16px",
+            initial_state=ButtonState.GRAY
         )
-        self.btn_prepare.clicked.connect(self.on_prepare)
         left_layout.addWidget(self.btn_prepare)
 
-        self.btn_stage1 = ButtonFactory.create_button(
-            self, "Этап 1 (жёсткая сверка)", (70, 140, 200, 0.8),
-            padding="8px 16px", fixed_size=(220, 35)
+        # Этап 1
+        self.btn_stage1 = ButtonFactory.create_process_button(
+            parent=self,
+            step_id="stage1",
+            text="Этап 1 (жёсткая сверка)",
+            condition_checker=lambda: CompareInstruction.can_stage1(self.service),
+            action=self._do_stage1,
+            logger=self.logger,
+            bg_color=(70, 140, 200),
+            fixed_size=(220, 35),
+            padding="8px 16px",
+            initial_state=ButtonState.GRAY
         )
-        self.btn_stage1.clicked.connect(self.on_stage1)
-        self.btn_stage1.setEnabled(False)
         left_layout.addWidget(self.btn_stage1)
 
-        self.btn_stage2 = ButtonFactory.create_button(
-            self, "Этап 2 (мягкая сверка)", (140, 140, 70, 0.8),
-            padding="8px 16px", fixed_size=(220, 35)
+        # Этап 2
+        self.btn_stage2 = ButtonFactory.create_process_button(
+            parent=self,
+            step_id="stage2",
+            text="Этап 2 (мягкая сверка)",
+            condition_checker=lambda: CompareInstruction.can_stage2(self.service),
+            action=self._do_stage2,
+            logger=self.logger,
+            bg_color=(140, 140, 70),
+            fixed_size=(220, 35),
+            padding="8px 16px",
+            initial_state=ButtonState.GRAY
         )
-        self.btn_stage2.clicked.connect(self.on_stage2)
-        self.btn_stage2.setEnabled(False)
         left_layout.addWidget(self.btn_stage2)
 
-        self.btn_stage3 = ButtonFactory.create_button(
-            self, "Этап 3 (ручной выбор)", (200, 140, 70, 0.8),
-            padding="8px 16px", fixed_size=(220, 35)
+        # Этап 3
+        self.btn_stage3 = ButtonFactory.create_process_button(
+            parent=self,
+            step_id="stage3",
+            text="Этап 3 (ручной выбор)",
+            condition_checker=lambda: CompareInstruction.can_stage3(self.service),
+            action=self._do_stage3,
+            logger=self.logger,
+            bg_color=(200, 140, 70),
+            fixed_size=(220, 35),
+            padding="8px 16px",
+            initial_state=ButtonState.GRAY
         )
-        self.btn_stage3.clicked.connect(self.on_stage3)
-        self.btn_stage3.setEnabled(False)
         left_layout.addWidget(self.btn_stage3)
 
-        self.btn_report = ButtonFactory.create_button(
-            self, "Сформировать отчёт", (70, 160, 200, 0.8),
-            padding="8px 16px", fixed_size=(220, 35)
+        # Отчёт
+        self.btn_report = ButtonFactory.create_process_button(
+            parent=self,
+            step_id="report",
+            text="Сформировать отчёт",
+            condition_checker=lambda: CompareInstruction.can_report(self.service),
+            action=self._do_report,
+            logger=self.logger,
+            bg_color=(70, 160, 200),
+            fixed_size=(220, 35),
+            padding="8px 16px",
+            initial_state=ButtonState.GRAY
         )
-        self.btn_report.clicked.connect(self.on_generate_report)
-        self.btn_report.setEnabled(False)
         left_layout.addWidget(self.btn_report)
+
         left_layout.addStretch()
 
+        # ---- Правая колонка: список файлов поставок ----
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -205,19 +262,19 @@ class CompareWindow(QMainWindow):
         columns_layout.addWidget(right_widget)
         main_layout.addLayout(columns_layout)
 
-        btn_mappings = ButtonFactory.create_button(
+        # ---- Кнопка "Сохранённые сопоставления" ----
+        self.btn_mappings = ButtonFactory.create_button(
             self, "Сохранённые сопоставления", (70, 120, 160, 0.8),
             padding="8px 16px", fixed_size=(200, 30)
         )
-        btn_mappings.clicked.connect(self._open_mappings_window)
+        self.btn_mappings.clicked.connect(self._open_mappings_window)
         mappings_row = LayoutFactory.create_row(
-            self, btn_mappings,
+            self, self.btn_mappings,
             alignment=Qt.AlignCenter
         )
-        self.btn_mappings = btn_mappings
         main_layout.addWidget(mappings_row)
 
-        # ---- Лог-область ----
+        # ---- Статусная область ----
         self.status_display = QTextEdit()
         self.status_display.setReadOnly(True)
         self.status_display.setStyleSheet("""
@@ -238,18 +295,150 @@ class CompareWindow(QMainWindow):
         self.logger.info("Окно сравнения поставок готово к работе.")
 
     # ============================================================
-    # СЛОТ ДЛЯ ЛОГГЕРА
+    # РЕГИСТРАЦИЯ ШАГОВ В КОНТРОЛЛЕРЕ
     # ============================================================
+    def _register_steps(self):
+        """Регистрирует все шаги процесса сравнения в контроллере."""
+        self.controller.register_step(
+            step_id="prepare",
+            button_text="Подготовить для работы",
+            condition_func=lambda: CompareInstruction.can_prepare(
+                self.controller.run_manager, self.supply_file, self.supply_files
+            ),
+            action_func=self._do_prepare,
+            is_first=True
+        )
+
+        self.controller.register_step(
+            step_id="stage1",
+            button_text="Этап 1 (жёсткая сверка)",
+            condition_func=lambda: CompareInstruction.can_stage1(self.service),
+            action_func=self._do_stage1,
+            depends_on=["prepare"]
+        )
+
+        self.controller.register_step(
+            step_id="stage2",
+            button_text="Этап 2 (мягкая сверка)",
+            condition_func=lambda: CompareInstruction.can_stage2(self.service),
+            action_func=self._do_stage2,
+            depends_on=["stage1"]
+        )
+
+        self.controller.register_step(
+            step_id="stage3",
+            button_text="Этап 3 (ручной выбор)",
+            condition_func=lambda: CompareInstruction.can_stage3(self.service),
+            action_func=self._do_stage3,
+            depends_on=["stage2"]
+        )
+
+        self.controller.register_step(
+            step_id="report",
+            button_text="Сформировать отчёт",
+            condition_func=lambda: CompareInstruction.can_report(self.service),
+            action_func=self._do_report,
+            depends_on=["stage3"],
+            is_final=True,
+            auto_open_folder=True
+        )
+
+    # ============================================================
+    # СЛОТЫ ДЛЯ СИГНАЛОВ КОНТРОЛЛЕРА
+    # ============================================================
+    def _on_state_changed(self, step_id: str, old_state: ButtonState, new_state: ButtonState):
+        """Обновляет внешний вид кнопки согласно новому состоянию."""
+        btn_map = {
+            "prepare": self.btn_prepare,
+            "stage1": self.btn_stage1,
+            "stage2": self.btn_stage2,
+            "stage3": self.btn_stage3,
+            "report": self.btn_report,
+        }
+        btn = btn_map.get(step_id)
+        if btn:
+            btn.update_state(new_state)
+
     def _on_log_message(self, msg: str, level: int):
         self.status_display.append(msg)
 
+    def _on_open_folder(self, path: str):
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
     # ============================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # МЕТОДЫ ДЕЙСТВИЙ (ВЫЗЫВАЮТСЯ КОНТРОЛЛЕРОМ)
     # ============================================================
-    def _on_target_dir_changed(self, new_path):
-        self.target_dir = new_path
-        self.parent().config.set("target_dir", new_path)
-        self.logger.info(f"Целевая папка обновлена: {new_path}")
+    def _do_prepare(self):
+        self.logger.info("=== ПОДГОТОВКА ДАННЫХ ===")
+        try:
+            self.logger.info("Шаг 1: Копирование листа поставки...")
+            copied_path = self.service.copy_supply_sheet(self.supply_file, self.target_dir)
+            self.logger.info(f"  Копия создана: {copied_path}")
+
+            self.logger.info("Шаг 2: Формирование сборного файла поставок...")
+            consolidated_path = self.service.build_consolidated_supply(self.supply_files, self.target_dir)
+            self.logger.info(f"  Сборный файл создан: {consolidated_path}")
+
+            self.logger.info("Шаг 3: Загрузка данных...")
+            self.service.load_data()
+            self.logger.info(
+                f"Загружено товаров: {len(self.service.supply_items)}, "
+                f"кандидатов: {len(self.service.candidates)}"
+            )
+            # После успешной подготовки обновляем состояния кнопок
+            self.controller.state_manager.update_all()
+        except Exception as e:
+            import traceback
+            self.logger.error(f"Ошибка подготовки: {e}")
+            self.logger.error(traceback.format_exc())
+
+    def _do_stage1(self):
+        if not self.service.supply_items or not self.service.candidates:
+            self.logger.info("Данные не загружены. Выполните подготовку.")
+            return
+        self.logger.info("=== ЗАПУСК ЭТАПА 1 ===")
+        try:
+            self.service.run_stage1(parent_widget=self)
+            self.controller.state_manager.update_all()
+        except Exception as e:
+            self.logger.error(f"Ошибка на этапе 1: {e}")
+
+    def _do_stage2(self):
+        if not self.service.supply_items or not self.service.candidates:
+            self.logger.info("Данные не загружены. Выполните подготовку.")
+            return
+        self.logger.info("=== ЗАПУСК ЭТАПА 2 ===")
+        try:
+            self.service.run_stage2(self)
+            self.controller.state_manager.update_all()
+        except Exception as e:
+            self.logger.error(f"Ошибка на этапе 2: {e}")
+
+    def _do_stage3(self):
+        if not self.service.supply_items or not self.service.candidates:
+            self.logger.info("Данные не загружены. Выполните подготовку.")
+            return
+        self.logger.info("=== ЗАПУСК ЭТАПА 3 ===")
+        try:
+            self.service.run_stage3(self)
+            self.controller.state_manager.update_all()
+        except Exception as e:
+            self.logger.error(f"Ошибка на этапе 3: {e}")
+
+    def _do_report(self):
+        if not self.service.final_items:
+            self.logger.info("Нет финальных данных. Выполните все этапы.")
+            return
+        self.logger.info("=== ФОРМИРОВАНИЕ ОТЧЁТА ===")
+        try:
+            self.service.generate_report(self.target_dir)
+            self.service.save_mappings()
+            self.logger.info("Отчёт и сопоставления сохранены.")
+            # После отчёта открываем папку (это делает контроллер через auto_open_folder)
+        except Exception as e:
+            self.logger.error(f"Ошибка при формировании отчёта: {e}")
 
     # ============================================================
     # ОБРАБОТЧИКИ ВЫБОРА ФАЙЛОВ
@@ -266,6 +455,8 @@ class CompareWindow(QMainWindow):
             self.file_label.setText(Path(file_path).name)
             self.parent().config.set("last_compare_supply_dir", str(Path(file_path).parent))
             self.logger.info(f"Выбран файл поставки: {Path(file_path).name}")
+            # Обновляем состояние кнопок (контроллер пересчитает условия)
+            self.controller.state_manager.update_all()
 
     def select_supply_files(self):
         start_dir = self.parent().config.get("last_compare_supplies_dir", None) or self.target_dir or str(Path.home())
@@ -283,126 +474,17 @@ class CompareWindow(QMainWindow):
                 first_file = Path(files[0])
                 self.parent().config.set("last_compare_supplies_dir", str(first_file.parent))
             self.logger.info(f"Добавлено {len(files)} файлов поставок. Всего: {len(self.supply_files)}")
+            self.controller.state_manager.update_all()
+
+    def _on_target_dir_changed(self, new_path):
+        self.target_dir = new_path
+        self.parent().config.set("target_dir", new_path)
+        self.logger.info(f"Целевая папка обновлена: {new_path}")
+        self.controller.state_manager.update_all()
 
     # ============================================================
-    # ОБРАБОТЧИКИ КНОПОК ДЕЙСТВИЙ
+    # ДИАЛОГ СОХРАНЁННЫХ СОПОСТАВЛЕНИЙ
     # ============================================================
-    def on_prepare(self):
-        if not self.target_dir:
-            self.logger.info("Сначала выберите целевую папку.")
-            return
-        if not self.supply_file:
-            self.logger.info("Сначала выберите файл листа поставки.")
-            return
-        if not self.supply_files:
-            self.logger.info("Добавьте хотя бы один файл с поставками.")
-            return
-
-        self.logger.info("=== ПОДГОТОВКА ДАННЫХ ===")
-        try:
-            self.logger.info("Шаг 1: Копирование листа поставки...")
-            copied_path = self.service.copy_supply_sheet(self.supply_file, self.target_dir)
-            self.logger.info(f"  Копия создана: {copied_path}")
-
-            self.logger.info("Шаг 2: Формирование сборного файла поставок...")
-            consolidated_path = self.service.build_consolidated_supply(self.supply_files, self.target_dir)
-            self.logger.info(f"  Сборный файл создан: {consolidated_path}")
-
-            self.logger.info("Шаг 3: Загрузка данных...")
-            self.service.load_data()
-            self.logger.info(
-                f"Загружено товаров: {len(self.service.supply_items)}, "
-                f"кандидатов: {len(self.service.candidates)}"
-            )
-        except Exception as e:
-            import traceback
-            self.logger.error(f"Ошибка подготовки: {e}")
-            self.logger.error("=" * 60)
-            self.logger.error(traceback.format_exc())
-            self.logger.error("=" * 60)
-            return
-
-        self.btn_stage1.setEnabled(True)
-        self.btn_stage2.setEnabled(False)
-        self.btn_stage3.setEnabled(False)
-        self.btn_report.setEnabled(False)
-        self.step_label.setText("Текущий шаг: Подготовка завершена. Нажмите Этап 1")
-        self.logger.info("Подготовка завершена. Можно переходить к Этапу 1.")
-
-    def on_stage1(self):
-        if not self.service.supply_items or not self.service.candidates:
-            self.logger.info("Данные не загружены. Выполните подготовку.")
-            return
-        self.logger.info("=== ЗАПУСК ЭТАПА 1 ===")
-        try:
-            self.service.run_stage1(parent_widget=self)
-        except Exception as e:
-            self.logger.error(f"Ошибка на этапе 1: {e}")
-            return
-
-        if not self.service.supply_items or not self.service.candidates:
-            self.btn_report.setEnabled(True)
-            self.step_label.setText("Текущий шаг: Все товары сопоставлены или нет кандидатов. Сформируйте отчёт.")
-            self.logger.info("Все товары найдены или нет кандидатов. Можно формировать отчёт.")
-        else:
-            self.btn_stage2.setEnabled(True)
-            self.step_label.setText("Текущий шаг: Этап 1 завершён. Нажмите Этап 2")
-            self.logger.info(
-                f"Этап 1 завершён. Осталось товаров: {len(self.service.supply_items)}, "
-                f"кандидатов: {len(self.service.candidates)}"
-            )
-
-    def on_stage2(self):
-        if not self.service.supply_items or not self.service.candidates:
-            self.logger.info("Данные не загружены. Выполните подготовку.")
-            return
-        self.logger.info("=== ЗАПУСК ЭТАПА 2 ===")
-        try:
-            self.service.run_stage2(self)
-        except Exception as e:
-            self.logger.error(f"Ошибка на этапе 2: {e}")
-            return
-
-        if not self.service.supply_items or not self.service.candidates:
-            self.btn_report.setEnabled(True)
-            self.step_label.setText("Текущий шаг: Все товары сопоставлены или нет кандидатов. Сформируйте отчёт.")
-            self.logger.info("Все товары найдены или нет кандидатов. Можно формировать отчёт.")
-        else:
-            self.btn_stage3.setEnabled(True)
-            self.step_label.setText("Текущий шаг: Этап 2 завершён. Нажмите Этап 3")
-            self.logger.info(
-                f"Этап 2 завершён. Осталось товаров: {len(self.service.supply_items)}, "
-                f"кандидатов: {len(self.service.candidates)}"
-            )
-
-    def on_stage3(self):
-        if not self.service.supply_items or not self.service.candidates:
-            self.logger.info("Данные не загружены. Выполните подготовку.")
-            return
-        self.logger.info("=== ЗАПУСК ЭТАПА 3 ===")
-        try:
-            self.service.run_stage3(self)
-        except Exception as e:
-            self.logger.error(f"Ошибка на этапе 3: {e}")
-            return
-
-        self.btn_report.setEnabled(True)
-        self.step_label.setText("Текущий шаг: Все этапы завершены. Сформируйте отчёт")
-        self.logger.info("Этап 3 завершён. Можно формировать отчёт.")
-
-    def on_generate_report(self):
-        if not self.service.final_items:
-            self.logger.info("Нет финальных данных. Выполните все этапы.")
-            return
-        self.logger.info("=== ФОРМИРОВАНИЕ ОТЧЁТА ===")
-        try:
-            self.service.generate_report(self.target_dir)
-            self.service.save_mappings()
-            self.logger.info("Отчёт и сопоставления сохранены.")
-        except Exception as e:
-            self.logger.error(f"Ошибка при формировании отчёта: {e}")
-            return
-
     def _open_mappings_window(self):
         from ui.windows.mappings_window import BrandMappingsWindow
         window = BrandMappingsWindow(
@@ -421,6 +503,7 @@ class CompareWindow(QMainWindow):
         self.list_supply.clear()
 
     def closeEvent(self, event):
+        self.controller.shutdown()
         self.cleanup()
         if self.parent() and hasattr(self.parent(), 'active_child'):
             self.parent().active_child = None

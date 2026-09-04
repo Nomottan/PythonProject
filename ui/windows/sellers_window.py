@@ -8,10 +8,29 @@ from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
 from models.models import Seller, Brand
 
+# ui/windows/sellers_window.py
+
+from utils.logger import ILogger, CompositeLogger, FileLogger, QtStatusLogger
+from utils.path_utils import AppPaths
+
+
 class SellersWindow(QMainWindow):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, logger: ILogger = None, app_paths: AppPaths = None):
         super().__init__(parent)
         self.main_window = parent
+        self.app_paths = app_paths or AppPaths()
+
+        # ---- Настройка логгера ----
+        if logger is not None:
+            self.logger = logger
+        else:
+            if hasattr(self.main_window, 'app_logger'):
+                self.logger = self.main_window.app_logger
+            else:
+                self.logger = CompositeLogger()
+                debug_logger = FileLogger(self.app_paths.get_logs_path() / "debug.log", level="debug")
+                self.logger.add_logger(debug_logger)
+                # Для этого окна UI-логгер не нужен, т.к. нет статусной области
 
         brands = parent.config.get_brands_objects()
         brands_dict = {b.name: b for b in brands}
@@ -45,6 +64,8 @@ class SellersWindow(QMainWindow):
 
         for seller in self.sellers:
             self._add_seller_row(seller)
+
+        self.logger.info("Окно продавцов открыто.")
 
     # ---------- Методы управления строками ----------
     def _add_seller_row(self, seller):
@@ -90,10 +111,12 @@ class SellersWindow(QMainWindow):
         new_seller = Seller("Новый продавец")
         self.sellers.append(new_seller)
         self._add_seller_row(new_seller)
+        self.logger.info(f"Добавлен новый продавец: {new_seller.name}")
 
     def _remove_seller(self, row_widget, seller):
         if seller in self.sellers:
             self.sellers.remove(seller)
+            self.logger.info(f"Удалён продавец: {seller.name}")
         self.sellers_layout.removeWidget(row_widget)
         row_widget.deleteLater()
 
@@ -114,8 +137,10 @@ class SellersWindow(QMainWindow):
         def finish_edit():
             new_name = line_edit.text().strip()
             if new_name:
+                old_name = seller.name
                 seller.name = new_name
                 btn.setText(new_name)
+                self.logger.info(f"Продавец переименован: {old_name} → {new_name}")
             line_edit.deleteLater()
             btn.show()
             btn.adjustSize()
@@ -135,6 +160,12 @@ class SellersWindow(QMainWindow):
         dialog.setWindowModality(Qt.ApplicationModal)
         dialog.show()
 
+    def _edit_keys(self, seller):
+        self.main_window.open_string_list_dialog(
+            f"Ключи — {seller.name}",
+            seller.keys
+        )
+
     def refresh_ui(self):
         self._rebuild_ui()
 
@@ -146,16 +177,12 @@ class SellersWindow(QMainWindow):
         for seller in self.sellers:
             self._add_seller_row(seller)
 
-    def _edit_keys(self, seller):
-        self.main_window.open_string_list_dialog(
-            f"Ключи — {seller.name}",
-            seller.keys
-        )
-
     def save_and_close(self):
         self.main_window.config.set_sellers_objects(self.sellers)
         self.main_window.update_buttons_state()
+        self.logger.info("Список продавцов сохранён.")
         self.close()
+
 
 class CompanyDialog(QMainWindow):
     def __init__(self, parent, seller: Seller):
@@ -198,7 +225,10 @@ class CompanyDialog(QMainWindow):
     def _save_and_close(self):
         self.seller.inn = self.inn_edit.text().strip()
         self.seller.company = self.company_edit.text().strip()
+        if hasattr(self.parent(), 'logger'):
+            self.parent().logger.info(f"Обновлены данные компании для {self.seller.name}")
         self.close()
+
 
 class BrandChecklistDialog(QMainWindow):
     def __init__(self, parent, seller: Seller, all_brands: list[Brand]):
@@ -264,6 +294,8 @@ class BrandChecklistDialog(QMainWindow):
                 self.seller.add_brand(brand)
             elif not cb.isChecked() and brand in self.seller.brands:
                 self.seller.remove_brand(brand)
+        if hasattr(self.parent(), 'logger'):
+            self.parent().logger.info(f"Обновлены бренды для {self.seller.name}")
         self.close()
 
     def reject(self):
