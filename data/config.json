@@ -1,0 +1,401 @@
+{
+    "target_dir": "C:/Users/Владимир/Desktop/чз",
+    "last_fbs_dir": "C:\\Users\\Владимир\\Desktop\\чз\\2_9_2026\\ЧЗ_МП_2_9_2026",
+    "selected_fbs_files": [],
+    "last_mp_dir": "C:\\Users\\Владимир\\Downloads",
+    "selected_mp_files": [],
+    "last_templates_dir": "C:\\Users\\Владимир\\Desktop\\чз\\Шаблоны\\ЧЗ МП",
+    "selected_template_files": [
+        "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/Гаак Наташа.xlsx",
+        "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/Котова Аня.xlsx",
+        "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/Степанов Гоша.xlsx",
+        "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/ФИТ ИКС.xlsx",
+        "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/Хорошун Ира.xlsx",
+        "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/Шилович Света.xlsx"
+    ],
+    "seller_prices": {
+        "Фит Икс": 321,
+        "Котова Аня": 435,
+        "Степанов Гоша": 1941,
+        "Хорошун Ира": 1595,
+        "Шилович Света": 1548,
+        "Гаак Наташа": 500
+    },
+    "sellers": [
+        {
+            "name": "Фит Икс",
+            "inn": "9701313311",
+            "company": "ООО \"ФИТ ИКС\"",
+            "keys": [
+                "фит",
+                "фит икс",
+                "фитикс",
+                "фит икс "
+            ],
+            "brands": [
+                "Nutricost",
+                "From Natural"
+            ]
+        },
+        {
+            "name": "Гаак Наташа",
+            "inn": "672508246111",
+            "company": "ИП ГААК НАТАЛЬЯ СЕРГЕЕВНА",
+            "keys": [
+                "гаак",
+                "наташа",
+                "наталья"
+            ],
+            "brands": [
+                "Nutricost",
+                "21st Century",
+                "Buried treasure",
+                "Country Life",
+                "enzymedica",
+                "GOL",
+                "Natrol",
+                "Nordic",
+                "Nutrex",
+                "Olimp",
+                "Thorne Research",
+                "Ultimate Nutrition",
+                "Vital Proteins",
+                "Zhou Nutrition"
+            ]
+        },
+        {
+            "name": "Котова Аня",
+            "inn": "503622842280",
+            "company": "ИП КОТОВА АННА ОЛЕГОВНА",
+            "keys": [
+                "котова",
+                "аня",
+                "анна"
+            ],
+            "brands": [
+                "Ginseng",
+                "Solgar",
+                "Source Naturals",
+                "Mutant"
+            ]
+        },
+        {
+            "name": "Степанов Гоша",
+            "inn": "673203284971",
+            "company": "ИП СТЕПАНОВ ГЕОРГИЙ ОЛЕГОВИЧ",
+            "keys": [
+                "степанов",
+                "георгий",
+                "гоша"
+            ],
+            "brands": [
+                "DISO",
+                "Jarrow Fomulas",
+                "KAL",
+                "Mega Food",
+                "Natural Factors",
+                "Nature's way",
+                "NUTRIBIOTIC",
+                "ORZAX",
+                "Solaray"
+            ]
+        },
+        {
+            "name": "Хорошун Ира",
+            "inn": "772375980926",
+            "company": "ИП ХОРОШУН ИРИНА ОЛЕГОВНА",
+            "keys": [
+                "хорошун",
+                "ирина",
+                "ира"
+            ],
+            "brands": [
+                "APPLIED NUTRITION",
+                "Bluebonnet Nutrition",
+                "ChildLife",
+                "Doctor's BEST",
+                "double wood",
+                "dr. mercola",
+                "Fairhaven Health",
+                "Life extension",
+                "NOW FOODS",
+                "TREC",
+                "Natures plus"
+            ]
+        },
+        {
+            "name": "Шилович Света",
+            "inn": "673100134100",
+            "company": "ИП ШИЛОВИЧ СВЕТЛАНА НИКОЛАЕВНА",
+            "keys": [
+                "света",
+                "светлана",
+                "шилович"
+            ],
+            "brands": [
+                "Lianhua Qingwen"
+            ]
+        }
+    ],
+    "brands": [
+        {
+            "name": "Ginseng",
+            "keys": [
+                "GINSENG KIANPI PIL",
+                "GINSENG"
+            ]
+        },
+        {
+            "name": "Source Naturals",
+            "keys": [
+                "Source Naturals"
+            ]
+        },
+        {
+            "name": "Solgar",
+            "keys": [
+                "Solgar"
+            ]
+        },
+        {
+            "name": "Life extension",
+            "keys": [
+                "LIFE EXTENSION"
+            ]
+        },
+        {
+            "name": "Natures plus",
+            "keys": [
+                "Natural Organics, Inc.",
+                "Natures plus",
+                "NATURES PLUS"
+            ]
+        },
+        {
+            "name": "NOW FOODS",
+            "keys": [
+                "NOW",
+                "Now Foods"
+            ]
+        },
+        {
+            "name": "ChildLife",
+            "keys": [
+                "CHILDLIFE",
+                "CHILDLIFE ESSENTIALS",
+                "ChildLife Essentials"
+            ]
+        },
+        {
+            "name": "APPLIED NUTRITION",
+            "keys": [
+                "APPLIED NUTRITION"
+            ]
+        },
+        {
+            "name": "Bluebonnet Nutrition",
+            "keys": [
+                "Bluebonnet Nutrition"
+            ]
+        },
+        {
+            "name": "Doctor's BEST",
+            "keys": [
+                "Doctor's BEST"
+            ]
+        },
+        {
+            "name": "dr. mercola",
+            "keys": [
+                "dr. mercola"
+            ]
+        },
+        {
+            "name": "double wood",
+            "keys": [
+                "double wood"
+            ]
+        },
+        {
+            "name": "Fairhaven Health",
+            "keys": [
+                "FAIRHAVEN HEALTH"
+            ]
+        },
+        {
+            "name": "TREC",
+            "keys": [
+                "TREC"
+            ]
+        },
+        {
+            "name": "Olimp",
+            "keys": [
+                "Olimp"
+            ]
+        },
+        {
+            "name": "Country Life",
+            "keys": [
+                "Country Life"
+            ]
+        },
+        {
+            "name": "GOL",
+            "keys": [
+                "GOL"
+            ]
+        },
+        {
+            "name": "Nordic",
+            "keys": [
+                "Nordic"
+            ]
+        },
+        {
+            "name": "Zhou Nutrition",
+            "keys": [
+                "Zhou Nutrition"
+            ]
+        },
+        {
+            "name": "Natrol",
+            "keys": [
+                "Natrol"
+            ]
+        },
+        {
+            "name": "Ultimate Nutrition",
+            "keys": [
+                "ULTIMATE NUTRITION"
+            ]
+        },
+        {
+            "name": "Nutrex",
+            "keys": [
+                "Nutrex"
+            ]
+        },
+        {
+            "name": "Nutricost",
+            "keys": [
+                "Nutricost"
+            ]
+        },
+        {
+            "name": "Buried treasure",
+            "keys": [
+                "Buried treasure"
+            ]
+        },
+        {
+            "name": "enzymedica",
+            "keys": [
+                "enzymedica"
+            ]
+        },
+        {
+            "name": "Vital Proteins",
+            "keys": [
+                "VITAL PROTEINS"
+            ]
+        },
+        {
+            "name": "Thorne Research",
+            "keys": [
+                "Thorne Research"
+            ]
+        },
+        {
+            "name": "KAL",
+            "keys": [
+                "KAL"
+            ]
+        },
+        {
+            "name": "Jarrow Fomulas",
+            "keys": [
+                "Jarrow Fomulas"
+            ]
+        },
+        {
+            "name": "Solaray",
+            "keys": [
+                "SOLARAY"
+            ]
+        },
+        {
+            "name": "Mega Food",
+            "keys": [
+                "Mega Food"
+            ]
+        },
+        {
+            "name": "DISO",
+            "keys": [
+                "DISO"
+            ]
+        },
+        {
+            "name": "Natural Factors",
+            "keys": [
+                "Natural Factors"
+            ]
+        },
+        {
+            "name": "ORZAX",
+            "keys": [
+                "ORZAX"
+            ]
+        },
+        {
+            "name": "Nature's way",
+            "keys": [
+                "Nature's way"
+            ]
+        },
+        {
+            "name": "NUTRIBIOTIC",
+            "keys": [
+                "NUTRIBIOTIC"
+            ]
+        },
+        {
+            "name": "From Natural",
+            "keys": [
+                "From natural"
+            ]
+        },
+        {
+            "name": "Lianhua Qingwen",
+            "keys": [
+                "Ляньхуа Цинвэнь ПЛЮС",
+                "Lianhua Qingwen PLUS",
+                "\"Ляньхуа Цинвэнь ПЛЮС\" (\"Lianhua Qingwen PLUS\")",
+                "Lianhua Qingwen"
+            ]
+        },
+        {
+            "name": "21st Century",
+            "keys": [
+                "21st Century"
+            ]
+        },
+        {
+            "name": "Mutant",
+            "keys": [
+                "Mutant"
+            ]
+        },
+        {
+            "name": "BSN",
+            "keys": [
+                "BSN",
+                "bsn"
+            ]
+        }
+    ],
+    "last_returns_dir": "C:\\Users\\Владимир\\Desktop\\чз\\31_8_2026\\Возвраты_31_8_2026",
+    "last_compare_supply_dir": "C:\\Users\\Владимир\\Desktop",
+    "last_compare_supplies_dir": "C:\\Users\\Владимир\\Desktop"
+}

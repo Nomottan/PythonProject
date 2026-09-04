@@ -1,0 +1,9 @@
+DEBUG: Загружено состояние из .чз_мп_state.json
+WARNING: Условие для 'export_kiz' не выполнено: Зависимость 'prepare' не выполнена
+WARNING: Условие для 'filter_prefinal' не выполнено: Зависимость 'export_kiz' не выполнена
+WARNING: Условие для 'generate_sales' не выполнено: Зависимость 'filter_prefinal' не выполнена
+WARNING: Условие для 'finalize_prices' не выполнено: Зависимость 'generate_sales' не выполнена
+INFO: Окно ЧЗ МП готово к работе.
+WARNING: Условия не выполнены: 
+DEBUG: Состояние сохранено в .чз_мп_state.json
+INFO: Состояние процесса ЧЗ_МП сохранено
