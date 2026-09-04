@@ -39,9 +39,11 @@ class CompareWindow(QMainWindow):
                 self.logger = CompositeLogger()
                 debug_logger = FileLogger(self.app_paths.get_logs_path() / "debug.log", level="debug")
                 self.logger.add_logger(debug_logger)
-                self.ui_logger = QtStatusLogger(min_level=1)
-                self.ui_logger.log_signal.connect(self._on_log_message)
-                self.logger.add_logger(self.ui_logger)
+
+        self.ui_logger = QtStatusLogger(min_level=1)
+        self.ui_logger.log_signal.connect(self._on_log_message)
+        self.logger.add_logger(self.ui_logger)
+
 
 
         # ---- Подготовка множества брендов для CompareService ----
