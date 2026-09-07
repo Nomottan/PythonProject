@@ -236,6 +236,7 @@ class BrandDetailWindow(QDialog):
         return row_widget
 
     def _delete_mapping(self, article):
+        """Удаляет одно сопоставление."""
         if article in self.brand_data:
             reply = QMessageBox.question(
                 self,
@@ -244,12 +245,18 @@ class BrandDetailWindow(QDialog):
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply == QMessageBox.Yes:
+                # Удаляем из локального словаря
                 del self.brand_data[article]
+                # Удаляем из родительского словаря
+                if self.brand_name in self.parent_window.mappings and article in self.parent_window.mappings[
+                    self.brand_name]:
+                    del self.parent_window.mappings[self.brand_name][article]
                 # Если бренд стал пустым, удаляем его из родительского словаря
                 if not self.brand_data:
                     del self.parent_window.mappings[self.brand_name]
+                    # Обновляем список брендов в родительском окне
                     self.parent_window._populate_list()
-                    self.close()  # Закрываем окно, т.к. бренд удалён
+                    self.close()  # закрываем окно, т.к. бренд удалён
                 else:
                     self._populate_list()
 
@@ -362,7 +369,7 @@ class BrandDetailWindow(QDialog):
                 parent_mappings[new_brand_name] = {}
             parent_mappings[new_brand_name][article] = entry
 
-            # Если текущий бренд стал пустым, удаляем его из родительского словаря
+            # Если текущий бренд стал пустым, удаляем его из parent_mappings
             if not self.brand_data:
                 del parent_mappings[self.brand_name]
 
@@ -377,5 +384,5 @@ class BrandDetailWindow(QDialog):
 
     def _save_and_close(self):
         self.parent_window.service.save_mappings(self.parent_window.mappings)
-        self.parent_window.refresh_data()
         self.accept()
+        self.parent_window.refresh_data()

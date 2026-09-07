@@ -802,42 +802,23 @@ class CompareService:
     def save_mappings(self, mappings=None) -> None:
         """
         Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных.
-        Если файл уже существует, новые сопоставления добавляются к существующим.
+        Файл полностью перезаписывается переданным словарём.
         """
-        # 1. Загружаем существующие маппинги из файла
-        existing = self.load_mappings()
-
-        # 2. Определяем новые маппинги
         if mappings is None:
-            new_mappings = self._collect_mappings()
-        else:
-            new_mappings = mappings
-
-        # 3. Если новых нет, выходим (сохраняем как есть)
-        if not new_mappings:
-            if existing:
-                self.log("Нет новых сопоставлений для добавления")
-            else:
+            mappings = self._collect_mappings()
+            if not mappings:
                 self.log("Нет сопоставлений для сохранения")
-            return
+                return
 
-        # 4. Объединяем: добавляем/обновляем статьи для каждого бренда
-        for brand, articles in new_mappings.items():
-            if brand in existing:
-                existing[brand].update(articles)
-            else:
-                existing[brand] = articles
-
-        # 5. Нормализуем имена брендов (если есть конфиг)
+        # Нормализуем имена брендов, если есть brands_from_config
         if self.brands_from_config:
-            existing = self._normalize_brand_names(existing, self.brands_from_config)
+            mappings = self._normalize_brand_names(mappings, self.brands_from_config)
 
-        # 6. Сохраняем объединённый словарь
         mappings_path = self._get_mappings_path()
         try:
             with open(mappings_path, "w", encoding="utf-8") as f:
-                json.dump(existing, f, ensure_ascii=False, indent=4)
-            self.log(f"Сохранено брендов: {len(existing)} (добавлено из текущей сессии)")
+                json.dump(mappings, f, ensure_ascii=False, indent=4)
+            self.log(f"Сохранено брендов: {len(mappings)}")
         except IOError as e:
             self.log(f"Ошибка сохранения сопоставлений: {e}")
 
