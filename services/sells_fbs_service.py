@@ -1,76 +1,51 @@
-from pathlib import Path
-from datetime import date
-from typing import Optional, List, Set, Dict, Any
-import re
-
 from PySide6.QtWidgets import QDialog
-
-from utils.logger import ILogger, CompositeLogger, ReportFileLogger
-from utils.log_templates import LogTemplates
+from pathlib import Path
+from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
-from utils.path_utils import AppPaths
-from utils.run_manager import RunManager
+
+
 
 class PreparationService:
     """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
 
-    def __init__(self, logger: ILogger, run_manager: RunManager):
-        self.logger = logger
-        self.run_manager = run_manager
-
-    def prepare(self, target_dir: str, fbs_files=None, mp_files=None, sellers=None):
+    def prepare(self, target_dir, fbs_files=None, mp_files=None, sellers=None, log_callback=None):
         if sellers is None:
             sellers = []
-        if fbs_files is None:
-            fbs_files = []
-        if mp_files is None:
-            mp_files = []
 
-        work_folder = self.run_manager.get_work_folder()
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_подготовка.txt", log_callback)
+        ctx.log(f"=== Подготовка от {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
+        ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-        # Отчётный логгер
-        report_path = work_folder / "log_подготовка.txt"
-        report_logger = ReportFileLogger(report_path)
-        if isinstance(self.logger, CompositeLogger):
-            self.logger.add_logger(report_logger)
+        self._copy_fbs_files(ctx, fbs_files or [])
+        self._copy_mp_files(ctx, mp_files or [], sellers)
 
-        try:
-            LogTemplates.task_start(self.logger, "Подготовка ЧЗ МП", work_folder=str(work_folder))
-
-            self._copy_fbs_files(work_folder, fbs_files)
-            self._copy_mp_files(work_folder, mp_files, sellers)
-
-            LogTemplates.task_end(self.logger, "Подготовка ЧЗ МП")
-
-        except Exception as e:
-            self.logger.error(f"Ошибка подготовки: {e}")
-        finally:
-            if isinstance(self.logger, CompositeLogger):
-                self.logger.remove_logger(report_logger)
+        ctx.log("Подготовка завершена.")
 
     # ---------- Приватные методы ----------
-    def _copy_fbs_files(self, work_folder: Path, fbs_files: List[str]):
+    def _copy_fbs_files(self, ctx: TaskContext, fbs_files):
+        """Копирует файлы ЧЗ МП с последовательным переименованием."""
         if not fbs_files:
-            self.logger.info("Нет файлов ЧЗ МП для копирования")
             return
-
         for i, src in enumerate(fbs_files):
             src_path = Path(src)
             if i == 0:
-                new_name = f"ЧЗ_МП_{date.today().strftime('%d_%m_%Y')}.xlsx"
+                new_name = ctx.format_filename("ЧЗ_МП_{date}")
             else:
-                new_name = f"ЧЗ_МП_{date.today().strftime('%d_%m_%Y')}_{i + 1}.xlsx"
-            dst = work_folder / new_name
-            FileHelper.copy_file_with_log(src_path, dst, self.logger, "ЧЗ МП", overwrite=False)
+                new_name = ctx.format_filename(f"ЧЗ_МП_{{date}}_{i + 1}")
+            dst = ctx.work_folder / new_name
+            FileHelper.copy_file_with_log(
+                src_path, dst, ctx,
+                description="ЧЗ МП",
+                overwrite=False
+            )
 
-    def _copy_mp_files(self, work_folder: Path, mp_files: List[str], sellers):
+    def _copy_mp_files(self, ctx: TaskContext, mp_files, sellers):
+        """Копирует отчёты МП, определяя продавца по ключам в имени файла."""
         if not mp_files:
-            self.logger.info("Нет отчётов МП для копирования")
             return
-
         seller_counters = {}
         for src in mp_files:
             src_path = Path(src)
@@ -81,510 +56,495 @@ class PreparationService:
                 seller_counters[found_seller.name] = seller_counters.get(found_seller.name, 0) + 1
                 idx = seller_counters[found_seller.name]
                 if idx == 1:
-                    new_name = f"ОТЧЁТ МП ПО {found_seller.name}_{date.today().strftime('%d_%m_%Y')}.xlsx"
+                    new_name = ctx.format_filename(f"ОТЧЁТ МП ПО {found_seller.name} {{date}}")
                 else:
-                    new_name = f"ОТЧЁТ МП ПО {found_seller.name}_{date.today().strftime('%d_%m_%Y')}_{idx}.xlsx"
+                    new_name = ctx.format_filename(f"ОТЧЁТ МП ПО {found_seller.name} {{date}}_{idx}")
             else:
                 new_name = src_path.name
-                self.logger.warning(f"Не удалось определить продавца для: {src_path.name}")
+                ctx.log(f"Не удалось определить продавца для: {src_path.name}")
 
-            dst = work_folder / new_name
-            FileHelper.copy_file_with_log(src_path, dst, self.logger, "отчёт", overwrite=False)
+            dst = ctx.work_folder / new_name
+            FileHelper.copy_file_with_log(
+                src_path, dst, ctx,
+                description="отчёт",
+                overwrite=False
+            )
 
     def _determine_seller_for_mp_file(self, file_name_lower: str, sellers):
+        """Ищет продавца по вхождению любого ключа в имя файла (без учёта регистра)."""
         for seller in sellers:
             if any(key.lower() in file_name_lower for key in seller.keys):
                 return seller
         return None
 
-
 class ExportKizService:
     """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы."""
 
-    def __init__(self, logger: ILogger, run_manager: RunManager):
-        self.logger = logger
-        self.run_manager = run_manager
+    def export(self, target_dir, sellers, log_callback=None):
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_выгрузка_кизов.txt", log_callback)
+        ctx.log("=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ ===")
+        ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-    def export(self, target_dir: str, sellers):
-        work_folder = self.run_manager.get_work_folder()
+        # Словарь для сбора КИЗов по продавцам (множества для уникальности)
+        kiz_by_seller = {seller.name: set() for seller in sellers}
 
-        report_path = work_folder / "log_выгрузка_кизов.txt"
-        report_logger = ReportFileLogger(report_path)
-        if isinstance(self.logger, CompositeLogger):
-            self.logger.add_logger(report_logger)
-
-        try:
-            LogTemplates.task_start(self.logger, "Выгрузка КИЗов", work_folder=str(work_folder))
-
-            kiz_by_seller = {seller.name: set() for seller in sellers}
-
-            # 1. Обработка ЧЗ_МП
-            chz_files = FileHelper.find_files_by_pattern(work_folder, "ЧЗ_МП*.xlsx")
-            for chz_path in chz_files:
-                LogTemplates.processing_chz_file(self.logger, chz_path.name)
-                wb = ExcelHelper.open_workbook_safe(chz_path, read_only=True, data_only=True)
-                if wb is None:
-                    continue
-                try:
-                    for sheet_name in wb.sheetnames:
-                        seller = ExcelHelper.find_seller_by_sheet_name(wb, sellers, sheet_name)
-                        if seller is None:
-                            self.logger.debug(f"  Лист '{sheet_name}' не соответствует ни одному продавцу – пропущен")
-                            continue
-                        sheet = wb[sheet_name]
-                        kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=2)
-                        for kiz in kiz_list:
-                            kiz_by_seller[seller.name].add(kiz)
-                        LogTemplates.processing_chz_file(
-                            self.logger,
-                            chz_path.name,
-                            seller_name=seller.name,
-                            count=len(kiz_list)
-                        )
-                finally:
-                    wb.close()
-
-            # 2. Обработка отчётов МП
-            mp_files = FileHelper.find_files_by_pattern(work_folder, "ОТЧЁТ МП ПО *.xlsx")
-            for mp_path in mp_files:
-                found_seller = None
-                for seller in sellers:
-                    if any(key.lower() in mp_path.stem.lower() for key in seller.keys):
-                        found_seller = seller
-                        break
-                if found_seller is None:
-                    self.logger.debug(f"  Не удалось определить продавца из имени файла – пропущен")
-                    continue
-                seller = found_seller
-
-                LogTemplates.processing_mp_report(self.logger, mp_path.name)
-                wb = ExcelHelper.open_workbook_safe(mp_path, read_only=True, data_only=True)
-                if wb is None:
-                    continue
-                try:
-                    if "КИЗ" not in wb.sheetnames:
-                        self.logger.debug(f"  Лист 'КИЗ' отсутствует – пропущен")
+        # 1. Обработка ЧЗ_МП
+        chz_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ЧЗ_МП*.xlsx")
+        for chz_path in chz_files:
+            ctx.log(f"\nОбработка ЧЗ_МП: {chz_path.name}")
+            wb = ExcelHelper.open_workbook_with_ctx(chz_path, ctx, description="ЧЗ_МП", read_only=True, data_only=True)
+            if wb is None:
+                continue
+            try:
+                for sheet_name in wb.sheetnames:
+                    seller = ExcelHelper.find_seller_by_sheet_name(wb, sellers, sheet_name)
+                    if seller is None:
+                        ctx.log(f"  Лист '{sheet_name}' не соответствует ни одному продавцу – пропущен")
                         continue
-                    sheet = wb["КИЗ"]
-                    kiz_list = ExcelHelper.read_column_values(sheet, col_index=2, start_row=2)
+                    sheet = wb[sheet_name]
+                    kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=2)
                     for kiz in kiz_list:
                         kiz_by_seller[seller.name].add(kiz)
-                    LogTemplates.processing_mp_report(
-                        self.logger,
-                        mp_path.name,
-                        seller_name=seller.name,
-                        count=len(kiz_list)
-                    )
-                finally:
-                    wb.close()
+                    ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': добавлено {len(kiz_list)} КИЗов")
+            finally:
+                wb.close()
 
-            # 3. Сохранение текстовых файлов
-            self.logger.info("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
-            for seller_name, kiz_set in kiz_by_seller.items():
-                if not kiz_set:
-                    self.logger.info(f"  {seller_name}: нет КИЗов – файл не создан")
+        # 2. Обработка отчётов МП (используем поиск по ключам, как в PreparationService)
+        mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ОТЧЁТ МП ПО *.xlsx")
+        for mp_path in mp_files:
+            ctx.log(f"\nОбработка отчёта МП: {mp_path.name}")
+
+            # Ищем продавца по ключам (без учёта даты в имени файла)
+            found_seller = None
+            for seller in sellers:
+                if any(key.lower() in mp_path.stem.lower() for key in seller.keys):
+                    found_seller = seller
+                    break
+            if found_seller is None:
+                ctx.log(f"  Не удалось определить продавца из имени файла – пропущен")
+                continue
+            seller = found_seller
+
+            wb = ExcelHelper.open_workbook_with_ctx(mp_path, ctx, description="отчёт МП", read_only=True,
+                                                    data_only=True)
+            if wb is None:
+                continue
+            try:
+                if "КИЗ" not in wb.sheetnames:
+                    ctx.log(f"  Лист 'КИЗ' отсутствует – пропущен")
+                    continue
+                sheet = wb["КИЗ"]
+                kiz_list = ExcelHelper.read_column_values(sheet, col_index=2, start_row=2)
+                for kiz in kiz_list:
+                    kiz_by_seller[seller.name].add(kiz)
+                ctx.log(f"  Добавлено {len(kiz_list)} КИЗов для продавца '{seller.name}'")
+            finally:
+                wb.close()
+
+        # 3. Сохранение текстовых файлов (без изменений)
+        ctx.log("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
+        import re
+        for seller_name, kiz_set in kiz_by_seller.items():
+            if not kiz_set:
+                ctx.log(f"  {seller_name}: нет КИЗов – файл не создан")
+                continue
+
+            cleaned_kiz_set = set()
+            corrupted_count = 0
+
+            cluster_pattern = re.compile(r'91EE\d{2}92')
+
+            for raw in kiz_set:
+                # Проверка длины (КИЗ должен быть > 31)
+                if len(raw) <= 31:
+                    corrupted_count += 1
+                    ctx.log(f"    ⚠️ Некорректный КИЗ (длина {len(raw)}): {raw[:50]}...")
                     continue
 
-                cleaned_kiz_set = set()
-                corrupted_count = 0
+                # 1. Удаляем XML-представления управляющих символов _x001D_ и _x001d_
+                cleaned = re.sub(r'_x001[dD]_', '', raw)
+                # 2. Удаляем настоящие управляющие символы (код ASCII < 32)
+                cleaned = ''.join(ch for ch in cleaned if ord(ch) >= 32)
 
-                for raw in kiz_set:
-                    if len(raw) <= 31:
-                        corrupted_count += 1
-                        continue
-
-                    cleaned = re.sub(r'_x001[dD]_', '', raw)
-                    cleaned = ''.join(ch for ch in cleaned if ord(ch) >= 32)
-
-                    fragments = []
-                    if len(cleaned) > 100:
-                        pattern = re.compile(r'01\d{14}')
-                        match = pattern.search(cleaned, pos=80)
-                        if match:
-                            split_pos = match.start()
-                            if split_pos > 0 and len(cleaned) - split_pos >= 31:
-                                fragments.append(cleaned[:split_pos])
-                                fragments.append(cleaned[split_pos:])
-                        if not fragments:
-                            fragments.append(cleaned)
-                    else:
+                # 3. Если строка слишком длинная (> 100), пытаемся разделить слипшиеся строки
+                fragments = []
+                if len(cleaned) > 100:
+                    # Ищем с позиции 80 кластер из 16 символов, начинающийся с "01" и состоящий из цифр
+                    start_search = 80
+                    found = False
+                    # Ищем подстроку "01" + 14 цифр (всего 16 символов)
+                    pattern = re.compile(r'01\d{14}')
+                    match = pattern.search(cleaned, pos=start_search)
+                    if match:
+                        # Позиция начала второго КИЗа
+                        split_pos = match.start()
+                        # Если найденный кластер начинается с 01 и после него ещё есть символы
+                        if split_pos > 0 and len(cleaned) - split_pos >= 31:
+                            fragments.append(cleaned[:split_pos])
+                            fragments.append(cleaned[split_pos:])
+                            found = True
+                    if not found:
+                        # Если не удалось разделить, оставляем как есть
                         fragments.append(cleaned)
+                else:
+                    fragments.append(cleaned)
 
-                    for frag in fragments:
-                        if not frag.startswith("01"):
-                            pos_01 = frag.find("01")
-                            if pos_01 != -1 and len(frag) - pos_01 >= 31:
-                                frag = frag[pos_01:]
-                            else:
-                                corrupted_count += 1
-                                continue
-
-                        if len(frag) <= 31:
+                # 4. Обрабатываем каждый фрагмент
+                for frag in fragments:
+                    # Если фрагмент не начинается с "01", пытаемся найти "01" внутри
+                    if not frag.startswith("01"):
+                        pos_01 = frag.find("01")
+                        if pos_01 != -1 and len(frag) - pos_01 >= 31:
+                            # Обрезаем до "01"
+                            frag = frag[pos_01:]
+                        else:
+                            # Если не найдено или после "01" меньше 31 символов, считаем некорректным
                             corrupted_count += 1
+                            ctx.log(f"    ⚠️ Некорректный КИЗ (нет '01' или мало символов): {frag[:50]}...")
                             continue
 
-                        if TextUtils.is_cyrillic(frag):
-                            frag = TextUtils.keyboard_translit(frag)
+                    # Проверка длины (должно быть > 31)
+                    if len(frag) <= 31:
+                        corrupted_count += 1
+                        ctx.log(f"    ⚠️ Некорректный КИЗ (длина {len(frag)}): {frag[:50]}...")
+                        continue
 
-                        cleaned_kiz_set.add(frag)
+                    # Транслитерация кириллицы (если есть)
+                    if TextUtils.is_cyrillic(frag):
+                        frag = TextUtils.keyboard_translit(frag)
 
-                if not cleaned_kiz_set:
-                    self.logger.info(f"  {seller_name}: после очистки не осталось КИЗов – файл не создан")
-                    continue
+                    cleaned_kiz_set.add(frag)
 
-                txt_path = work_folder / f"{seller_name}.txt"
-                with open(txt_path, "w", encoding="utf-8") as f:
-                    for kiz in sorted(cleaned_kiz_set):
-                        f.write(kiz + "\n")
+            if not cleaned_kiz_set:
+                ctx.log(f"  {seller_name}: после очистки не осталось КИЗов – файл не создан")
+                continue
 
-                LogTemplates.saving_kiz_files(
-                    self.logger,
-                    seller_name,
-                    len(cleaned_kiz_set),
-                    txt_path.name,
-                    corrupted_count
-                )
+            txt_path = ctx.work_folder / f"{seller_name}.txt"
+            with open(txt_path, "w", encoding="utf-8") as f:
+                for kiz in sorted(cleaned_kiz_set):
+                    f.write(kiz + "\n")
 
-            LogTemplates.task_end(self.logger, "Выгрузка КИЗов")
+            if corrupted_count > 0:
+                ctx.log(
+                    f"  {seller_name}: сохранено {len(cleaned_kiz_set)} КИЗов (пропущено {corrupted_count} некорректных)")
+            else:
+                ctx.log(f"  {seller_name}: сохранено {len(cleaned_kiz_set)} КИЗов в {txt_path.name}")
 
-        except Exception as e:
-            self.logger.error(f"Ошибка выгрузки КИЗов: {e}")
-        finally:
-            if isinstance(self.logger, CompositeLogger):
-                self.logger.remove_logger(report_logger)
-
+        ctx.log("\n=== ВЫГРУЗКА ЗАВЕРШЕНА ===")
 
 class FilterPreFinalService:
     """Сервис фильтрации предитоговых файлов по статусу и владельцу."""
 
-    def __init__(self, logger: ILogger, run_manager: RunManager):
-        self.logger = logger
-        self.run_manager = run_manager
+    def filter_files(self, target_dir, sellers, log_callback=None):
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_фильтрация.txt", log_callback)
+        ctx.log("=== ФИЛЬТРАЦИЯ ПРЕДИТОГОВЫХ ФАЙЛОВ ===")
+        ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-    def filter_files(self, target_dir: str, sellers):
-        work_folder = self.run_manager.get_work_folder()
+        allowed_companies = TextUtils.get_allowed_companies(sellers)
 
-        report_path = work_folder / "log_фильтрация.txt"
-        report_logger = ReportFileLogger(report_path)
-        if isinstance(self.logger, CompositeLogger):
-            self.logger.add_logger(report_logger)
+        for seller in sellers:
+            file_path = ctx.work_folder / f"{seller.name}.xlsx"
+            if not file_path.is_file():
+                ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
+                continue
 
-        try:
-            LogTemplates.task_start(self.logger, "Фильтрация предитоговых файлов", work_folder=str(work_folder))
+            ctx.log(f"\nОбработка файла: {file_path.name}")
+            wb = ExcelHelper.open_workbook_with_ctx(file_path, ctx, description="предитоговый файл", read_only=False, data_only=True)
+            if wb is None:
+                continue
 
-            allowed_companies = TextUtils.get_allowed_companies(sellers)
-
-            for seller in sellers:
-                file_path = work_folder / f"{seller.name}.xlsx"
-                if not file_path.is_file():
-                    self.logger.info(f"Файл для продавца '{seller.name}' не найден – пропущен")
+            try:
+                sheet = wb.active
+                if sheet.max_row < 2:
+                    ctx.log("  Файл пуст (только заголовки) – пропущен")
                     continue
 
-                wb = ExcelHelper.open_workbook_safe(file_path, read_only=False, data_only=True)
-                if wb is None:
-                    continue
+                # Сохраняем заголовки
+                headers = [cell.value for cell in sheet[1]]
 
-                try:
-                    sheet = wb.active
-                    if sheet.max_row < 2:
-                        self.logger.info(f"  Файл {file_path.name} пуст (только заголовки) – пропущен")
-                        continue
+                # Фильтруем строки
+                filtered_rows, stats = ExcelHelper.filter_and_clean_rows(
+                    sheet,
+                    status_col=4,          # столбец D
+                    owner_col=12,          # столбец L
+                    allowed_owners=allowed_companies,
+                    required_status="В ОБОРОТЕ"
+                )
 
-                    headers = [cell.value for cell in sheet[1]]
-                    filtered_rows, stats = ExcelHelper.filter_and_clean_rows(
-                        sheet,
-                        status_col=4,
-                        owner_col=12,
-                        allowed_owners=allowed_companies,
-                        required_status="В ОБОРОТЕ"
-                    )
+                # Логируем статистику
+                ctx.log(f"  Всего строк: {sheet.max_row - 1}")
+                if stats['status']:
+                    ctx.log("  Удалено по статусу:")
+                    for status, count in sorted(stats['status'].items(), key=lambda x: x[0].lower()):
+                        ctx.log(f"    Статус '{status}': {count} строк")
+                if stats['owner']:
+                    ctx.log("  Удалено по владельцу:")
+                    for owner, count in sorted(stats['owner'].items(), key=lambda x: x[0].lower()):
+                        ctx.log(f"    Владелец '{owner}': {count} строк")
+                ctx.log(f"  Сохранено: {stats['total_kept']} строк")
 
-                    LogTemplates.filtering_file(
-                        self.logger,
-                        file_path.name,
-                        sheet.max_row - 1,
-                        stats['total_kept'],
-                        stats['status'],
-                        stats['owner']
-                    )
+                # Перезаписываем файл
+                if stats['total_kept'] == 0:
+                    ctx.log("  Нет строк для сохранения – файл будет очищен (только заголовки)")
+                    # Создаём новую книгу только с заголовками
+                    new_wb, new_sheet = ExcelHelper.create_workbook_with_headers(headers, sheet_name=sheet.title)
+                    new_wb.save(file_path)
+                    new_wb.close()
+                else:
+                    # Создаём новую книгу и записываем заголовки + отфильтрованные строки
+                    new_wb, new_sheet = ExcelHelper.create_workbook_with_headers(headers, sheet_name=sheet.title)
+                    for _, row_values in filtered_rows:
+                        new_sheet.append(row_values)
+                    new_wb.save(file_path)
+                    new_wb.close()
 
-                    if stats['total_kept'] == 0:
-                        new_wb, new_sheet = ExcelHelper.create_workbook_with_headers(headers, sheet_name=sheet.title)
-                        new_wb.save(file_path)
-                        new_wb.close()
-                    else:
-                        new_wb, new_sheet = ExcelHelper.create_workbook_with_headers(headers, sheet_name=sheet.title)
-                        for _, row_values in filtered_rows:
-                            new_sheet.append(row_values)
-                        new_wb.save(file_path)
-                        new_wb.close()
+            except Exception as e:
+                ctx.log(f"  Ошибка обработки файла: {e}")
+            finally:
+                wb.close()
 
-                except Exception as e:
-                    self.logger.error(f"  Ошибка обработки файла {file_path.name}: {e}")
-                finally:
-                    wb.close()
-
-            LogTemplates.task_end(self.logger, "Фильтрация предитоговых файлов")
-
-        except Exception as e:
-            self.logger.error(f"Ошибка фильтрации: {e}")
-        finally:
-            if isinstance(self.logger, CompositeLogger):
-                self.logger.remove_logger(report_logger)
-
+        ctx.log("\n=== ФИЛЬТРАЦИЯ ЗАВЕРШЕНА ===")
 
 class GenerateSalesService:
     """Сервис формирования файлов продаж на основе владельца (company) КИЗов."""
 
-    def __init__(self, logger: ILogger, run_manager: RunManager):
-        self.logger = logger
-        self.run_manager = run_manager
+    def generate(self, target_dir, sellers, log_callback=None):
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_продажи.txt", log_callback)
+        ctx.log("=== ФОРМИРОВАНИЕ ФАЙЛОВ ПРОДАЖ ===")
+        ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-    def generate(self, target_dir: str, sellers):
-        work_folder = self.run_manager.get_work_folder()
+        sales_stats = {}  # {(владелец_name, текущий_продавец_name): количество}
+        sales_files_created = []  # список путей к созданным файлам продаж
 
-        report_path = work_folder / "log_продажи.txt"
-        report_logger = ReportFileLogger(report_path)
-        if isinstance(self.logger, CompositeLogger):
-            self.logger.add_logger(report_logger)
+        for seller in sellers:
+            file_path = ctx.work_folder / f"{seller.name}.xlsx"
+            if not file_path.is_file():
+                ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
+                continue
 
-        try:
-            LogTemplates.task_start(self.logger, "Формирование файлов продаж", work_folder=str(work_folder))
+            ctx.log(f"\nОбработка файла: {file_path.name}")
+            wb = ExcelHelper.open_workbook_with_ctx(file_path, ctx, description="предитоговый файл", read_only=True, data_only=True)
+            if wb is None:
+                continue
 
-            sales_stats = {}
-            sales_files_created = []
-
-            for seller in sellers:
-                file_path = work_folder / f"{seller.name}.xlsx"
-                if not file_path.is_file():
-                    self.logger.info(f"Файл для продавца '{seller.name}' не найден – пропущен")
+            try:
+                sheet = wb.active
+                if sheet.max_row < 2:
+                    ctx.log("  Файл пуст (только заголовки) – пропущен")
                     continue
 
-                self.logger.info(f"\nОбработка файла: {file_path.name}")
-                wb = ExcelHelper.open_workbook_safe(file_path, read_only=True, data_only=True)
-                if wb is None:
-                    continue
-
-                try:
-                    sheet = wb.active
-                    if sheet.max_row < 2:
-                        self.logger.info("  Файл пуст (только заголовки) – пропущен")
+                for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                    if len(row) < 12:
                         continue
 
-                    for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-                        if len(row) < 12:
-                            continue
+                    kiz = str(row[1]).strip() if row[1] is not None else ""       # столбец B
+                    owner_company = str(row[11]).strip() if row[11] is not None else ""   # столбец L
+                    brand = str(row[6]).strip() if row[6] is not None else ""     # столбец G
+                    product_name = str(row[5]).strip() if row[5] is not None else ""  # столбец F
 
-                        kiz = str(row[1]).strip() if row[1] is not None else ""
-                        owner_company = str(row[11]).strip() if row[11] is not None else ""
-                        brand = str(row[6]).strip() if row[6] is not None else ""
-                        product_name = str(row[5]).strip() if row[5] is not None else ""
+                    if not kiz or not owner_company:
+                        continue
 
-                        if not kiz or not owner_company:
-                            continue
+                    # Находим продавца по company (владельцу)
+                    owner_seller = TextUtils.find_seller_by_company(owner_company, sellers)
+                    if owner_seller is None:
+                        # По условию шага 2 этого не должно происходить, но на всякий случай логируем
+                        ctx.log(f"  ⚠️ Строка {row_idx}: владелец '{owner_company}' не найден среди продавцов – пропущена")
+                        continue
 
-                        owner_seller = TextUtils.find_seller_by_company(owner_company, sellers)
-                        if owner_seller is None:
-                            self.logger.debug(f"  Строка {row_idx}: владелец '{owner_company}' не найден – пропущена")
-                            continue
+                    # Если владелец совпадает с текущим продавцом – пропускаем
+                    if owner_seller.name == seller.name:
+                        continue
 
-                        if owner_seller.name == seller.name:
-                            continue
+                    # Формируем файл продаж
+                    safe_from = TextUtils.sanitize_filename(owner_seller.name)
+                    safe_to = TextUtils.sanitize_filename(seller.name)
+                    sales_file_name = f"продажа {safe_from} - {safe_to}.xlsx"
+                    sales_file_path = ctx.work_folder / sales_file_name
 
-                        safe_from = TextUtils.sanitize_filename(owner_seller.name)
-                        safe_to = TextUtils.sanitize_filename(seller.name)
-                        sales_file_name = f"продажа {safe_from} - {safe_to}.xlsx"
-                        sales_file_path = work_folder / sales_file_name
+                    row_data = {
+                        "КИЗ": kiz,
+                        "Владелец": owner_company,
+                        "на кого продать": seller.name,
+                        "ИНН того на кого продать": seller.inn,
+                        "бренд": brand,
+                        "название товара": product_name
+                    }
 
-                        ExcelHelper.append_row_to_file(
-                            sales_file_path,
-                            [
-                                kiz,
-                                owner_company,
-                                seller.name,
-                                seller.inn,
-                                brand,
-                                product_name
-                            ],
-                            headers=["КИЗ", "Владелец", "на кого продать", "ИНН того на кого продать", "бренд", "название товара"]
-                        )
+                    ExcelHelper.append_row_to_file(
+                        sales_file_path,
+                        [
+                            row_data["КИЗ"],
+                            row_data["Владелец"],
+                            row_data["на кого продать"],
+                            row_data["ИНН того на кого продать"],
+                            row_data["бренд"],
+                            row_data["название товара"]
+                        ],
+                        headers=["КИЗ", "Владелец", "на кого продать", "ИНН того на кого продать", "бренд",
+                                 "название товара"]
+                    )
 
-                        if sales_file_path not in sales_files_created:
-                            sales_files_created.append(sales_file_path)
+                    # Запоминаем созданные файлы (только один раз, чтобы не дублировать в списке)
+                    if sales_file_path not in sales_files_created:
+                        sales_files_created.append(sales_file_path)
 
-                        key = (owner_seller.name, seller.name)
-                        sales_stats[key] = sales_stats.get(key, 0) + 1
+                    key = (owner_seller.name, seller.name)
+                    sales_stats[key] = sales_stats.get(key, 0) + 1
 
-                finally:
-                    wb.close()
+            finally:
+                wb.close()
 
-            # Удаляем пустые файлы
-            self.logger.info("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
-            for sales_file in sales_files_created:
-                if ExcelHelper.is_file_empty(sales_file):
-                    try:
-                        sales_file.unlink()
-                        self.logger.info(f"  Удалён пустой файл: {sales_file.name}")
-                    except Exception as e:
-                        self.logger.error(f"  Ошибка удаления {sales_file.name}: {e}")
-                else:
-                    self.logger.info(f"  Файл сохранён: {sales_file.name}")
+        # ---- УДАЛЕНИЕ ПУСТЫХ ФАЙЛОВ ПРОДАЖ ----
+        ctx.log("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
+        for sales_file in sales_files_created:
+            if ExcelHelper.is_file_empty(sales_file):
+                try:
+                    sales_file.unlink()
+                    ctx.log(f"  Удалён пустой файл: {sales_file.name}")
+                except Exception as e:
+                    ctx.log(f"  Ошибка удаления {sales_file.name}: {e}")
+            else:
+                ctx.log(f"  Файл сохранён: {sales_file.name}")
 
-            LogTemplates.sales_statistics(self.logger, sales_stats, len(sales_files_created))
-            LogTemplates.task_end(self.logger, "Формирование файлов продаж")
+        # Логируем статистику
+        ctx.log("\n--- СТАТИСТИКА ПРОДАЖ ---")
+        if sales_stats:
+            for (from_seller, to_seller), count in sorted(sales_stats.items()):
+                ctx.log(f"  {from_seller} → {to_seller}: {count} КИЗов")
+        else:
+            ctx.log("  Нет строк для передачи между продавцами")
 
-        except Exception as e:
-            self.logger.error(f"Ошибка формирования продаж: {e}")
-        finally:
-            if isinstance(self.logger, CompositeLogger):
-                self.logger.remove_logger(report_logger)
+        ctx.log("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
+
+    # ---------- Приватные методы ----------
 
 
 class FinalizePricesService:
     """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""
 
-    def __init__(self, logger: ILogger, run_manager: RunManager):
-        self.logger = logger
-        self.run_manager = run_manager
-
-    def finalize(self, target_dir: str, sellers, saved_prices: dict = None):
+    def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
         if saved_prices is None:
             saved_prices = {}
 
-        work_folder = self.run_manager.get_work_folder()
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback)
+        ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
+        ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-        report_path = work_folder / "log_цены.txt"
-        report_logger = ReportFileLogger(report_path)
-        if isinstance(self.logger, CompositeLogger):
-            self.logger.add_logger(report_logger)
-
-        try:
-            LogTemplates.task_start(self.logger, "Внесение цен и финализация", work_folder=str(work_folder))
-
-            for seller in sellers:
-                # ---- 1. Загрузка цен из отчёта МП ----
-                price_map = {}
-                prices_list = []
-                average_price = None
-
-                mp_files = FileHelper.find_files_by_pattern(work_folder, f"ОТЧЁТ МП ПО {seller.name}*.xlsx")
-                if mp_files:
-                    mp_path = mp_files[0]
-                    self.logger.info(f"\nЗагрузка цен из отчёта: {mp_path.name}")
-                    wb_mp = ExcelHelper.open_workbook_safe(mp_path, read_only=True, data_only=True)
-                    if wb_mp:
-                        try:
-                            if "КИЗ" in wb_mp.sheetnames:
-                                sheet = wb_mp["КИЗ"]
-                                for row in sheet.iter_rows(min_row=2, values_only=True):
-                                    if len(row) >= 3 and row[1] and row[2] is not None:
-                                        kiz = str(row[1]).strip()
-                                        price = row[2]
-                                        if isinstance(price, (int, float)):
-                                            price_map[kiz] = price
-                                            prices_list.append(price)
-                                if prices_list:
-                                    average_price = PriceUtils.calculate_average(saved_prices.get(seller.name), prices_list)
-                                    self.logger.info(f"  Загружено {len(prices_list)} цен, новая средняя: {average_price}")
-                                else:
-                                    self.logger.info("  В отчёте не найдено ни одной цены")
+        for seller in sellers:
+            # ---- 1. Загрузка цен из отчёта МП ----
+            price_map = {}
+            prices_list = []
+            average_price = None
+            mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, f"ОТЧЁТ МП ПО {seller.name}*.xlsx")
+            if mp_files:
+                mp_path = mp_files[0]
+                ctx.log(f"\nЗагрузка цен из отчёта: {mp_path.name}")
+                wb_mp = ExcelHelper.open_workbook_with_ctx(mp_path, ctx, description="отчёт МП", read_only=True, data_only=True)
+                if wb_mp:
+                    try:
+                        if "КИЗ" in wb_mp.sheetnames:
+                            sheet = wb_mp["КИЗ"]
+                            for row in sheet.iter_rows(min_row=2, values_only=True):
+                                if len(row) >= 3 and row[1] and row[2] is not None:
+                                    kiz = str(row[1]).strip()
+                                    price = row[2]
+                                    if isinstance(price, (int, float)):
+                                        price_map[kiz] = price
+                                        prices_list.append(price)
+                            if prices_list:
+                                average_price = PriceUtils.calculate_average(saved_prices.get(seller.name), prices_list)
+                                ctx.log(f"  Загружено {len(prices_list)} цен, новая средняя: {average_price}")
                             else:
-                                self.logger.info("  Лист 'КИЗ' отсутствует – цены не загружены")
-                        finally:
-                            wb_mp.close()
-                else:
-                    self.logger.info(f"\nОтчёт МП для продавца '{seller.name}' не найден – цены не загружены")
-
-                # ---- 2. Если средняя цена не определена, запрашиваем у пользователя ----
-                if average_price is None:
-                    if saved_prices.get(seller.name):
-                        average_price = saved_prices[seller.name]
-                        self.logger.info(f"  Использую сохранённую цену: {average_price}")
-                    else:
-                        from ui.windows.shared_dialogs import AveragePriceInputDialog
-                        dialog = AveragePriceInputDialog(None, seller.name)
-                        if dialog.exec_() == QDialog.Accepted:
-                            average_price = dialog.get_price()
-                            saved_prices[seller.name] = average_price
-                            self.logger.info(f"  Пользователь ввёл цену: {average_price}")
+                                ctx.log("  В отчёте не найдено ни одной цены")
                         else:
-                            self.logger.info(f"  ⚠️ Пользователь отменил ввод для продавца '{seller.name}' – пропускаем")
-                            continue
+                            ctx.log("  Лист 'КИЗ' отсутствует – цены не загружены")
+                    finally:
+                        wb_mp.close()
+            else:
+                ctx.log(f"\nОтчёт МП для продавца '{seller.name}' не найден – цены не загружены")
 
-                # ---- 3. Обработка предитогового файла ----
-                file_path = work_folder / f"{seller.name}.xlsx"
-                if not file_path.is_file():
-                    self.logger.info(f"Файл для продавца '{seller.name}' не найден – пропущен")
-                    continue
-
-                self.logger.info(f"\nОбработка файла: {file_path.name}")
-                wb = ExcelHelper.open_workbook_safe(file_path, read_only=False, data_only=True)
-                if wb is None:
-                    continue
-
-                try:
-                    sheet = wb.active
-                    if sheet.max_row < 2:
-                        self.logger.info("  Файл пуст (только заголовки) – пропущен")
+            # ---- 2. Если средняя цена не определена, запрашиваем у пользователя ----
+            if average_price is None:
+                # Используем сохранённую, если есть
+                if saved_prices.get(seller.name):
+                    average_price = saved_prices[seller.name]
+                    ctx.log(f"  Использую сохранённую цену: {average_price}")
+                else:
+                    # Вызываем диалог ввода
+                    from ui.windows.shared_dialogs import AveragePriceInputDialog
+                    dialog = AveragePriceInputDialog(self, seller.name)
+                    if dialog.exec_() == QDialog.Accepted:
+                        average_price = dialog.get_price()
+                        saved_prices[seller.name] = average_price
+                        ctx.log(f"  Пользователь ввёл цену: {average_price}")
+                    else:
+                        ctx.log(f"  ⚠️ Пользователь отменил ввод для продавца '{seller.name}' – пропускаем")
                         continue
 
-                    from_report_count = 0
-                    generated_count = 0
+            # ---- 3. Обработка предитогового файла ----
+            file_path = ctx.work_folder / f"{seller.name}.xlsx"
+            if not file_path.is_file():
+                ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
+                continue
 
-                    for row_idx in range(2, sheet.max_row + 1):
-                        kiz_cell = sheet.cell(row=row_idx, column=2)
-                        price_cell = sheet.cell(row=row_idx, column=3)
+            ctx.log(f"\nОбработка файла: {file_path.name}")
+            wb = ExcelHelper.open_workbook_with_ctx(file_path, ctx, description="предитоговый файл", read_only=False, data_only=True)
+            if wb is None:
+                continue
 
-                        kiz = str(kiz_cell.value).strip() if kiz_cell.value is not None else ""
-                        if not kiz or kiz == "КИЗ":
-                            continue
+            try:
+                sheet = wb.active
+                if sheet.max_row < 2:
+                    ctx.log("  Файл пуст (только заголовки) – пропущен")
+                    continue
 
-                        price_cell.value = None
+                from_report_count = 0
+                generated_count = 0
 
-                        if kiz in price_map:
-                            price_cell.value = price_map[kiz]
-                            from_report_count += 1
-                        else:
-                            price_cell.value = PriceUtils.generate_varied_price(average_price)
-                            generated_count += 1
+                for row_idx in range(2, sheet.max_row + 1):
+                    kiz_cell = sheet.cell(row=row_idx, column=2)
+                    price_cell = sheet.cell(row=row_idx, column=3)
 
-                    LogTemplates.price_finalization(
-                        self.logger,
-                        seller.name,
-                        from_report_count,
-                        generated_count,
-                        average_price
-                    )
+                    kiz = str(kiz_cell.value).strip() if kiz_cell.value is not None else ""
+                    if not kiz or kiz == "КИЗ":
+                        continue
 
-                    # ---- Сохранение и переименование ----
-                    wb.save(file_path)
+                    price_cell.value = None
+
+                    if kiz in price_map:
+                        price_cell.value = price_map[kiz]
+                        from_report_count += 1
+                    else:
+                        price_cell.value = PriceUtils.generate_varied_price(average_price)
+                        generated_count += 1
+
+                ctx.log(f"  Установлено цен из отчёта: {from_report_count}")
+                ctx.log(f"  Сгенерировано цен по средней: {generated_count}")
+
+                # ---- Сохранение и переименование ----
+                wb.save(file_path)
+                wb.close()
+
+                new_name = ctx.format_filename(f"ИТОГ {seller.name} {{date}}")
+                new_path = ctx.work_folder / new_name
+                file_path.rename(new_path)
+                ctx.log(f"  Файл переименован в {new_path.name}")
+
+                # Сохраняем среднюю цену
+                saved_prices[seller.name] = average_price
+
+                # Дополнительное сохранение (на случай, если rename сбросил изменения)
+                wb = ExcelHelper.open_workbook_with_ctx(new_path, ctx, description="итоговый файл", read_only=False, data_only=True)
+                if wb:
+                    wb.save(new_path)
                     wb.close()
 
-                    new_name = f"ИТОГ {seller.name}_{date.today().strftime('%d_%m_%Y')}.xlsx"
-                    new_path = work_folder / new_name
-                    file_path.rename(new_path)
-                    self.logger.info(f"  Файл переименован в {new_path.name}")
+            except Exception as e:
+                ctx.log(f"  Ошибка обработки файла: {e}")
+            finally:
+                if wb:
+                    wb.close()
 
-                    saved_prices[seller.name] = average_price
-
-                    # Дополнительное сохранение
-                    wb = ExcelHelper.open_workbook_safe(new_path, read_only=False, data_only=True)
-                    if wb:
-                        wb.save(new_path)
-                        wb.close()
-
-                except Exception as e:
-                    self.logger.error(f"  Ошибка обработки файла: {e}")
-                finally:
-                    if wb:
-                        wb.close()
-
-            LogTemplates.task_end(self.logger, "Внесение цен и финализация")
-
-        except Exception as e:
-            self.logger.error(f"Ошибка финализации цен: {e}")
-        finally:
-            if isinstance(self.logger, CompositeLogger):
-                self.logger.remove_logger(report_logger)
-
+        ctx.log("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
         return saved_prices

@@ -1,28 +1,34 @@
-# services/compare_service.py
 import re
-import json
 from pathlib import Path
 from datetime import date
-from typing import List, Tuple, Optional, Set, Dict, Any
-
 import openpyxl
-
-from models.models import SupplyItem, Candidate
-from utils.excel_helper import ExcelHelper
+import json
 from utils.text_utils import TextUtils
-from utils.logger import ILogger
-from utils.path_utils import AppPaths
+from typing import List, Tuple, Optional, Set, Dict, Any
+from utils.excel_helper import ExcelHelper
+
+# Предполагаем, что models.py содержит классы SupplyItem и Candidate.
+# Если нет – можно определить их прямо здесь, но по заданию они в отдельном файле.
+from models.models import SupplyItem, Candidate   # или из .models import ...
+
+# Вспомогательные утилиты (можно использовать существующие ExcelHelper, FileHelper)
+# Но для простоты используем прямо openpyxl и стандартные средства.
 
 
 class DataLoader:
     """Загрузка данных из подготовленных Excel-файлов."""
 
-    def __init__(self, brands_set: Set[str] = None, logger: ILogger = None):
+    def __init__(self, brands_set: Set[str] = None, log_callback=None):
         self.brands_set = brands_set or set()
-        self.logger = logger
+        self.log = log_callback or print
 
     @staticmethod
     def _find_header_row_and_columns(sheet, header_variants: dict, max_rows=15, max_cols=20) -> tuple:
+        """
+        Ищет строку с заголовками и возвращает (row_index, column_indices).
+        header_variants: dict {поле: [варианты_заголовков]}
+        Возвращает (row_index, dict) или (None, None)
+        """
         all_variants = {}
         for field, variants in header_variants.items():
             for v in variants:
@@ -36,7 +42,7 @@ class DataLoader:
             header_row = list(sheet.iter_rows(min_row=row_idx, max_row=row_idx, values_only=True))[0]
             if not header_row:
                 continue
-            header_row = header_row[:max_cols]
+            header_row = header_row[:max_cols]  # ограничиваем количество столбцов
 
             found_columns = {}
             score = 0
@@ -50,7 +56,13 @@ class DataLoader:
                         found_columns[field] = col_idx
                         score += 1
 
-            if 'name' in found_columns and ('shk' in found_columns or 'count' in found_columns):
+            # Если нашли все обязательные поля (name и shk, либо name и count) – сразу принимаем
+            # Для файлов поставок обязательные: name, shk, serial (но serial опционален)
+            # Для сборного файла обязательные: name, shk (или count)
+            # Проверяем наличие name и shk (или name и count)
+            if 'name' in found_columns and 'shk' in found_columns:
+                return row_idx, found_columns
+            if 'name' in found_columns and 'count' in found_columns:
                 return row_idx, found_columns
 
             if score > best_score:
@@ -58,18 +70,21 @@ class DataLoader:
                 best_row = row_idx
                 best_columns = found_columns
 
-        if best_row is None or best_score < 2 or 'name' not in best_columns:
+        if best_row is None or best_score < 2:
+            return None, None
+        # Проверяем наличие обязательного поля name
+        if 'name' not in best_columns:
             return None, None
         return best_row, best_columns
 
     def load_supply_items(self, file_path: Path) -> List[SupplyItem]:
-        if self.logger:
-            self.logger.info(f"Загрузка товаров из листа поставки: {file_path.name}")
+        self.log(f"Загрузка товаров из листа поставки: {file_path.name}")
         items = []
         try:
             wb = ExcelHelper.open_data_file(file_path, read_only=True, data_only=True)
             ws = wb.active
 
+            # Определяем варианты заголовков
             header_variants = {
                 'article': ["Артикул", "SKU", "Article", "Код", "Product code"],
                 'name': ["Наименование", "Name", "Product name", "Description", "Товар"],
@@ -79,23 +94,20 @@ class DataLoader:
 
             header_row, columns = self._find_header_row_and_columns(ws, header_variants)
             if header_row is None or columns is None:
-                if self.logger:
-                    self.logger.error("Не удалось найти заголовки таблицы. Проверьте структуру файла.")
+                self.log("Не удалось найти заголовки таблицы. Проверьте структуру файла.")
                 wb.close()
                 return []
 
-            if self.logger:
-                self.logger.debug(f"Заголовки найдены в строке {header_row}")
-                self.logger.debug(
-                    f"Столбцы: артикул={columns.get('article')}, наименование={columns.get('name')}, "
-                    f"количество={columns.get('count')}, №={columns.get('row_num')}"
-                )
+            self.log(f"Заголовки найдены в строке {header_row}")
+            self.log(
+                f"Столбцы: артикул={columns.get('article')}, наименование={columns.get('name')}, количество={columns.get('count')}, №={columns.get('row_num')}")
 
             col_article = columns.get('article')
             col_name = columns.get('name')
             col_count = columns.get('count')
             col_row_num = columns.get('row_num')
 
+            # Читаем данные, начиная со следующей строки
             for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
                 if col_name is None or len(row) <= col_name or not row[col_name]:
                     continue
@@ -125,26 +137,23 @@ class DataLoader:
                 ))
             wb.close()
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Ошибка загрузки листа поставки: {e}")
+            self.log(f"Ошибка загрузки листа поставки: {e}")
             raise
-
-        if self.logger:
-            self.logger.info(f"Загружено товаров: {len(items)}")
-            if items:
-                self.logger.debug("Первые 5 товаров (имя, количество):")
-                for i, item in enumerate(items[:5]):
-                    self.logger.debug(f"  {i + 1}. {item.name} | кол-во: {item.count} | keywords: {item.keywords}")
+        self.log(f"Загружено товаров: {len(items)}")
+        if items:
+            self.log("Первые 5 товаров (имя, количество):")
+            for i, item in enumerate(items[:5]):
+                self.log(f"  {i + 1}. {item.name} | кол-во: {item.count} | keywords: {item.keywords}")
         return items
 
     def load_candidates(self, file_path: Path) -> List[Candidate]:
-        if self.logger:
-            self.logger.info(f"Загрузка кандидатов из сборного файла: {file_path.name}")
+        self.log(f"Загрузка кандидатов из сборного файла: {file_path.name}")
         candidates = []
         try:
             wb = ExcelHelper.open_data_file(file_path, read_only=True, data_only=True)
             ws = wb.active
 
+            # Варианты заголовков для сборного файла
             header_variants = {
                 'name': ["Наименование", "Name"],
                 'count': ["Количество_строк", "Количество строк", "Count", "Quantity", "Количество"],
@@ -155,8 +164,7 @@ class DataLoader:
 
             header_row, columns = self._find_header_row_and_columns(ws, header_variants)
             if header_row is None or columns is None:
-                if self.logger:
-                    self.logger.error("Не удалось найти заголовки в сборном файле.")
+                self.log("Не удалось найти заголовки в сборном файле.")
                 wb.close()
                 return []
 
@@ -167,8 +175,7 @@ class DataLoader:
             col_shk = columns.get('shk')
 
             if col_name is None or col_shk is None:
-                if self.logger:
-                    self.logger.error("В сборном файле не найдены столбцы 'Наименование' или 'ШК'.")
+                self.log("В сборном файле не найдены столбцы 'Наименование' или 'ШК'.")
                 wb.close()
                 return []
 
@@ -176,14 +183,12 @@ class DataLoader:
                 name = row[col_name] if col_name is not None and len(row) > col_name else None
                 if not name:
                     continue
-
                 count = row[col_count] if col_count is not None and len(row) > col_count else None
                 if count is not None:
                     try:
                         count = int(count)
                     except (ValueError, TypeError):
                         count = None
-
                 serial = row[col_serial] if col_serial is not None and len(row) > col_serial else None
                 source_file = row[col_source] if col_source is not None and len(row) > col_source else ""
                 shk = row[col_shk] if col_shk is not None and len(row) > col_shk else None
@@ -200,24 +205,20 @@ class DataLoader:
                 ))
             wb.close()
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Ошибка загрузки сборного файла: {e}")
+            self.log(f"Ошибка загрузки сборного файла: {e}")
             raise
-
-        if self.logger:
-            self.logger.info(f"Загружено кандидатов: {len(candidates)}")
-            if candidates:
-                self.logger.debug("Первые 5 кандидатов с ключевыми словами:")
-                for i, cand in enumerate(candidates[:5]):
-                    self.logger.debug(f"  {i+1}. {cand.name} -> keywords: {cand.keywords}")
+        self.log(f"Загружено кандидатов: {len(candidates)}")
+        if candidates:
+            self.log("Первые 5 кандидатов с ключевыми словами:")
+            for i, cand in enumerate(candidates[:5]):
+                self.log(f"  {i+1}. {cand.name} -> keywords: {cand.keywords}")
         return candidates
 
     def load_csv_via_normalizer(self, file_path: Path) -> List[Dict[str, str]]:
+        """Загружает CSV-файл через нормализатор по строкам."""
         from utils.excel_helper import CsvNormalizer
         normalizer = CsvNormalizer(file_path)
-        valid_rows, invalid_log = normalizer.normalize_rows(
-            lambda msg: self.logger.debug(msg) if self.logger else None
-        )
+        valid_rows, invalid_log = normalizer.normalize_rows(self.log)
 
         if invalid_log:
             log_path = Path(file_path).parent / f"log_некорректные_строки_{Path(file_path).stem}.txt"
@@ -226,18 +227,22 @@ class DataLoader:
                 f.write("=" * 60 + "\n")
                 for line in invalid_log:
                     f.write(line + "\n")
-            if self.logger:
-                self.logger.info(f"Некорректные строки сохранены в {log_path.name}")
+            self.log(f"  Некорректные строки сохранены в {log_path.name}")
 
         return valid_rows
 
     @staticmethod
     def _extract_features(text: str, brands_set: Set[str] = None) -> Dict[str, Any]:
+        """
+        Извлекает ключевые слова, бренд и количество из строки.
+        Бренд определяется как самый длинный ключ, который является префиксом названия.
+        """
         if not text:
             return {'keywords': set(), 'brand': None, 'count': None}
 
         text = str(text).strip()
 
+        # 1. Извлекаем количество в упаковке (число перед "ШТ", "капс", "таб" и т.п.)
         count = None
         count_pattern = re.compile(
             r'(\d+)\s*(?:штук|шт|капс|капсул|капсулы|таб|таблеток|таблетки|vcaps|tabs|caps|softgels|sgels|loz|tablets|capsules)',
@@ -248,6 +253,8 @@ class DataLoader:
             count = int(count_match.group(1))
             text = count_pattern.sub('', text)
 
+        # 2. Определяем, есть ли английское название в скобках
+        # Ищем первую пару круглых скобок, содержащую латинские буквы
         english_part = None
         parens = re.findall(r'\(([^)]*)\)', text)
         for p in parens:
@@ -260,21 +267,27 @@ class DataLoader:
         else:
             base_text = text
 
+        # Удаляем лишние пробелы
         base_text = re.sub(r'\s+', ' ', base_text).strip()
 
+        # 3. Извлекаем бренд (ищем префикс среди ключей)
         brand = None
         if brands_set:
             base_lower = base_text.lower()
+            # Сортируем ключи по убыванию длины (чтобы сначала проверить более длинные фразы)
             sorted_keys = sorted(brands_set, key=len, reverse=True)
             for key in sorted_keys:
+                # Проверяем, что base_text начинается с ключа (с учётом пробела)
                 if base_lower.startswith(key + ' ') or base_lower == key:
                     brand = key
+                    # Удаляем ключ из base_text (обрезаем префикс)
                     if base_lower.startswith(key + ' '):
                         base_text = base_text[len(key) + 1:].strip()
                     else:
                         base_text = ""
                     break
 
+        # 4. Извлекаем ключевые слова из оставшегося base_text
         word_pattern = re.compile(r'[a-zа-я0-9]+(?:[-’][a-zа-я0-9]+)*', re.IGNORECASE)
         keywords = set()
         for word in word_pattern.findall(base_text.lower()):
@@ -287,6 +300,7 @@ class DataLoader:
                 continue
             keywords.add(word)
 
+        # Добавляем количество и бренд в ключевые слова (для этапов сравнения)
         if count is not None:
             keywords.add(str(count))
         if brand:
@@ -294,18 +308,44 @@ class DataLoader:
 
         return {'keywords': keywords, 'brand': brand, 'count': count}
 
+class MappingRecord:
+        def __init__(self, article: str, shk: str, brand: str, supply_name: str, candidate_name: str):
+            self.article = article
+            self.shk = shk
+            self.brand = brand
+            self.supply_name = supply_name
+            self.candidate_name = candidate_name
+
+        def to_dict(self):
+            return {
+                "article": self.article,
+                "shk": self.shk,
+                "brand": self.brand,
+                "supply_name": self.supply_name,
+                "candidate_name": self.candidate_name
+            }
+
+        @classmethod
+        def from_dict(cls, data):
+            return cls(
+                article=data["article"],
+                shk=data["shk"],
+                brand=data.get("brand", ""),
+                supply_name=data.get("supply_name", ""),
+                candidate_name=data.get("candidate_name", "")
+            )
 
 class Stage1:
     """Жёсткая сверка (этап 1)."""
 
-    def __init__(self, logger: ILogger = None):
-        self.logger = logger
+    def __init__(self, log_callback=None):
+        self.log = log_callback or print
 
     def run(self, items: List[SupplyItem], candidates: List[Candidate], parent_widget=None) -> Tuple[
         List[SupplyItem], List[SupplyItem], List[Candidate]]:
-        if self.logger:
-            self.logger.info("=== ЭТАП 1: ЖЁСТКАЯ СВЕРКА ===")
+        self.log("=== ЭТАП 1: ЖЁСТКАЯ СВЕРКА ===")
 
+        # Строим индексы
         keyword_index = {}
         count_index = {}
         for idx, cand in enumerate(candidates):
@@ -314,17 +354,17 @@ class Stage1:
             if cand.count is not None:
                 count_index.setdefault(cand.count, []).append(idx)
 
-        found_pairs = []
+        found_pairs = []  # временный список всех жёстких совпадений
         remaining = []
         remaining_candidates = candidates.copy()
 
         for item in items:
             if not item.keywords:
-                if self.logger:
-                    self.logger.debug(f"  Товар '{item.name}' не имеет ключевых слов — пропускаем")
+                self.log(f"  Товар '{item.name}' не имеет ключевых слов — пропускаем")
                 remaining.append(item)
                 continue
 
+            # Пересечение индексов для всех ключевых слов
             candidate_indices = None
             for word in item.keywords:
                 indices = keyword_index.get(word, [])
@@ -340,6 +380,7 @@ class Stage1:
                 remaining.append(item)
                 continue
 
+            # Фильтр по количеству
             if item.count is not None:
                 count_indices = count_index.get(item.count, [])
                 candidate_indices = [idx for idx in candidate_indices if idx in count_indices]
@@ -347,21 +388,25 @@ class Stage1:
                     remaining.append(item)
                     continue
 
+            # Исключаем уже использованных кандидатов (на случай, если они были задействованы ранее)
             candidate_indices = [idx for idx in candidate_indices if not remaining_candidates[idx].used]
 
             if len(candidate_indices) == 1:
                 idx = candidate_indices[0]
                 cand = remaining_candidates[idx]
+                # Запоминаем пару для дальнейшего решения (пока не помечаем used)
                 found_pairs.append((item, cand))
             else:
                 remaining.append(item)
 
+        # Если есть совпадения и передан parent_widget — показываем диалог
         if found_pairs and parent_widget:
             from ui.windows.compare_window import Stage1ReviewDialog
             dialog = Stage1ReviewDialog(parent_widget, found_pairs)
             dialog.exec()
             keep_flags = dialog.get_keep_flags()
 
+            # Применяем выбор пользователя
             found = []
             for i, (item, candidate) in enumerate(found_pairs):
                 if keep_flags[i]:
@@ -370,13 +415,13 @@ class Stage1:
                     item.matched_candidate = candidate
                     item.stage = 1
                     found.append(item)
-                    if self.logger:
-                        self.logger.debug(f"  Жёсткое совпадение подтверждено: '{item.name}' ↔ '{candidate.name}'")
+                    self.log(f"  Жёсткое совпадение подтверждено: '{item.name}' ↔ '{candidate.name}'")
                 else:
-                    if self.logger:
-                        self.logger.debug(f"  Жёсткое совпадение исключено: '{item.name}' ↔ '{candidate.name}'")
+                    # Исключаем — кандидат остаётся свободным, товар переходит к следующим этапам
+                    self.log(f"  Жёсткое совпадение исключено: '{item.name}' ↔ '{candidate.name}'")
                     remaining.append(item)
         else:
+            # Если диалог не нужен (нет parent_widget), просто принимаем все совпадения
             found = []
             for item, candidate in found_pairs:
                 candidate.used = True
@@ -384,25 +429,21 @@ class Stage1:
                 item.matched_candidate = candidate
                 item.stage = 1
                 found.append(item)
-                if self.logger:
-                    self.logger.debug(f"  Жёсткое совпадение: '{item.name}' ↔ '{candidate.name}'")
+                self.log(f"  Жёсткое совпадение: '{item.name}' ↔ '{candidate.name}'")
 
-        if self.logger:
-            self.logger.info(f"Найдено жёстких совпадений: {len(found)}")
-            self.logger.info(f"Осталось товаров: {len(remaining)}")
+        self.log(f"Найдено жёстких совпадений: {len(found)}")
+        self.log(f"Осталось товаров: {len(remaining)}")
         return found, remaining, remaining_candidates
-
 
 class Stage2:
     """Мягкая сверка с подтверждением (этап 2)."""
 
-    def __init__(self, parent_widget, logger: ILogger = None):
+    def __init__(self, parent_widget, log_callback=None):
         self.parent = parent_widget
-        self.logger = logger
+        self.log = log_callback or print
 
     def run(self, items: List[SupplyItem], candidates: List[Candidate]) -> Tuple[List[SupplyItem], List[SupplyItem], List[Candidate]]:
-        if self.logger:
-            self.logger.info("=== ЭТАП 2: МЯГКАЯ СВЕРКА (ЖАККАР >= 0.7) ===")
+        self.log("=== ЭТАП 2: МЯГКАЯ СВЕРКА (ЖАККАР >= 0.7) ===")
 
         found = []
         remaining = []
@@ -461,49 +502,48 @@ class Stage2:
                 item.matched_candidate = cand
                 item.stage = 2
                 found.append(item)
-                if self.logger:
-                    self.logger.debug(f"  Мягкое совпадение подтверждено: '{item.name}' ↔ '{cand.name}' (Жаккар: {best_score:.2f})")
+                self.log(f"  Мягкое совпадение подтверждено: '{item.name}' ↔ '{cand.name}' (Жаккар: {best_score:.2f})")
             else:
                 remaining.append(item)
 
-        if self.logger:
-            self.logger.info(f"Найдено мягких совпадений: {len(found)}")
-            self.logger.info(f"Осталось товаров для этапа 3: {len(remaining)}")
+        self.log(f"Найдено мягких совпадений: {len(found)}")
+        self.log(f"Осталось товаров для этапа 3: {len(remaining)}")
         return found, remaining, remaining_candidates
 
-
 class Stage3:
-    def __init__(self, parent_widget=None, logger: ILogger = None):
+    def __init__(self, parent_widget=None, log_callback=None):
         self.parent = parent_widget
-        self.logger = logger
+        self.log = log_callback or print
 
     def run(self, items: List[SupplyItem], candidates: List[Candidate]) -> List[SupplyItem]:
-        if self.logger:
-            self.logger.info("=== ЭТАП 3: РУЧНОЙ ВЫБОР ===")
+        self.log("=== ЭТАП 3: РУЧНОЙ ВЫБОР ===")
 
         remaining_candidates = [c for c in candidates if not c.used]
-        all_items = []
-        current_items = items.copy()
-        deferred_items = []
+        all_items = []  # финальный результат (все товары, найденные или нет)
 
+        # Основной список для обработки
+        current_items = items.copy()
+        deferred_items = []  # товары, отложенные пользователем
+
+        # Пока есть товары для обработки (текущие или отложенные)
         while current_items or deferred_items:
             if not current_items:
+                # Если текущие закончились, но есть отложенные, переключаемся на них
                 current_items = deferred_items
                 deferred_items = []
-                if self.logger:
-                    self.logger.info("Переход к отложенным товарам...")
+                self.log("Переход к отложенным товарам...")
                 continue
 
-            item = current_items.pop(0)
+            item = current_items.pop(0)  # берём первый товар из очереди
 
+            # Формируем список кандидатов для диалога
             candidates_for_dialog = [
                 {'name': c.name, 'count': c.count}
                 for c in remaining_candidates
             ]
 
             if not candidates_for_dialog:
-                if self.logger:
-                    self.logger.debug(f"Товар '{item.name}': нет доступных кандидатов, пропускаем.")
+                self.log(f"Товар '{item.name}': нет доступных кандидатов, пропускаем.")
                 item.found = False
                 item.stage = 0
                 all_items.append(item)
@@ -514,7 +554,7 @@ class Stage3:
                 self.parent,
                 {'name': item.name, 'count': item.count},
                 candidates_for_dialog,
-                len(current_items) + len(deferred_items) + 1
+                len(current_items) + len(deferred_items) + 1  # общее количество оставшихся
             )
             dialog.exec()
             selected_candidate, skip_all = dialog.get_result()
@@ -531,48 +571,46 @@ class Stage3:
                     item.found = True
                     item.matched_candidate = matched_cand
                     item.stage = 3
-                    if self.logger:
-                        self.logger.debug(f"  Ручное сопоставление: '{item.name}' ↔ '{matched_cand.name}'")
+                    self.log(f"  Ручное сопоставление: '{item.name}' ↔ '{matched_cand.name}'")
                 else:
                     item.found = False
                     item.stage = 0
                 all_items.append(item)
             else:
                 if skip_all:
-                    if self.logger:
-                        self.logger.debug(f"  Товар отложен: '{item.name}'")
-                    deferred_items.append(item)
+                    # Кнопка "Отложить" (переименована)
+                    self.log(f"  Товар отложен: '{item.name}'")
+                    deferred_items.append(item)  # добавляем в конец отложенных
                 else:
-                    if self.logger:
-                        self.logger.debug(f"  Товар пропущен: '{item.name}'")
+                    # Кнопка "Пропустить" (без "все")
+                    self.log(f"  Товар пропущен: '{item.name}'")
                     item.found = False
                     item.stage = 0
                     all_items.append(item)
 
+        # После завершения цикла
         unused = [c for c in remaining_candidates if not c.used]
-        if unused and self.logger:
-            self.logger.info(f"Неиспользованных кандидатов (лишние в поставках): {len(unused)}")
+        if unused:
+            self.log(f"Неиспользованных кандидатов (лишние в поставках): {len(unused)}")
 
-        if self.logger:
-            self.logger.info("Этап 3 завершён.")
+        self.log("Этап 3 завершён.")
         return all_items
-
 
 class ReportGenerator:
     """Формирование отчётов."""
 
-    def __init__(self, logger: ILogger = None):
-        self.logger = logger
+    def __init__(self, log_callback=None):
+        self.log = log_callback or print
 
     def generate(self, items: List[SupplyItem], output_dir: Path, candidates: List[Candidate] = None) -> None:
-        if self.logger:
-            self.logger.info("=== ФОРМИРОВАНИЕ ОТЧЁТА ===")
+        self.log("=== ФОРМИРОВАНИЕ ОТЧЁТА ===")
 
         today = date.today()
         date_str = f"{today.day}_{today.month}_{today.year}"
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 1. Excel-отчёт
         report_path = output_dir / f"Отчёт_сравнения_{date_str}.xlsx"
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -608,9 +646,9 @@ class ReportGenerator:
 
         wb.save(report_path)
         wb.close()
-        if self.logger:
-            self.logger.info(f"Отчёт сохранён: {report_path.name}")
+        self.log(f"Отчёт сохранён: {report_path.name}")
 
+        # 2. Список не найденных
         if not_found:
             not_found_path = output_dir / f"Не_найдено_{date_str}.txt"
             with open(not_found_path, "w", encoding="utf-8") as f:
@@ -618,9 +656,9 @@ class ReportGenerator:
                 f.write("=" * 60 + "\n")
                 for item in not_found:
                     f.write(f"{item.name} (кол-во: {item.count})\n")
-            if self.logger:
-                self.logger.info(f"Список не найденных сохранён: {not_found_path.name}")
+            self.log(f"Список не найденных сохранён: {not_found_path.name}")
 
+        # 3. Список лишних в поставках (если передан список кандидатов)
         if candidates is not None:
             unused_candidates = [c for c in candidates if not c.used]
             if unused_candidates:
@@ -630,23 +668,16 @@ class ReportGenerator:
                     f.write("=" * 60 + "\n")
                     for c in unused_candidates:
                         f.write(f"{c.name} (кол-во: {c.count})\n")
-                if self.logger:
-                    self.logger.info(f"Список лишних в поставках сохранён: {unused_path.name}")
-
+                self.log(f"Список лишних в поставках сохранён: {unused_path.name}")
 
 class CompareService:
-    """Главный сервис сравнения поставок."""
-
-    def __init__(self, logger: ILogger = None, brands_set: Set[str] = None, app_paths: AppPaths = None):
-        self.logger = logger
+    def __init__(self, log_callback=None, brands_set: Set[str] = None):
+        self.log_callback = log_callback or print
         self.brands_set = brands_set or set()
         self.brands_from_config = []
-        self.app_paths = app_paths or AppPaths()
-
-        self.data_loader = DataLoader(brands_set=self.brands_set, logger=self.logger)
-        self.stage1 = Stage1(logger=self.logger)
-        self.report_generator = ReportGenerator(logger=self.logger)
-
+        self.data_loader = DataLoader(brands_set=self.brands_set, log_callback=self.log_callback)
+        self.stage1 = Stage1(log_callback=self.log_callback)
+        self.report_generator = ReportGenerator(log_callback=self.log_callback)
         self.copied_supply_path: Optional[Path] = None
         self.consolidated_supply_path: Optional[Path] = None
         self.supply_items: List[SupplyItem] = []
@@ -658,27 +689,13 @@ class CompareService:
     def set_brands_from_config(self, brands):
         self.brands_from_config = brands
 
-    def _get_mappings_path(self) -> Path:
-        return self.app_paths.get_data_path() / "mappings.json"
+    def log(self, msg: str) -> None:
+        self.log_callback(msg)
 
-    def _convert_legacy_mappings(self, data):
-        if isinstance(data, list):
-            converted = {}
-            for entry in data:
-                brand = entry.get("brand", "")
-                article = entry.get("article", "")
-                shk = entry.get("shk", "")
-                supply_name = entry.get("supply_name", "")
-                candidate_name = entry.get("candidate_name", "")
-                if brand not in converted:
-                    converted[brand] = {}
-                converted[brand][article] = {
-                    "shk": shk,
-                    "supply_name": supply_name,
-                    "candidate_name": candidate_name
-                }
-            return converted
-        return data
+    def _get_mappings_path(self) -> Path:
+        """Возвращает путь к файлу mappings.json в папке приложения."""
+        # Предполагаем, что compare_service.py находится в корневой папке проекта
+        return Path(__file__).parent.parent / "data" / "mappings.json"
 
     def _normalize_brand_names(self, mappings, brands_from_config):
         if not self.brands_from_config:
@@ -712,93 +729,38 @@ class CompareService:
         try:
             with open(mappings_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-
-            if isinstance(data, list):
-                data = self._convert_legacy_mappings(data)
-            elif isinstance(data, dict):
+            if isinstance(data, dict):
+                # Проверяем формат и конвертируем при необходимости
                 for brand, articles in data.items():
                     if not isinstance(articles, dict):
                         data = self._convert_legacy_mappings(data)
                         break
+                # Нормализуем имена брендов, если есть brands_from_config
+                if hasattr(self, 'brands_from_config') and self.brands_from_config:
+                    if self.brands_from_config:
+                        data = self._normalize_brand_names(data, self.brands_from_config)
+                return data
             else:
-                return {}
-
-            if self.brands_from_config:
-                data = self._normalize_brand_names(data, self.brands_from_config)
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            if self.logger:
-                self.logger.error(f"Ошибка загрузки сопоставлений: {e}")
+                data = self._convert_legacy_mappings(data)
+                if self.brands_from_config:
+                    data = self._normalize_brand_names(data, self.brands_from_config)
+                return data
+        except (json.JSONDecodeError, IOError):
             return {}
 
-    def _collect_mappings(self) -> dict:
-        """
-        Собирает текущие сопоставления из найденных товаров.
-        Возвращает словарь вида {brand: {article: {"shk": ..., "supply_name": ..., "candidate_name": ...}}}
-        """
-        mappings = {}
-        all_items = []
-        all_items.extend(self.found_stage1)
-        all_items.extend(self.found_stage2)
-        all_items.extend(self.final_items)
-
-        for item in all_items:
-            if item.found and item.matched_candidate and item.article:
-                brand = item.brand or "Без бренда"
-                article = item.article
-                shk = item.matched_candidate.shk or ""
-                supply_name = item.matched_candidate.name or ""
-                candidate_name = item.name or ""
-
-                if brand not in mappings:
-                    mappings[brand] = {}
-                mappings[brand][article] = {
-                    "shk": shk,
-                    "supply_name": supply_name,
-                    "candidate_name": candidate_name
-                }
-        return mappings
-
     def save_mappings(self, mappings=None) -> None:
-        """Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных.
-        Если файл уже существует, новые сопоставления добавляются к существующим.
-        """
-        # 1. Загружаем существующие маппинги из файла
-        existing = self.load_mappings()
-
-        # 2. Определяем новые маппинги
         if mappings is None:
-            new_mappings = self._collect_mappings()
-        else:
-            new_mappings = mappings
-
-        # 3. Если новых нет, выходим (сохраняем как есть, но можно ничего не делать)
-        if not new_mappings:
-            if existing:
-                self.logger.info("Нет новых сопоставлений для добавления")
-            else:
-                self.logger.info("Нет сопоставлений для сохранения")
-            return
-
-        # 4. Объединяем: добавляем/обновляем статьи для каждого бренда
-        for brand, articles in new_mappings.items():
-            if brand in existing:
-                existing[brand].update(articles)  # обновляем существующие статьи
-            else:
-                existing[brand] = articles  # добавляем новый бренд
-
-        # 5. Нормализуем имена брендов (если есть конфиг)
-        if self.brands_from_config:
-            existing = self._normalize_brand_names(existing, self.brands_from_config)
-
-        # 6. Сохраняем объединённый словарь
+            mappings = self._collect_mappings()  # существующий метод
+        # Нормализуем перед сохранением
+        if hasattr(self, 'brands_from_config') and self.brands_from_config:
+            mappings = self._normalize_brand_names(mappings, self.brands_from_config)
         mappings_path = self._get_mappings_path()
         try:
             with open(mappings_path, "w", encoding="utf-8") as f:
-                json.dump(existing, f, ensure_ascii=False, indent=4)
-            self.logger.info(f"Сохранено брендов: {len(existing)} (добавлено из текущей сессии)")
+                json.dump(mappings, f, ensure_ascii=False, indent=4)
+            self.log(f"Сохранено брендов: {len(mappings)}")
         except IOError as e:
-            self.logger.error(f"Ошибка сохранения сопоставлений: {e}")
+            self.log(f"Ошибка сохранения сопоставлений: {e}")
 
     def _apply_mappings(self, items: List[SupplyItem], candidates: List[Candidate]) -> Tuple[
         List[SupplyItem], List[Candidate]]:
@@ -828,14 +790,12 @@ class CompareService:
                         item.found = True
                         item.matched_candidate = matched_cand
                         item.stage = 1
-                        if self.logger:
-                            self.logger.debug(f"  Применено сохранённое сопоставление: {item.article} -> {shk}")
+                        self.log(f"  Применено сохранённое сопоставление: {item.article} -> {shk}")
                         found = True
                         break
                     else:
-                        if self.logger:
-                            self.logger.debug(f"  Не найден кандидат для сохранённого сопоставления: {item.article} -> {shk}")
-                        found = True
+                        self.log(f"  Не найден кандидат для сохранённого сопоставления: {item.article} -> {shk}")
+                        found = True  # мы обработали этот артикул, но не нашли кандидата
                         break
             if not found:
                 remaining_items.append(item)
@@ -844,8 +804,7 @@ class CompareService:
         return remaining_items, remaining_candidates
 
     def copy_supply_sheet(self, supply_file_path: str, output_dir: str) -> Path:
-        if self.logger:
-            self.logger.info("=== КОПИРОВАНИЕ ЛИСТА ПОСТАВКИ ===")
+        self.log("=== КОПИРОВАНИЕ ЛИСТА ПОСТАВКИ ===")
         supply_path = Path(supply_file_path)
         if not supply_path.exists():
             raise FileNotFoundError(f"Файл листа поставки не найден: {supply_file_path}")
@@ -857,22 +816,22 @@ class CompareService:
         copy_name = f"Лист_поставки_копия_{date_str}.xlsx"
         copy_path = output_dir_path / copy_name
 
-        if self.logger:
-            self.logger.info(f"Исходный файл: {supply_path.name}")
-            self.logger.info(f"Копия: {copy_path.name}")
+        self.log(f"Исходный файл: {supply_path.name}")
+        self.log(f"Копия: {copy_path.name}")
 
+        # Открываем файл НЕ в read-only режиме
         wb = ExcelHelper.open_data_file(supply_path, read_only=False, data_only=True)
         ws = wb.active
 
+        # Проверяем, что лист не пустой
         if ws.max_row is not None and ws.max_row > 0 and ws.max_column is not None and ws.max_column > 0:
             max_col = ws.max_column
             ws.cell(row=1, column=max_col + 1, value="Итоговое количество")
             ws.cell(row=1, column=max_col + 2, value="КИЗ")
-            if self.logger:
-                self.logger.info("  Добавлены столбцы 'Итоговое количество' и 'КИЗ'")
+            self.log("  Добавлены столбцы 'Итоговое количество' и 'КИЗ'")
         else:
-            if self.logger:
-                self.logger.info("  Лист пуст или не содержит данных — столбцы не добавлены")
+            self.log(f"  max_row={ws.max_row}, max_column={ws.max_column}")
+            self.log("  Лист пуст или не содержит данных — столбцы не добавлены")
 
         wb.save(copy_path)
         wb.close()
@@ -881,29 +840,30 @@ class CompareService:
         return copy_path
 
     def build_consolidated_supply(self, supply_files: List[str], output_dir: str) -> Path:
-        if self.logger:
-            self.logger.info("=== ФОРМИРОВАНИЕ СБОРНОГО ФАЙЛА ПОСТАВОК ===")
+        self.log("=== ФОРМИРОВАНИЕ СБОРНОГО ФАЙЛА ПОСТАВОК ===")
         if not supply_files:
             raise ValueError("Список файлов поставок пуст.")
 
         consolidated = {}
+        skipped_no_gtin = 0
         total_files = len(supply_files)
+
+        # Создаём папку для логов
         output_dir_path = Path(output_dir)
         output_dir_path.mkdir(parents=True, exist_ok=True)
 
         for idx, file_path in enumerate(supply_files, start=1):
             file_path = Path(file_path)
-            if self.logger:
-                self.logger.info(f"Обработка файла {idx}/{total_files}: {file_path.name}")
+            self.log(f"Обработка файла {idx}/{total_files}: {file_path.name}")
 
+            # ---- Если это CSV, используем нормализатор по строкам ----
             if file_path.suffix.lower() == '.csv':
                 try:
                     from utils.excel_helper import CsvNormalizer
                     normalizer = CsvNormalizer(file_path)
-                    valid_rows, invalid_log = normalizer.normalize_rows(
-                        lambda msg: self.logger.debug(msg) if self.logger else None
-                    )
+                    valid_rows, invalid_log = normalizer.normalize_rows(self.log)
 
+                    # Сохраняем лог некорректных строк
                     if invalid_log:
                         log_path = output_dir_path / f"log_некорректные_строки_{file_path.stem}.txt"
                         with open(log_path, 'w', encoding='utf-8') as f:
@@ -911,12 +871,11 @@ class CompareService:
                             f.write("=" * 60 + "\n")
                             for line in invalid_log:
                                 f.write(line + "\n")
-                        if self.logger:
-                            self.logger.info(f"  Некорректные строки сохранены в {log_path.name}")
+                        self.log(f"  Некорректные строки сохранены в {log_path.name}")
 
+                    # Обрабатываем валидные строки
                     if valid_rows:
-                        if self.logger:
-                            self.logger.debug(f"  Найдено валидных строк: {len(valid_rows)}")
+                        self.log(f"  Найдено валидных строк: {len(valid_rows)}")
                         for row in valid_rows:
                             gtin = row['gtin']
                             kiz = row['kiz']
@@ -937,20 +896,19 @@ class CompareService:
                             if not consolidated[gtin]['original_name'] and name:
                                 consolidated[gtin]['original_name'] = name
                     else:
-                        if self.logger:
-                            self.logger.debug("  Валидных строк не найдено")
+                        self.log("  Валидных строк не найдено")
+
                 except Exception as e:
-                    if self.logger:
-                        self.logger.error(f"  Ошибка обработки CSV через нормализатор: {e}")
+                    self.log(f"  Ошибка обработки CSV через нормализатор: {e}")
                     continue
 
+            # ---- Если это Excel, используем стандартный подход ----
             else:
                 try:
                     wb = ExcelHelper.open_data_file(file_path, read_only=True, data_only=True)
                     ws = wb.active
                 except Exception as e:
-                    if self.logger:
-                        self.logger.error(f"  Ошибка открытия: {e} – пропускаем")
+                    self.log(f"  Ошибка открытия: {e} – пропускаем")
                     continue
 
                 header_variants = {
@@ -961,8 +919,7 @@ class CompareService:
 
                 header_row, columns = self.data_loader._find_header_row_and_columns(ws, header_variants)
                 if header_row is None or columns is None:
-                    if self.logger:
-                        self.logger.debug(f"  Не удалось найти заголовки в файле {file_path.name}, пропускаем")
+                    self.log(f"  Не удалось найти заголовки в файле {file_path.name}, пропускаем")
                     wb.close()
                     continue
 
@@ -971,21 +928,21 @@ class CompareService:
                 col_serial = columns.get('serial')
 
                 if col_name is None or col_shk is None:
-                    if self.logger:
-                        self.logger.debug(f"  В файле {file_path.name} не найдены столбцы 'Наименование' или 'ШК', пропускаем")
+                    self.log(f"  В файле {file_path.name} не найдены столбцы 'Наименование' или 'ШК', пропускаем")
                     wb.close()
                     continue
 
-                if self.logger:
-                    self.logger.debug(f"  Заголовки: наименование={col_name}, ШК={col_shk}, серийный={col_serial}")
+                self.log(f"  Заголовки: наименование={col_name}, ШК={col_shk}, серийный={col_serial}")
 
                 row_count = 0
                 for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
                     shk = row[col_shk] if len(row) > col_shk else None
                     if not shk:
+                        skipped_no_gtin += 1
                         continue
                     shk_key = str(shk).strip()
                     if not shk_key:
+                        skipped_no_gtin += 1
                         continue
 
                     name = str(row[col_name]).strip() if row[col_name] else ""
@@ -1008,16 +965,17 @@ class CompareService:
                     row_count += 1
 
                 wb.close()
-                if self.logger:
-                    self.logger.debug(f"  Прочитано строк: {row_count}")
+                self.log(f"  Прочитано строк: {row_count}")
 
-        if self.logger:
-            self.logger.info(f"Всего уникальных GTIN/ШК: {len(consolidated)}")
+        self.log(f"Всего уникальных GTIN/ШК: {len(consolidated)}")
 
         if not consolidated:
             raise ValueError("Не найдено ни одной записи с GTIN/ШК в файлах поставок.")
 
-        consolidated_name = f"Сборный_поставок_{date.today().strftime('%d_%m_%Y')}.xlsx"
+        # Сохраняем сборный файл
+        today = date.today()
+        date_str = f"{today.day}_{today.month}_{today.year}"
+        consolidated_name = f"Сборный_поставок_{date_str}.xlsx"
         consolidated_path = output_dir_path / consolidated_name
 
         wb = openpyxl.Workbook()
@@ -1039,25 +997,21 @@ class CompareService:
 
         wb.save(consolidated_path)
         wb.close()
-        if self.logger:
-            self.logger.info(f"Сборный файл сохранён: {consolidated_path.name}")
+        self.log(f"Сборный файл сохранён: {consolidated_path.name}")
 
         self.consolidated_supply_path = consolidated_path
         return consolidated_path
 
-    def load_data(self) -> None:
-        if not self.copied_supply_path or not self.consolidated_supply_path:
-            raise RuntimeError("Сначала выполните подготовку файлов.")
-        self.supply_items = self.data_loader.load_supply_items(self.copied_supply_path)
-        self.candidates = self.data_loader.load_candidates(self.consolidated_supply_path)
-
     def run_stage1(self, parent_widget=None) -> None:
         if not self.supply_items or not self.candidates:
             raise RuntimeError("Данные не загружены. Выполните подготовку и загрузку.")
+        # Применяем сохранённые сопоставления
         remaining_items, remaining_candidates = self._apply_mappings(self.supply_items, self.candidates)
+        # Запускаем этап 1 для оставшихся
         found, remaining, updated_candidates = self.stage1.run(
             remaining_items, remaining_candidates, parent_widget
         )
+        # Собираем все найденные на этапе 1 (включая уже сопоставленные через маппинги)
         mapped_items = [item for item in self.supply_items if item not in remaining_items]
         self.found_stage1 = found + mapped_items
         self.supply_items = remaining
@@ -1066,7 +1020,7 @@ class CompareService:
     def run_stage2(self, parent_widget) -> None:
         if not self.supply_items or not self.candidates:
             raise RuntimeError("Данные не загружены.")
-        stage2 = Stage2(parent_widget, logger=self.logger)
+        stage2 = Stage2(parent_widget, log_callback=self.log_callback)
         self.found_stage2, self.supply_items, self.candidates = stage2.run(
             self.supply_items, self.candidates
         )
@@ -1074,16 +1028,25 @@ class CompareService:
     def run_stage3(self, parent_widget) -> None:
         if not self.supply_items or not self.candidates:
             raise RuntimeError("Данные не загружены.")
-        stage3 = Stage3(parent_widget, logger=self.logger)
+        stage3 = Stage3(parent_widget, log_callback=self.log_callback)
         self.final_items = stage3.run(self.supply_items, self.candidates)
+
+    def load_data(self) -> None:
+        if not self.copied_supply_path or not self.consolidated_supply_path:
+            raise RuntimeError("Сначала выполните подготовку файлов.")
+        self.supply_items = self.data_loader.load_supply_items(self.copied_supply_path)
+        self.candidates = self.data_loader.load_candidates(self.consolidated_supply_path)
 
     def generate_report(self, output_dir: str) -> None:
         if not self.final_items:
             raise RuntimeError("Нет финальных данных. Выполните этап 3.")
 
+        # Объединяем все найденные товары
         all_items = []
         all_items.extend(self.found_stage1)
         all_items.extend(self.found_stage2)
         all_items.extend(self.final_items)
 
+        # Передаём список кандидатов для поиска лишних
         self.report_generator.generate(all_items, Path(output_dir), self.candidates)
+

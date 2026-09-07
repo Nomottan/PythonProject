@@ -2,14 +2,9 @@ import json, logging, os
 from pathlib import Path
 from models.models import Seller, Brand
 
-import json
-from pathlib import Path
-from utils.path_utils import PathManager
-
 class ConfigManager:
-    def __init__(self):
-        self.path_manager = PathManager()
-        self.config_path = self.path_manager.get_data_path() / "config.json"
+    def __init__(self, config_path="config.json"):
+        self.config_path = Path(__file__).parent / "data" / "config.json"
         self.data = {}
         self._sellers_cache: list[dict] | None = None
         self._brands_cache: list[dict] | None = None
@@ -23,18 +18,12 @@ class ConfigManager:
             except (json.JSONDecodeError, IOError):
                 self.data = {}
         else:
-            self.data = {
-                "sellers": [],
-                "brands": [],
-                "target_dir": str(self.path_manager.get_default_working_dir())
-            }
-            self.save()
-
+            self.data = {}
         self._sellers_cache = self.data.get("sellers", [])
         self._brands_cache = self.data.get("brands", [])
 
     def save(self):
-        self.path_manager.ensure_data_dir()
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=4, ensure_ascii=False)
 
@@ -84,4 +73,5 @@ class ConfigManager:
     def get_brands_dict(self) -> dict[str, Brand]:
         brands = self.get_brands_objects()
         return {b.name: b for b in brands}
+
 

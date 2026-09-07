@@ -1,5 +1,4 @@
 import sys
-from pathlib import Path
 import asyncio
 
 from services.planner_services import PlannerFacade
@@ -15,8 +14,7 @@ from ui.windows import (
 from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from utils.datetime_utils import DateTimeUtils
-from utils.logger import CompositeLogger, FileLogger, QtStatusLogger
-from utils.log_templates import LogTemplates
+
 
 async def async_task():
     await asyncio.sleep(2)
@@ -42,13 +40,10 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(600, 650)
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #2a323b;
+                background-color: #795a7d;
                 border-radius: 15px;
             }
         """)
-        self.app_logger = CompositeLogger()
-        self.ui_logger = QtStatusLogger()
-        self.app_logger.add_logger(self.ui_logger)
 
         self.config = ConfigManager()
         self.active_child = None
@@ -76,9 +71,6 @@ class MainWindow(QMainWindow):
             ("btn_returns", "Подготовка к возврату в оборот", (61, 20, 30, 0.6), "8px 16px", None),
             ("btn_compare", "Сравнение поставок", (100, 130, 160, 0.8), "8px 16px", None),
         ]
-
-        debug_logger = FileLogger("logs/debug.log", level="debug")
-        self.app_logger.add_logger(debug_logger)
 
         _main_handlers = {
             "btn_sellers": "open_sellers_window",

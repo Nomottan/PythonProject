@@ -1,0 +1,4 @@
+2026-09-07 12:13:08,808 - INFO - Загружено 8 задач из tasks.json.
+2026-09-07 12:13:08,808 - ERROR - Ошибка чтения data: [Errno 13] Permission denied: 'C:\\Users\\Владимир\\PycharmProjects\\PythonProject\\data'
+2026-09-07 12:13:08,809 - INFO - Загружено 8 задач из tasks.json.
+2026-09-07 12:13:08,809 - ERROR - Ошибка чтения data: [Errno 13] Permission denied: 'C:\\Users\\Владимир\\PycharmProjects\\PythonProject\\data'

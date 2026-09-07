@@ -1,3 +1,4 @@
+from __future__ import annotations
 import threading
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QSize, Signal, QDateTime, QDate
@@ -8,7 +9,6 @@ from PySide6.QtWidgets import (
     QTextEdit, QSpinBox, QDateTimeEdit, QAbstractSpinBox, QDateEdit
 )
 
-from ui.widgets.process_button import ProcessButton, ButtonState
 from typing import Callable, Tuple
 from utils.logger import ILogger
 
@@ -125,7 +125,6 @@ class ButtonFactory(BaseWidgetFactory):
     """Фабрика для создания кнопок."""
 
     @staticmethod
-    @staticmethod
     def create_button(parent, text, bg_color, text_color=None,
                       padding="8px 16px", fixed_size=None, alignment=None,
                       object_name=None, cursor_shape=None, border_radius=5,
@@ -184,8 +183,11 @@ class ButtonFactory(BaseWidgetFactory):
             tooltip=None,
             min_size=None,
             max_size=None,
-            initial_state: ButtonState = ButtonState.GRAY,
-    ) -> ProcessButton:
+            initial_state=None,
+    ):
+        from ui.widgets.process_button import ProcessButton, ButtonState
+        if initial_state is None:
+            initial_state = ButtonState.GRAY
         """
         Создаёт ProcessButton с заданным стилем.
         """
@@ -1304,11 +1306,6 @@ class ListWidgetFactory(BaseWidgetFactory):
 
         return scroll_area, content_widget, content_layout
 
-
-
-
-
-
 class LayoutFactory:
     """
     Фабрика для создания контейнеров с различными компоновками.
@@ -1777,8 +1774,6 @@ class FileDialogFactory:
             start = default_dir
         file_path, _ = QFileDialog.getSaveFileName(parent, title, start, filter)
         return file_path if file_path else None
-
-
 
 class ThreadFactory:
     """

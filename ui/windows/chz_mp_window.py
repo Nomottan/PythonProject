@@ -1,88 +1,42 @@
-from pathlib import Path
-from datetime import date
-from openpyxl import load_workbook
-
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit
 )
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
-
+from PySide6.QtCore import Qt
 from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
     FileDialogFactory, ThreadFactory, WindowFactory
 )
+
 from ui.widgets.path_selector import PathSelector
 from ui.windows.shared_dialogs import PricesEditWindow
-
-from services.sells_fbs_service import (
-    PreparationService, ExportKizService, FilterPreFinalService,
-    GenerateSalesService, FinalizePricesService
-)
+from services.sells_fbs_service import PreparationService, ExportKizService, FilterPreFinalService, GenerateSalesService, FinalizePricesService
 from services.sales_accumulator import SalesAccumulatorService
 
-from utils.logger import ILogger, CompositeLogger, FileLogger, QtStatusLogger
-from utils.path_utils import AppPaths
-from utils.process_controller import ProcessController
-from utils.state_manager import ButtonState
-
+from pathlib import Path
+from datetime import date
+from openpyxl import load_workbook
 
 class ChzMPWindow(QMainWindow):
-    """Окно подготовки к списанию проданных КИЗов (ЧЗ МП)."""
-
-    def __init__(self, parent=None, logger: ILogger = None, app_paths: AppPaths = None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.main_window = parent
 
-        # ---- Настройка логгера ----
-        if logger is not None:
-            self.logger = logger
-        else:
-            self.logger = CompositeLogger()
-            debug_logger = FileLogger(
-                (app_paths or AppPaths()).get_logs_path() / "debug.log",
-                level="debug"
-            )
-            self.logger.add_logger(debug_logger)
-            self.ui_logger = QtStatusLogger(min_level=1)
-            self.ui_logger.log_signal.connect(self._on_log_message)
-            self.logger.add_logger(self.ui_logger)
-
-        self.app_paths = app_paths or AppPaths()
-
-        # Переменные состояния (используются в методах действий)
+        # Переменные состояния
         self.target_dir = parent.config.get("target_dir", None)
         self.fbs_files = []
         self.mp_files = []
         self.fbs_signatures = []
-        self.sellers = parent.config.get_sellers_objects()
 
-        # ---- Создаём контроллер процесса ----
-        self.controller = ProcessController(
-            process_name="ЧЗ_МП",
-            target_dir=self.target_dir,
-            config_manager=parent.config,
-            logger=self.logger,
-            parent_widget=self
-        )
-
-        # Подписываемся на сигналы контроллера
-        self.controller.state_changed.connect(self._on_state_changed)
-        self.controller.log_message.connect(self._on_log_message)
-        self.controller.open_folder.connect(self._on_open_folder)
-
-        # ---- Настройка окна ----
+        # Настройка окна через фабрику
         main_layout = WindowFactory.setup_child_window(
             self, "Списание проданных КИЗов",
-            bg_color=(45, 70, 65, 0.95)
+            bg_color=(64, 48, 66, 0.95)
         )
 
         # ============================================================
-        # ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ UI
+        # ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ
         # ============================================================
 
-        # Кнопки-индикаторы выбора файлов
+        # Кнопки-индикаторы
         _indicator_configs = [
             ("btn_fbs", "Отчёты с FBS", (30, 20, 35, 0.3)),
             ("btn_reports", "Отчёты с МП", (30, 20, 35, 0.3)),
@@ -107,7 +61,7 @@ class ChzMPWindow(QMainWindow):
             font_size=10
         )
 
-        # Описание процесса
+        # Описание
         self.desc_label = LabelFactory.create_label(
             self,
             text="Подготовка отчётов по продавцам для вывода КИЗов из оборота\n"
@@ -136,7 +90,7 @@ class ChzMPWindow(QMainWindow):
         )
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
-        # ---- Статусная область ----
+        # ---- СТАТУСНАЯ ОБЛАСТЬ (лог с прокруткой) ----
         self.status_display = QTextEdit()
         self.status_display.setReadOnly(True)
         self.status_display.setStyleSheet("""
@@ -153,8 +107,7 @@ class ChzMPWindow(QMainWindow):
         self.status_display.setMaximumHeight(200)
         self.status_display.setMinimumHeight(100)
 
-        # ---- Кнопки действий (шаги процесса) ----
-        # Они создаются через фабрику, затем мы их получим и зарегистрируем в контроллере
+        # ---- КНОПКИ ДЕЙСТВИЙ (НОВЫЙ ПРОЦЕСС) ----
         _action_configs = [
             ("btn_prepare",          "Подготовка",             (10, 40, 160),  "8px 16px", (180, 35)),
             ("btn_export_kiz",       "Выгрузка для обработки", (40, 130, 130),  "8px 16px", (180, 35)),
@@ -163,15 +116,21 @@ class ChzMPWindow(QMainWindow):
             ("btn_finalize_prices",  "Установка цен",          (130, 130, 40),  "8px 16px", (180, 35)),
             ("btn_prices",           "Цены",                   (40, 40, 40),  "2px 2px", (35, 20)),
         ]
-        _action_handlers = {}  # Будем подключать через контроллер, поэтому обработчики пустые
+        _action_handlers = {
+            "btn_prepare":          "on_prepare",
+            "btn_export_kiz":       "on_export_kiz",
+            "btn_filter_prefinal":  "on_filter_prefinal",
+            "btn_generate_sales":   "on_generate_sales",
+            "btn_finalize_prices":  "on_finalize_prices",
+            "btn_prices": "on_open_prices_window",
+        }
         ButtonFactory.create_buttons_from_config(self, _action_configs, _action_handlers)
 
-        # Кнопка "Собрать продажи" (отдельное действие)
-        self.btn_accumulate = ButtonFactory.create_button(
-            self, "Собрать продажи", (60, 90, 120, 0.8),
-            padding="8px 16px", fixed_size=(160, 35)
-        )
-        self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
+        # Все кнопки изначально отключены, кроме подготовки
+        self.btn_export_kiz.setEnabled(False)
+        self.btn_filter_prefinal.setEnabled(False)
+        self.btn_generate_sales.setEnabled(False)
+        self.btn_finalize_prices.setEnabled(False)
 
         # ============================================================
         # МАКЕТ
@@ -180,212 +139,72 @@ class ChzMPWindow(QMainWindow):
         center_layout.setSpacing(10)
         center_layout.setAlignment(Qt.AlignCenter)
 
+        # Первая строка: индикаторы
         headers_container = LayoutFactory.create_row(
             self, self.btn_fbs, self.btn_reports,
             fixed_width=365
         )
         center_layout.addWidget(headers_container, alignment=Qt.AlignCenter)
 
+        # Вторая строка: списки файлов
         lists_container = LayoutFactory.create_row(
             self, self.list_fbs, self.list_reports,
             fixed_width=365
         )
         center_layout.addWidget(lists_container, alignment=Qt.AlignCenter)
 
+        # Описание
         center_layout.addWidget(self.desc_label)
+
+        # Выбор папки
         center_layout.addWidget(self.path_selector)
 
+        # Ряд кнопок: Подготовка, Выгрузка, Сбор данных
         row1 = LayoutFactory.create_row(
             self, self.btn_prepare, self.btn_export_kiz, self.btn_filter_prefinal,
             spacing=8
         )
         center_layout.addWidget(row1)
 
+        # Ряд кнопок: Продажи, Установка цен
         row2 = LayoutFactory.create_row(
             self, self.btn_generate_sales, self.btn_finalize_prices, self.btn_prices,
             spacing=8
         )
         center_layout.addWidget(row2)
 
+        # Статусный лог
         center_layout.addWidget(self.status_display)
-
-        # Кнопка "Собрать продажи"
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
+        self.btn_accumulate = ButtonFactory.create_button(
+            self, "Собрать продажи", (60, 90, 120, 0.8),
+            padding="8px 16px", fixed_size=(160, 35)
+        )
+        self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
         bottom_layout.addWidget(self.btn_accumulate)
         center_layout.addLayout(bottom_layout)
-
+        # Растяжка
         center_layout.addStretch(1)
+
         main_layout.addLayout(center_layout)
 
-        # ============================================================
-        # РЕГИСТРАЦИЯ ШАГОВ В КОНТРОЛЛЕРЕ
-        # ============================================================
-        self._register_steps()
-
-        # Подключаем кнопки к контроллеру (кроме "Цены" и "Собрать продажи")
-        self.btn_prepare.clicked.connect(lambda: self.controller.on_button_clicked("prepare"))
-        self.btn_export_kiz.clicked.connect(lambda: self.controller.on_button_clicked("export_kiz"))
-        self.btn_filter_prefinal.clicked.connect(lambda: self.controller.on_button_clicked("filter_prefinal"))
-        self.btn_generate_sales.clicked.connect(lambda: self.controller.on_button_clicked("generate_sales"))
-        self.btn_finalize_prices.clicked.connect(lambda: self.controller.on_button_clicked("finalize_prices"))
-
-        # Кнопка "Цены" — отдельное действие, не входит в цепочку
-        self.btn_prices.clicked.connect(self.on_open_prices_window)
-
-        # Подключаем кнопки выбора файлов
+        # Подключение специфических сигналов
         self.btn_fbs.clicked.connect(self.select_fbs_files)
         self.btn_reports.clicked.connect(self.select_report_files)
 
-        # Стартовое сообщение
-        self.logger.info("Окно ЧЗ МП готово к работе.")
-
     # ============================================================
-    # РЕГИСТРАЦИЯ ШАГОВ
-    # ============================================================
-    def _register_steps(self):
-        from ui.instructions.chz_mp_instruction import ChzMPInstruction
-
-        self.controller.register_step(
-            step_id="prepare",
-            button_text="Подготовка",
-            condition_func=lambda: ChzMPInstruction.can_prepare(
-                self.controller.run_manager, self.fbs_files, self.mp_files
-            ),
-            action_func=self._do_prepare,
-            is_first=True
-        )
-
-        self.controller.register_step(
-            step_id="export_kiz",
-            button_text="Выгрузка для обработки",
-            condition_func=lambda: ChzMPInstruction.can_export_kiz(self.controller.run_manager),
-            action_func=self._do_export_kiz,
-            depends_on=["prepare"]
-        )
-
-        self.controller.register_step(
-            step_id="filter_prefinal",
-            button_text="Сбор данных",
-            condition_func=lambda: ChzMPInstruction.can_filter_prefinal(
-                self.controller.run_manager, self.sellers
-            ),
-            action_func=self._do_filter_prefinal,
-            depends_on=["export_kiz"]
-        )
-
-        self.controller.register_step(
-            step_id="generate_sales",
-            button_text="Продажи",
-            condition_func=lambda: ChzMPInstruction.can_generate_sales(
-                self.controller.run_manager, self.sellers
-            ),
-            action_func=self._do_generate_sales,
-            depends_on=["filter_prefinal"]
-        )
-
-        self.controller.register_step(
-            step_id="finalize_prices",
-            button_text="Установка цен",
-            condition_func=lambda: ChzMPInstruction.can_finalize_prices(
-                self.controller.run_manager, self.sellers
-            ),
-            action_func=self._do_finalize_prices,
-            depends_on=["filter_prefinal"],
-            is_final=True,
-            auto_open_folder=True
-        )
-
-    # ============================================================
-    # МЕТОДЫ ДЕЙСТВИЙ (вызываются контроллером)
-    # ============================================================
-    def _do_prepare(self):
-        """Запускает подготовку (копирование файлов)."""
-        service = PreparationService(self.logger, self.controller.run_manager)
-        service.prepare(
-            target_dir=self.target_dir,
-            fbs_files=self.fbs_files,
-            mp_files=self.mp_files,
-            sellers=self.sellers
-        )
-
-    def _do_export_kiz(self):
-        """Запускает выгрузку КИЗов для обработки."""
-        service = ExportKizService(self.logger, self.controller.run_manager)
-        service.export(self.target_dir, self.sellers)
-
-    def _do_filter_prefinal(self):
-        """Запускает фильтрацию предитоговых файлов."""
-        service = FilterPreFinalService(self.logger, self.controller.run_manager)
-        service.filter_files(self.target_dir, self.sellers)
-
-    def _do_generate_sales(self):
-        """Запускает формирование файлов продаж."""
-        service = GenerateSalesService(self.logger, self.controller.run_manager)
-        service.generate(self.target_dir, self.sellers)
-
-    def _do_finalize_prices(self):
-        """Запускает установку цен и финализацию."""
-        service = FinalizePricesService(self.logger, self.controller.run_manager)
-        saved_prices = self.main_window.config.get("seller_prices", {})
-        updated_prices = service.finalize(self.target_dir, self.sellers, saved_prices)
-        if updated_prices:
-            self.main_window.config.set("seller_prices", updated_prices)
-
-    # ============================================================
-    # ОБРАБОТЧИКИ СИГНАЛОВ КОНТРОЛЛЕРА
-    # ============================================================
-    def _on_state_changed(self, step_id: str, old_state: ButtonState, new_state: ButtonState):
-        """Обновляет внешний вид кнопки в соответствии с состоянием."""
-        button_map = {
-            "prepare": self.btn_prepare,
-            "export_kiz": self.btn_export_kiz,
-            "filter_prefinal": self.btn_filter_prefinal,
-            "generate_sales": self.btn_generate_sales,
-            "finalize_prices": self.btn_finalize_prices,
-        }
-        btn = button_map.get(step_id)
-        if not btn:
-            return
-
-        config = self.controller.state_manager.steps.get(step_id)
-        if not config:
-            return
-
-        # Сбрасываем стандартный стиль и enable
-        btn.setEnabled(True)
-        btn.setStyleSheet("")
-
-        if new_state == ButtonState.GRAY:
-            btn.setStyleSheet("background-color: rgba(80, 80, 80, 0.5); color: #666;")
-            btn.setText(config.button_text)
-        elif new_state == ButtonState.ACTIVE:
-            btn.setStyleSheet("")  # стандартный стиль из фабрики
-            btn.setText(config.button_text)
-        elif new_state == ButtonState.EXECUTED:
-            btn.setStyleSheet("background-color: rgb(60, 150, 80); color: white; font-weight: bold;")
-            btn.setText(config.button_text_executed)
-        elif new_state == ButtonState.LOCKED:
-            btn.setEnabled(False)
-            btn.setText("Выполняется...")
-
-    def _on_log_message(self, msg: str, level: int):
-        """Выводит сообщение в статусную область."""
-        self.status_display.append(msg)
-
-    def _on_open_folder(self, path: str):
-        """Открывает папку в проводнике."""
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-
-    # ============================================================
-    # ОБРАБОТЧИКИ UI (выбор файлов, изменение папки и т.д.)
+    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     # ============================================================
     def _on_target_dir_changed(self, new_path):
         self.target_dir = new_path
         self.parent().config.set("target_dir", new_path)
-        self.logger.info(f"Целевая папка обновлена: {new_path}")
-        # Обновляем состояние кнопок через контроллер
-        self.controller.state_manager.update_all()
+        self.status_display.clear()
+        self.status_display.append("Целевая папка обновлена.")
+        self.btn_export_kiz.setEnabled(False)
+        self.btn_filter_prefinal.setEnabled(False)
+        self.btn_generate_sales.setEnabled(False)
+        self.btn_finalize_prices.setEnabled(False)
 
     def select_fbs_files(self):
         start = self.parent().config.get("last_fbs_dir", None)
@@ -396,7 +215,6 @@ class ChzMPWindow(QMainWindow):
         self.parent().config.set("last_fbs_dir", str(first_file.parent))
 
         for f in files:
-            # Проверка на дубликат по сигнатуре первой ячейки
             try:
                 wb = load_workbook(f, data_only=True)
                 sheet = wb.active
@@ -418,9 +236,6 @@ class ChzMPWindow(QMainWindow):
             self.fbs_signatures.append(first_val)
             self.list_fbs.addItem(Path(f).name)
 
-        # После выбора файлов обновляем состояние кнопок
-        self.controller.state_manager.update_all()
-
     def select_report_files(self):
         start = self.parent().config.get("last_mp_dir", None)
         files = FileDialogFactory.open_files_dialog(self, "Выберите файлы отчётов МП", start)
@@ -431,36 +246,252 @@ class ChzMPWindow(QMainWindow):
             self.list_reports.clear()
             for f in files:
                 self.list_reports.addItem(Path(f).name)
-            # После выбора файлов обновляем состояние кнопок
-            self.controller.state_manager.update_all()
+
+    def _get_log_path(self, log_filename):
+        """Формирует путь к лог-файлу в рабочей папке."""
+        if not self.target_dir:
+            return None
+        today = date.today()
+        date_str = f"{today.day}_{today.month}_{today.year}"
+        work_folder = Path(self.target_dir) / date_str / f"ЧЗ_МП_{date_str}"
+        return work_folder / log_filename
+
+    def _load_log_into_status(self, log_path):
+        """Загружает содержимое лог-файла в статусную область."""
+        self.status_display.clear()
+        if not log_path or not Path(log_path).exists():
+            self.status_display.append("Лог-файл не найден.")
+            return
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                self.status_display.setPlainText(content)
+        except Exception as e:
+            self.status_display.append(f"Ошибка чтения лога: {e}")
+
+    # ============================================================
+    # ОБРАБОТЧИКИ КНОПОК
+    # ============================================================
+    def on_prepare(self):
+        if not self.target_dir:
+            self.status_display.append("Сначала выберите целевую папку")
+            return
+        if not self.fbs_files and not self.mp_files:
+            self.status_display.append("Как насчёт добавить хоть один отчётик?")
+            return
+
+        sellers = self.parent().config.get_sellers_objects()
+        self.status_display.clear()
+        self.status_display.append("Идёт подготовка...")
+
+        service = PreparationService()
+
+        def on_finished():
+            self.status_display.append("Подготовка завершена.")
+            self.btn_export_kiz.setEnabled(True)
+            log_path = self._get_log_path("log_подготовка.txt")
+            if log_path:
+                self._load_log_into_status(log_path)
+
+        def on_error(e):
+            self.status_display.append(f"Ошибка подготовки: {e}")
+
+        ThreadFactory.create_thread(
+            parent=self,
+            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
+                     "btn_generate_sales", "btn_finalize_prices",
+                     "btn_fbs", "btn_reports"],
+            target_func=service.prepare,
+            kwargs={
+                "target_dir": self.target_dir,
+                "fbs_files": self.fbs_files,
+                "mp_files": self.mp_files,
+                "sellers": sellers,
+                "log_callback": None
+            },
+            on_finished=on_finished,
+            error_callback=on_error
+        )
+
+    def on_export_kiz(self):
+        if not self.target_dir:
+            self.status_display.append("Сначала выберите целевую папку")
+            return
+
+        sellers = self.parent().config.get_sellers_objects()
+        self.status_display.clear()
+        self.status_display.append("Выгрузка КИЗов для обработки...")
+
+        service = ExportKizService()
+
+        def on_finished():
+            self.status_display.append("Выгрузка завершена.")
+            self.btn_filter_prefinal.setEnabled(True)
+            log_path = self._get_log_path("log_выгрузка_кизов.txt")
+            if log_path:
+                self._load_log_into_status(log_path)
+
+        def on_error(e):
+            self.status_display.append(f"Ошибка выгрузки: {e}")
+
+        ThreadFactory.create_thread(
+            parent=self,
+            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
+                     "btn_generate_sales", "btn_finalize_prices",
+                     "btn_fbs", "btn_reports"],
+            target_func=service.export,
+            kwargs={
+                "target_dir": self.target_dir,
+                "sellers": sellers,
+                "log_callback": None
+            },
+            on_finished=on_finished,
+            error_callback=on_error
+        )
+
+    def on_filter_prefinal(self):
+        if not self.target_dir:
+            self.status_display.append("Сначала выберите целевую папку")
+            return
+
+        sellers = self.parent().config.get_sellers_objects()
+        self.status_display.clear()
+        self.status_display.append("Фильтрация предитоговых файлов...")
+
+        service = FilterPreFinalService()
+
+        def on_finished():
+            self.status_display.append("Сбор данных завершён.")
+            self.btn_generate_sales.setEnabled(True)
+            log_path = self._get_log_path("log_фильтрация.txt")
+            if log_path:
+                self._load_log_into_status(log_path)
+
+        def on_error(e):
+            self.status_display.append(f"Ошибка фильтрации: {e}")
+
+        ThreadFactory.create_thread(
+            parent=self,
+            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
+                     "btn_generate_sales", "btn_finalize_prices",
+                     "btn_fbs", "btn_reports"],
+            target_func=service.filter_files,
+            kwargs={
+                "target_dir": self.target_dir,
+                "sellers": sellers,
+                "log_callback": None
+            },
+            on_finished=on_finished,
+            error_callback=on_error
+        )
+
+    def on_generate_sales(self):
+        if not self.target_dir:
+            self.status_display.append("Сначала выберите целевую папку")
+            return
+
+        sellers = self.parent().config.get_sellers_objects()
+        self.status_display.clear()
+        self.status_display.append("Формирование файлов продаж...")
+
+        service = GenerateSalesService()
+
+        def on_finished():
+            self.status_display.append("Продажи сформированы.")
+            self.btn_finalize_prices.setEnabled(True)
+            log_path = self._get_log_path("log_продажи.txt")
+            if log_path:
+                self._load_log_into_status(log_path)
+
+        def on_error(e):
+            self.status_display.append(f"Ошибка формирования продаж: {e}")
+
+        ThreadFactory.create_thread(
+            parent=self,
+            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
+                     "btn_generate_sales", "btn_finalize_prices",
+                     "btn_fbs", "btn_reports"],
+            target_func=service.generate,
+            kwargs={
+                "target_dir": self.target_dir,
+                "sellers": sellers,
+                "log_callback": None
+            },
+            on_finished=on_finished,
+            error_callback=on_error
+        )
+
+    def on_finalize_prices(self):
+        if not self.target_dir:
+            self.status_display.append("Сначала выберите целевую папку")
+            return
+
+        sellers = self.parent().config.get_sellers_objects()
+        saved_prices = self.parent().config.get("seller_prices", {})
+        self.status_display.clear()
+        self.status_display.append("Внесение цен и финализация...")
+
+        service = FinalizePricesService()
+
+        def on_finished():
+            self.status_display.append("Цены установлены, файлы финализированы.")
+            log_path = self._get_log_path("log_цены.txt")
+            if log_path:
+                self._load_log_into_status(log_path)
+
+        def on_error(e):
+            self.status_display.append(f"Ошибка установки цен: {e}")
+
+        ThreadFactory.create_thread(
+            parent=self,
+            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
+                     "btn_generate_sales", "btn_finalize_prices",
+                     "btn_fbs", "btn_reports"],
+            target_func=service.finalize,
+            kwargs={
+                "target_dir": self.target_dir,
+                "sellers": sellers,
+                "saved_prices": saved_prices,
+                "log_callback": None
+            },
+            on_finished=on_finished,
+            error_callback=on_error
+        )
 
     def on_open_prices_window(self):
         """Открывает окно для редактирования сохранённых цен."""
         if not self.target_dir:
-            self.logger.info("Сначала выберите целевую папку")
+            self.status_display.append("Сначала выберите целевую папку")
             return
-        window = PricesEditWindow(self, self.main_window.config)
+        config = self.parent().config
+        window = PricesEditWindow(self, config)
         window.exec()
 
     def on_accumulate_sales(self):
-        """Запускает аккумуляцию продаж (отдельная кнопка)."""
+        """Запускает аккумуляцию продаж из ЧЗ_МП и Возвратов."""
         if not self.target_dir:
-            self.logger.info("Сначала выберите целевую папку")
+            self.status_display.append("Сначала выберите целевую папку")
             return
-
-        self.logger.info("Аккумуляция продаж...")
+        self.status_display.clear()
+        self.status_display.append("Аккумуляция продаж...")
         service = SalesAccumulatorService()
+
+        def on_finished():
+            self.status_display.append("Аккумуляция завершена.")
+            log_path = self._get_log_path("log_аккумуляция.txt")
+            if log_path:
+                self._load_log_into_status(log_path)
+
+        def on_error(e):
+            self.status_display.append(f"Ошибка аккумуляции: {e}")
 
         ThreadFactory.run_in_thread(
             target_func=service.accumulate,
             args=(self.target_dir, "chz"),
-            on_finished=lambda: self.logger.info("Аккумуляция завершена."),
-            error_callback=lambda e: self.logger.error(f"Ошибка аккумуляции: {e}")
+            on_finished=on_finished,
+            error_callback=on_error
         )
 
-    # ============================================================
-    # ЗАКРЫТИЕ ОКНА
-    # ============================================================
     def cleanup(self):
         self.fbs_files = []
         self.mp_files = []
@@ -469,8 +500,6 @@ class ChzMPWindow(QMainWindow):
         self.fbs_signatures = []
 
     def closeEvent(self, event):
-        # Сохраняем состояние через контроллер
-        self.controller.shutdown()
         self.cleanup()
         if self.parent() and hasattr(self.parent(), 'active_child'):
             self.parent().active_child = None
