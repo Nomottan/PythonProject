@@ -31,7 +31,8 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        self.config = ConfigManager()
+        self.paths = PathManager()
+        self.config = ConfigManager(self.paths)
         self.active_child = None
         self.chz_mp_window = None
         self.sellers_window = None

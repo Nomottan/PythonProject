@@ -11,8 +11,8 @@ class TaskContext:
         self.today = date.today()
         self.date_str = f"{self.today.day}_{self.today.month}_{self.today.year}"
         subfolder_name = subfolder_template.format(date=self.date_str)
-        self.work_folder = Path(target_dir) / self.date_str / subfolder_name
-        self.work_folder.mkdir(parents=True, exist_ok=True)
+        from utils.path_manager import PathManager
+        self.work_folder = PathManager.ensure_dir(Path(target_dir) / self.date_str / subfolder_name)
         self.log_path = self.work_folder / log_filename
         self.callback = log_callback or print
 

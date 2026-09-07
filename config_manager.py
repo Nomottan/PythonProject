@@ -1,10 +1,12 @@
 import json, logging, os
 from pathlib import Path
 from models.models import Seller, Brand
+from utils.path_manager import PathManager
 
 class ConfigManager:
-    def __init__(self, config_path="config.json"):
-        self.config_path = Path(__file__).parent / "data" / "config.json"
+    def __init__(self, path_manager: PathManager):
+        self.paths = path_manager
+        self.config_path = path_manager.config_file   # ← теперь путь берётся из менеджера
         self.data = {}
         self._sellers_cache: list[dict] | None = None
         self._brands_cache: list[dict] | None = None
