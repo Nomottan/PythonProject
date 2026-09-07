@@ -722,6 +722,29 @@ class CompareService:
                 normalized[canonical] = articles.copy()
         return normalized
 
+    def _convert_legacy_mappings(self, data):
+        """
+        Конвертирует старый формат маппингов (список) в новый (словарь брендов).
+        """
+        if isinstance(data, list):
+            converted = {}
+            for entry in data:
+                brand = entry.get("brand", "")
+                article = entry.get("article", "")
+                shk = entry.get("shk", "")
+                supply_name = entry.get("supply_name", "")
+                candidate_name = entry.get("candidate_name", "")
+                if brand not in converted:
+                    converted[brand] = {}
+                converted[brand][article] = {
+                    "shk": shk,
+                    "supply_name": supply_name,
+                    "candidate_name": candidate_name
+                }
+            return converted
+        return data
+
+
     def load_mappings(self) -> Dict[str, Dict[str, Dict]]:
         mappings_path = self._get_mappings_path()
         if not mappings_path.exists():
@@ -748,17 +771,73 @@ class CompareService:
         except (json.JSONDecodeError, IOError):
             return {}
 
+    def _collect_mappings(self) -> dict:
+        """
+        Собирает текущие сопоставления из найденных товаров.
+        Возвращает словарь вида {brand: {article: {"shk": ..., "supply_name": ..., "candidate_name": ...}}}
+        """
+        mappings = {}
+        all_items = []
+        all_items.extend(self.found_stage1)
+        all_items.extend(self.found_stage2)
+        all_items.extend(self.final_items)
+
+        for item in all_items:
+            if item.found and item.matched_candidate and item.article:
+                brand = item.brand or "Без бренда"
+                article = item.article
+                shk = item.matched_candidate.shk or ""
+                supply_name = item.matched_candidate.name or ""
+                candidate_name = item.name or ""
+
+                if brand not in mappings:
+                    mappings[brand] = {}
+                mappings[brand][article] = {
+                    "shk": shk,
+                    "supply_name": supply_name,
+                    "candidate_name": candidate_name
+                }
+        return mappings
+
     def save_mappings(self, mappings=None) -> None:
+        """
+        Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных.
+        Если файл уже существует, новые сопоставления добавляются к существующим.
+        """
+        # 1. Загружаем существующие маппинги из файла
+        existing = self.load_mappings()
+
+        # 2. Определяем новые маппинги
         if mappings is None:
-            mappings = self._collect_mappings()  # существующий метод
-        # Нормализуем перед сохранением
-        if hasattr(self, 'brands_from_config') and self.brands_from_config:
-            mappings = self._normalize_brand_names(mappings, self.brands_from_config)
+            new_mappings = self._collect_mappings()
+        else:
+            new_mappings = mappings
+
+        # 3. Если новых нет, выходим (сохраняем как есть)
+        if not new_mappings:
+            if existing:
+                self.log("Нет новых сопоставлений для добавления")
+            else:
+                self.log("Нет сопоставлений для сохранения")
+            return
+
+        # 4. Объединяем: добавляем/обновляем статьи для каждого бренда
+        for brand, articles in new_mappings.items():
+            if brand in existing:
+                existing[brand].update(articles)
+            else:
+                existing[brand] = articles
+
+        # 5. Нормализуем имена брендов (если есть конфиг)
+        if self.brands_from_config:
+            existing = self._normalize_brand_names(existing, self.brands_from_config)
+
+        # 6. Сохраняем объединённый словарь
         mappings_path = self._get_mappings_path()
         try:
             with open(mappings_path, "w", encoding="utf-8") as f:
-                json.dump(mappings, f, ensure_ascii=False, indent=4)
-            self.log(f"Сохранено брендов: {len(mappings)}")
+                json.dump(existing, f, ensure_ascii=False, indent=4)
+            self.log(f"Сохранено брендов: {len(existing)} (добавлено из текущей сессии)")
         except IOError as e:
             self.log(f"Ошибка сохранения сопоставлений: {e}")
 

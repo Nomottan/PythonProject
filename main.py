@@ -1,31 +1,18 @@
 import sys
 import asyncio
 
-from services.planner_services import PlannerFacade
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
                                QVBoxLayout, QHBoxLayout)
 from PySide6.QtCore import QTimer, Qt
 
 from ui.windows import (
     ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
-    StringListDialog, DailyPlannerWindow, DailyTasksWidget, PlannerWindow
+    StringListDialog
 )
 
 from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from utils.datetime_utils import DateTimeUtils
-
-
-async def async_task():
-    await asyncio.sleep(2)
-
-
-def run_async_in_thread():
-    """Запускает asyncio-задачу в отдельном потоке."""
-    import threading
-    def target():
-        asyncio.run(async_task())
-    threading.Thread(target=target, daemon=True).start()
 
 
 class MainWindow(QMainWindow):
@@ -34,7 +21,6 @@ class MainWindow(QMainWindow):
     # ============================================================
     def __init__(self):
         super().__init__()
-        self.planner_facade = PlannerFacade()
         self.setWindowTitle("Помощник")
         self.setGeometry(100, 100, 600, 900)
         self.setMinimumSize(600, 650)
@@ -51,12 +37,9 @@ class MainWindow(QMainWindow):
         self.sellers_window = None
         self.brands_window = None
         self.returns_window = None
-        self.planner_window = None
         self.compare_window = None
 
-        self.planner_facade = PlannerFacade()
-        self.planner_facade.initialize()
-
+        # ---- Таймер для обновления кнопки даты/времени ----
         self.timer = QTimer()
         self.timer.timeout.connect(self.on_timer)
         self.timer.start(100)
@@ -80,13 +63,12 @@ class MainWindow(QMainWindow):
             "btn_compare": "open_compare_window",
         }
 
-        # Создаём основные кнопки через новую фабрику
         ButtonFactory.create_buttons_from_config(self, _main_button_configs, _main_handlers)
 
-        # Кнопка даты/времени (правая верхняя)
+        # Кнопка даты/времени (правая верхняя) — сделать неактивной
         self.datetime_btn = ButtonFactory.create_datetime_button(self, self.open_datetime_window)
+        self.datetime_btn.setEnabled(False)   # <-- отключаем кнопку
 
-        self.daily_tasks_widget = DailyTasksWidget(self, facade=self.planner_facade)
         # ============================================================
         # 3. МАКЕТ
         # ============================================================
@@ -96,8 +78,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
-        # --- Верхняя область ---
-        # Левая колонка: кнопки "Продавцы" и "Бренды" друг под другом
+        # Верхняя область: левая колонка (Продавцы, Бренды), правая — кнопка даты
         left_col = LayoutFactory.create_column(
             self,
             self.btn_sellers,
@@ -109,30 +90,25 @@ class MainWindow(QMainWindow):
         top_area = QHBoxLayout()
         top_area.setAlignment(Qt.AlignTop)
         top_area.addWidget(left_col)
-        top_area.addStretch(1)                       # занимает пространство между левой колонкой и правой кнопкой
+        top_area.addStretch(1)
         top_area.addWidget(self.datetime_btn, alignment=Qt.AlignTop)
 
         main_layout.addLayout(top_area)
 
+        # Центральная колонка с основными кнопками
         center_col = LayoutFactory.create_column(
             self,
             self.btn_chz_mp,
             self.btn_returns,
-            self.btn_compare,  # новая кнопка
+            self.btn_compare,
             alignment=Qt.AlignCenter,
             spacing=10
         )
 
-        # Вставляем в главный макет
         main_layout.addStretch(1)
         main_layout.addWidget(center_col, alignment=Qt.AlignCenter)
         main_layout.addStretch(1)
 
-
-
-
-
-        # Проверка доступности кнопок
         self.update_buttons_state()
 
     # ============================================================
@@ -190,18 +166,13 @@ class MainWindow(QMainWindow):
     # 6. СОБЫТИЯ ОКНА
     # ============================================================
     def open_string_list_dialog(self, title, strings):
-        """Открывает диалог редактирования списка строк (бренды / ключи)."""
         dialog = StringListDialog(self, title, strings)
         dialog.setWindowModality(Qt.ApplicationModal)
         dialog.show()
 
     def open_datetime_window(self):
-        if self.planner_window is None or not self.planner_window.isVisible():
-            self.planner_window = PlannerWindow(self, facade=self.planner_facade)
-            WindowFactory.show_child_window(self, self.planner_window)
-        else:
-            self.planner_window.raise_()
-            self.planner_window.activateWindow()
+        # Кнопка отключена, но на всякий случай оставим заглушку
+        pass
 
     def open_compare_window(self):
         if self.compare_window is None or not self.compare_window.isVisible():
@@ -214,7 +185,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         for child in (self.chz_mp_window, self.sellers_window,
                       self.brands_window, self.returns_window,
-                      self.planner_window, self.compare_window):
+                      self.compare_window):
             if child and child.isVisible():
                 parent_rect = self.frameGeometry()
                 child.setGeometry(10, 10,
@@ -231,7 +202,6 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
 
     def on_timer(self):
-        # Обновляем текст на кнопке даты/времени
         self.datetime_btn.setText(DateTimeUtils.get_current_datetime_text())
 
 
@@ -239,7 +209,4 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
-
-    run_async_in_thread()
-
     sys.exit(app.exec())

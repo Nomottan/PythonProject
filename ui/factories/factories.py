@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
 )
 
 from typing import Callable, Tuple
-from utils.logger import ILogger
 
 
 class BaseWidgetFactory:

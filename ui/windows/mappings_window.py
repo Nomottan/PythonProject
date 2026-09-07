@@ -18,8 +18,7 @@ class BrandMappingsWindow(QDialog):
         super().__init__(parent)
         self.parent_window = parent
         self.service = service
-        self.config = config  # <-- переместите сюда
-        self.service.set_brands_from_config(self._get_brands_from_config())
+        self.config = config
         self.mappings = mappings if mappings is not None else self.service.load_mappings()
         self.brands_list = self._get_brands_from_config()
 
@@ -67,23 +66,16 @@ class BrandMappingsWindow(QDialog):
         # Заполняем список
         self._populate_list()
 
-    def set_brands_from_config(self, brands_list):
-        """Сохраняет список брендов из конфига для нормализации имён."""
-        self.brands_from_config = brands_list
-
     def _get_brands_from_config(self):
-        """Возвращает список объектов Brand из конфига."""
         return self.config.get_brands_objects()
 
     def _populate_list(self):
         """Перестраивает список брендов на основе текущих данных."""
-        # Очищаем
         while self.list_layout.count():
             item = self.list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        # Сортируем бренды по алфавиту
         sorted_brands = sorted(self.mappings.keys(), key=str.lower)
 
         for brand_name in sorted_brands:
@@ -91,20 +83,17 @@ class BrandMappingsWindow(QDialog):
             self.list_layout.addWidget(row)
 
     def _create_brand_row(self, brand_name):
-        """Создаёт строку для одного бренда: кнопка удаления + кнопка бренда."""
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 2, 0, 2)
         row_layout.setSpacing(4)
 
-        # Кнопка удаления бренда
         del_btn = ButtonFactory.create_delete_button(
             self,
             callback=lambda checked, b=brand_name: self._delete_brand(b)
         )
         row_layout.addWidget(del_btn)
 
-        # Кнопка бренда (кликабельная)
         brand_btn = ButtonFactory.create_button(
             self, brand_name, (100, 80, 130, 0.8),
             padding="6px 12px", alignment='left'
@@ -115,7 +104,6 @@ class BrandMappingsWindow(QDialog):
         return row_widget
 
     def _delete_brand(self, brand_name):
-        """Удаляет бренд и все его сопоставления."""
         if brand_name in self.mappings:
             reply = QMessageBox.question(
                 self,
@@ -128,7 +116,6 @@ class BrandMappingsWindow(QDialog):
                 self._populate_list()
 
     def _delete_all(self):
-        """Удаляет все бренды и сопоставления (с предупреждением)."""
         if not self.mappings:
             return
         reply = QMessageBox.question(
@@ -146,37 +133,35 @@ class BrandMappingsWindow(QDialog):
             return
         brand_data = self.mappings[brand_name]
         detail_window = BrandDetailWindow(
-            parent=self.parent_window,  # <-- CompareWindow
+            parent=self.parent_window,
             brand_name=brand_name,
             brand_data=brand_data,
             all_brands=self._get_brands_from_config(),
-            parent_window=self  # <-- BrandMappingsWindow для обновления
+            parent_window=self
         )
         detail_window.exec()
 
     def refresh_data(self):
-        """Перезагружает данные из файла и обновляет список."""
         self.mappings = self.service.load_mappings()
         self._populate_list()
 
     def _save_and_close(self):
-        """Сохраняет изменения в файл и закрывает окно."""
         self.service.save_mappings(self.mappings)
         self.accept()
 
+
 class BrandDetailWindow(QDialog):
     def __init__(self, parent, brand_name, brand_data, all_brands, parent_window):
-        super().__init__(parent)           # parent – CompareWindow
+        super().__init__(parent)
         self.brand_name = brand_name
         self.brand_data = brand_data
         self.all_brands = all_brands
         self.parent_window = parent_window  # BrandMappingsWindow
         self.original_brand_name = brand_name
 
-        # Настройка окна с центрированием относительно parent
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
-            parent=parent,                  # <-- CompareWindow
+            parent=parent,
             title=f"Бренд: {brand_name}",
             bg_color=(40, 80, 110, 0.95),
             close_button=True,
@@ -189,17 +174,14 @@ class BrandDetailWindow(QDialog):
             default_height=900
         )
 
-        # Заголовок
         title_label = LabelFactory.create_header_label(self, f"Сопоставления для бренда: {brand_name}")
         content_layout.addWidget(title_label)
 
-        # Прокручиваемая область для списка сопоставлений
         scroll, self.content_widget, self.list_layout = ListWidgetFactory.create_scroll_container(
             self, spacing=4
         )
         content_layout.addWidget(scroll)
 
-        # Кнопка "Сохранить"
         btn_save = ButtonFactory.create_button(
             self, "Сохранить", (70, 120, 90, 0.8),
             padding="8px 16px", fixed_size=(200, 40)
@@ -207,18 +189,14 @@ class BrandDetailWindow(QDialog):
         btn_save.clicked.connect(self._save_and_close)
         LayoutFactory.add_centered_widget(content_layout, btn_save)
 
-        # Заполняем список
         self._populate_list()
 
     def _populate_list(self):
-        """Перестраивает список сопоставлений на основе текущих данных."""
-        # Очищаем
         while self.list_layout.count():
             item = self.list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        # Сортируем по supply_name (можно и по другому)
         sorted_articles = sorted(self.brand_data.keys(), key=lambda a: self.brand_data[a].get('supply_name', '').lower())
 
         for article in sorted_articles:
@@ -227,20 +205,17 @@ class BrandDetailWindow(QDialog):
             self.list_layout.addWidget(row)
 
     def _create_mapping_row(self, article, entry):
-        """Создаёт строку для одного сопоставления."""
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 2, 0, 2)
         row_layout.setSpacing(4)
 
-        # Кнопка удаления
         del_btn = ButtonFactory.create_delete_button(
             self,
             callback=lambda: self._delete_mapping(article)
         )
         row_layout.addWidget(del_btn)
 
-        # Кнопка редактирования бренда (карандаш)
         edit_btn = ButtonFactory.create_button(
             self, "✎", (100, 100, 120, 0.6),
             fixed_size=(25, 25), padding="0px"
@@ -248,7 +223,6 @@ class BrandDetailWindow(QDialog):
         edit_btn.clicked.connect(lambda checked, a=article: self._edit_brand_for_mapping(a))
         row_layout.addWidget(edit_btn)
 
-        # Текст: supply_name - candidate_name
         supply_name = entry.get('supply_name', '')
         candidate_name = entry.get('candidate_name', '')
         label_text = f"{supply_name} → {candidate_name}"
@@ -262,7 +236,6 @@ class BrandDetailWindow(QDialog):
         return row_widget
 
     def _delete_mapping(self, article):
-        """Удаляет одно сопоставление."""
         if article in self.brand_data:
             reply = QMessageBox.question(
                 self,
@@ -272,14 +245,18 @@ class BrandDetailWindow(QDialog):
             )
             if reply == QMessageBox.Yes:
                 del self.brand_data[article]
-                self._populate_list()
+                # Если бренд стал пустым, удаляем его из родительского словаря
+                if not self.brand_data:
+                    del self.parent_window.mappings[self.brand_name]
+                    self.parent_window._populate_list()
+                    self.close()  # Закрываем окно, т.к. бренд удалён
+                else:
+                    self._populate_list()
 
     def _edit_brand_for_mapping(self, article):
-        """Открывает диалог выбора бренда для перемещения записи."""
         if article not in self.brand_data:
             return
 
-        # Список брендов из конфига (имена)
         brand_names = [b.name for b in self.all_brands]
         if not brand_names:
             msg = "Нет доступных брендов. Сначала добавьте бренды в окне 'Бренды'."
@@ -295,8 +272,7 @@ class BrandDetailWindow(QDialog):
                     main_window.open_brands_window()
             return
 
-        # Создаём диалог выбора с родителем CompareWindow
-        parent_for_dialog = self.parent_window.parent_window  # CompareWindow
+        parent_for_dialog = self.parent_window.parent_window
         dialog = QDialog(parent_for_dialog)
         dialog.setWindowTitle("Выбор бренда")
         dialog.setModal(True)
@@ -354,7 +330,6 @@ class BrandDetailWindow(QDialog):
         """)
         content_layout.addWidget(combo)
 
-        # ---- КНОПКИ ----
         btn_layout = QHBoxLayout()
         btn_ok = ButtonFactory.create_button(
             dialog, "Переместить", (70, 120, 90, 0.8), fixed_size=(120, 30)
@@ -367,7 +342,7 @@ class BrandDetailWindow(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(btn_ok)
         btn_layout.addWidget(btn_cancel)
-        content_layout.addLayout(btn_layout)  # <-- ВАЖНО: добавляем кнопки в макет
+        content_layout.addLayout(btn_layout)
 
         dialog.exec()
 
@@ -387,17 +362,20 @@ class BrandDetailWindow(QDialog):
                 parent_mappings[new_brand_name] = {}
             parent_mappings[new_brand_name][article] = entry
 
+            # Если текущий бренд стал пустым, удаляем его из родительского словаря
+            if not self.brand_data:
+                del parent_mappings[self.brand_name]
+
             # Обновляем список в текущем окне
             self._populate_list()
+            # Обновляем список брендов в родительском окне
+            self.parent_window._populate_list()
             dialog.accept()
         except Exception as e:
             print(f"Ошибка в _move_mapping: {e}")
             dialog.reject()
 
     def _save_and_close(self):
-        # 1. Сохраняем изменения в файл через сервис родительского окна
         self.parent_window.service.save_mappings(self.parent_window.mappings)
-        # 2. Обновляем данные в родительском окне (перезагружаем из файла)
         self.parent_window.refresh_data()
-        # 3. Закрываем текущее окно
         self.accept()
