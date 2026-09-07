@@ -13,7 +13,7 @@ from ui.windows import (
 from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from utils.datetime_utils import DateTimeUtils
-
+from utils.path_manager import PathManager
 
 class MainWindow(QMainWindow):
     # ============================================================

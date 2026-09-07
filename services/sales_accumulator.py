@@ -6,6 +6,7 @@ from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 
+
 class SalesAccumulatorService:
     """Сервис аккумуляции файлов продаж из двух папок в одну общую."""
 
@@ -42,29 +43,48 @@ class SalesAccumulatorService:
             kiz_from_fbs.update(kiz_set)
             ctx.log(f"  Скопирован: {src_path.name} (КИЗов: {len(kiz_set)})")
 
-        # 2. Обработка Возвратов (с фильтрацией)
+        # 2. Обработка Возвратов (с фильтрацией и сбором деталей)
         returns_files = self._find_sales_files(returns_folder)
         ctx.log(f"\n--- ОБРАБОТКА ВОЗВРАТОВ (фильтрация по КИЗам из ЧЗ_МП) ---")
+
+        # Сбор данных для детального лога
+        details = {
+            "kiz_from_fbs": kiz_from_fbs,
+            "files": []  # список словарей по каждому файлу
+        }
+
         for src_path in returns_files:
             dst_path = sales_folder / src_path.name
             # Собираем КИЗы из текущего файла возвратов
             src_kiz_set = self._collect_kiz_set(src_path)
+            # Определяем дубликаты (КИЗы, которые уже есть в ЧЗ_МП)
+            duplicates_in_file = src_kiz_set & kiz_from_fbs
             # Фильтруем: оставляем только те КИЗы, которых нет в kiz_from_fbs
             filtered_kiz = src_kiz_set - kiz_from_fbs
+
+            # Сохраняем данные для лога
+            file_info = {
+                "name": src_path.name,
+                "total": len(src_kiz_set),
+                "duplicates": duplicates_in_file,
+                "filtered": filtered_kiz
+            }
+            details["files"].append(file_info)
+
             if not filtered_kiz:
-                ctx.log(f"  Пропущен {src_path.name}: все КИЗы уже есть в ЧЗ_МП")
+                ctx.log(
+                    f"  Пропущен {src_path.name}: все КИЗы уже есть в ЧЗ_МП (всего {len(src_kiz_set)}, дубликатов {len(duplicates_in_file)})")
                 continue
 
             # Если целевой файл уже существует (из ЧЗ_МП), дополняем его
             if dst_path.exists():
-                # Читаем все строки из dst, чтобы не потерять данные
                 wb_dst = openpyxl.load_workbook(dst_path)
                 sheet_dst = wb_dst.active
-                # Читаем строки из src, фильтруем по filtered_kiz
                 wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
                 sheet_src = wb_src.active
                 rows_added = 0
                 for row in sheet_src.iter_rows(min_row=2, values_only=True):
+                    # КИЗ в первом столбце (индекс 0)
                     if len(row) >= 1:
                         kiz = str(row[0]).strip() if row[0] else ""
                         if kiz in filtered_kiz:
@@ -74,18 +94,18 @@ class SalesAccumulatorService:
                 wb_dst.close()
                 wb_src.close()
                 ctx.log(
-                    f"  Дополнен {dst_path.name}: добавлено {rows_added} строк (всего КИЗов из возвратов: {len(filtered_kiz)})")
+                    f"  Дополнен {dst_path.name}: добавлено {rows_added} строк (всего КИЗов {len(src_kiz_set)}, из них добавлено {len(filtered_kiz)})")
             else:
-                # Если файла нет – копируем с фильтрацией
+                # Если файла нет – создаём новый с фильтрацией
                 wb_dst = openpyxl.Workbook()
                 sheet_dst = wb_dst.active
-                # Копируем заголовки из src (первая строка)
                 wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
                 sheet_src = wb_src.active
                 header = list(sheet_src.iter_rows(min_row=1, max_row=1, values_only=True))[0]
                 sheet_dst.append(header)
                 rows_added = 0
                 for row in sheet_src.iter_rows(min_row=2, values_only=True):
+                    # КИЗ в первом столбце (индекс 0)
                     if len(row) >= 1:
                         kiz = str(row[0]).strip() if row[0] else ""
                         if kiz in filtered_kiz:
@@ -95,26 +115,30 @@ class SalesAccumulatorService:
                 wb_dst.close()
                 wb_src.close()
                 ctx.log(
-                    f"  Создан новый файл {dst_path.name}: добавлено {rows_added} строк (всего КИЗов из возвратов: {len(filtered_kiz)})")
+                    f"  Создан новый файл {dst_path.name}: добавлено {rows_added} строк (всего КИЗов {len(src_kiz_set)}, из них добавлено {len(filtered_kiz)})")
+
+        # Сохраняем детальный лог
+        if details["files"]:
+            log_path = sales_folder / "log_фильтрация_КИЗов.txt"
+            self._log_kiz_details(log_path, details, ctx)
 
         ctx.log("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
 
     # ---------- Вспомогательные методы ----------
     def _find_sales_files(self, folder: Path) -> list[Path]:
-        """Возвращает список файлов продаж в папке (продажа*.xlsx)."""
         if not folder.exists():
             return []
         return list(folder.glob("продажа*.xlsx"))
 
     def _collect_kiz_set(self, file_path: Path) -> set:
-        """Читает КИЗы из столбца B (индекс 2) и возвращает множество."""
+        """Читает КИЗы из первого столбца (индекс 0) и возвращает множество."""
         try:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
             sheet = wb.active
             kiz_set = set()
             for row in sheet.iter_rows(min_row=2, values_only=True):
-                if len(row) >= 2 and row[1]:
-                    kiz = str(row[1]).strip()
+                if len(row) >= 1 and row[0]:  # первый столбец
+                    kiz = str(row[0]).strip()
                     if kiz:
                         kiz_set.add(kiz)
             wb.close()
@@ -122,44 +146,34 @@ class SalesAccumulatorService:
         except Exception:
             return set()
 
-    def _merge_files(self, src_path: Path, dst_path: Path, existing_kiz_set: set, ctx) -> list:
-        """
-        Дополняет dst_path данными из src_path (пропуская заголовки).
-        Возвращает список КИЗов, которые уже существовали (дубликаты).
-        """
-        duplicates = []
-        try:
-            wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
-            sheet_src = wb_src.active
-            wb_dst = openpyxl.load_workbook(dst_path)
-            sheet_dst = wb_dst.active
-
-            # Определяем следующую свободную строку в dst
-            next_row = sheet_dst.max_row + 1
-
-            for row in sheet_src.iter_rows(min_row=2, values_only=True):
-                if len(row) >= 1:
-                    kiz = str(row[0]).strip() if row[0] else ""
-                    if kiz and kiz in existing_kiz_set:
-                        duplicates.append(kiz)
-                    # Добавляем строку (все значения)
-                    sheet_dst.append(row)
-
-            wb_dst.save(dst_path)
-            wb_src.close()
-            wb_dst.close()
-            return duplicates
-        except Exception as e:
-            ctx.log(f"    Ошибка при объединении {src_path.name}: {e}")
-            return []
-
-    def _log_duplicates(self, log_path: Path, duplicates: list, ctx):
-        """Сохраняет список дубликатов в файл."""
-        if not duplicates:
-            return
+    def _log_kiz_details(self, log_path: Path, details: dict, ctx):
+        """Сохраняет детальную информацию о фильтрации КИЗов для каждого файла возвратов."""
         with open(log_path, "w", encoding="utf-8") as f:
-            f.write("Дубликаты КИЗов при аккумуляции продаж\n")
-            f.write("=" * 50 + "\n")
-            for kiz in sorted(set(duplicates)):
-                f.write(f"{kiz}\n")
-        ctx.log(f"  Список дубликатов КИЗов сохранён в {log_path.name}")
+            f.write("=== ДЕТАЛИ ФИЛЬТРАЦИИ КИЗОВ ===\n\n")
+
+            f.write("КИЗы из ЧЗ_МП (приоритетные):\n")
+            if details["kiz_from_fbs"]:
+                for kiz in sorted(details["kiz_from_fbs"]):
+                    f.write(f"  {kiz}\n")
+            else:
+                f.write("  (нет)\n")
+            f.write("\n" + "=" * 60 + "\n\n")
+
+            for file_info in details["files"]:
+                f.write(f"Файл: {file_info['name']}\n")
+                f.write(f"  Всего КИЗов в файле: {file_info['total']}\n")
+                f.write(f"  Дубликаты (уже есть в ЧЗ_МП): {len(file_info['duplicates'])}\n")
+                if file_info['duplicates']:
+                    for kiz in sorted(file_info['duplicates']):
+                        f.write(f"    {kiz}\n")
+                else:
+                    f.write("    (нет)\n")
+                f.write(f"  Отфильтрованные (добавлены): {len(file_info['filtered'])}\n")
+                if file_info['filtered']:
+                    for kiz in sorted(file_info['filtered']):
+                        f.write(f"    {kiz}\n")
+                else:
+                    f.write("    (нет)\n")
+                f.write("\n" + "-" * 40 + "\n")
+
+        ctx.log(f"  Детальный лог фильтрации КИЗов сохранён в {log_path.name}")
