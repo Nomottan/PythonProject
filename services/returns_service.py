@@ -3,6 +3,7 @@ from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
+from utils.kiz_utils import KizUtils
 import json
 import re
 
@@ -150,52 +151,8 @@ class KizExportService:
 
         ctx.log(f"=== Выгрузка КИЗов для возврата (с валидацией и очисткой) ===")
 
-        # Настройка валидатора
         self.kiz_validator.set_log_path(ctx.work_folder)
         self.kiz_validator.load()
-
-        # Вспомогательная функция очистки КИЗа (использует TextUtils)
-        def clean_kiz(raw: str) -> list[str]:
-            """Возвращает список очищенных КИЗов (может быть несколько из-за слипания)."""
-            if not raw:
-                return []
-            raw = str(raw).strip()
-            if len(raw) <= 31:
-                return []
-
-            # 1. Базовая очистка от управляющих символов
-            cleaned = TextUtils.clean_invalid_excel_chars(raw)
-
-            # 2. Разделение слипшихся строк (если длина > 100)
-            fragments = []
-            if len(cleaned) > 100:
-                pattern = re.compile(r'01\d{14}')
-                match = pattern.search(cleaned, pos=80)
-                if match:
-                    split_pos = match.start()
-                    if split_pos > 0 and len(cleaned) - split_pos >= 31:
-                        fragments.append(cleaned[:split_pos])
-                        fragments.append(cleaned[split_pos:])
-                if not fragments:
-                    fragments.append(cleaned)
-            else:
-                fragments.append(cleaned)
-
-            # 3. Обработка каждого фрагмента: проверка на "01", транслитерация
-            result = []
-            for frag in fragments:
-                if not frag.startswith("01"):
-                    pos_01 = frag.find("01")
-                    if pos_01 != -1 and len(frag) - pos_01 >= 31:
-                        frag = frag[pos_01:]
-                    else:
-                        continue
-                if len(frag) <= 31:
-                    continue
-                if TextUtils.is_cyrillic(frag):
-                    frag = TextUtils.keyboard_translit(frag)
-                result.append(frag)
-            return result
 
         wb = ExcelHelper.open_workbook_with_ctx(
             source_file, ctx, description="файл возвратов",
@@ -206,22 +163,21 @@ class KizExportService:
 
         try:
             sheet = wb.active
-            counters = {}  # {safe_company: count}
+            counters = {}
 
             for row in sheet.iter_rows(min_row=2, values_only=True):
                 if len(row) < 6:
                     continue
-                raw_kiz = row[0]       # столбец A
-                status = row[1]        # столбец B
-                company = row[5]       # столбец F
+                raw_kiz = row[0]
+                status = row[1]
+                company = row[5]
 
                 if status is None or str(status).strip().upper() != "ВЫБЫЛ":
                     continue
                 if raw_kiz is None or company is None:
                     continue
 
-                # Очистка КИЗа
-                cleaned_list = clean_kiz(raw_kiz)
+                cleaned_list = KizUtils.clean_kiz(raw_kiz)
                 if not cleaned_list:
                     ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
                     continue
@@ -236,7 +192,7 @@ class KizExportService:
                             f.write(clean_kiz_item + "\n")
                         counters[safe_company] = counters.get(safe_company, 0) + 1
 
-            # Логируем итоги
+            # Итоги
             ctx.log("Результаты выгрузки КИЗов для возврата")
             ctx.log("=" * 50)
             if counters:
@@ -244,7 +200,6 @@ class KizExportService:
                     ctx.log(f"{comp}: {cnt} КИЗов")
             else:
                 ctx.log("Не найдено ни одного КИЗа, прошедшего валидацию (со статусом ВЫБЫЛ).")
-
             ctx.log("Выгрузка завершена.")
 
         except Exception as e:
