@@ -1,3 +1,4 @@
+import re
 from PySide6.QtWidgets import QDialog
 from pathlib import Path
 from utils.context import TaskContext
@@ -78,17 +79,69 @@ class PreparationService:
         return None
 
 class ExportKizService:
-    """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы."""
+    """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы с валидацией."""
+
+    def __init__(self, kiz_validator):
+        self.kiz_validator = kiz_validator
 
     def export(self, target_dir, sellers, log_callback=None):
         ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_выгрузка_кизов.txt", log_callback)
-        ctx.log("=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ ===")
+        ctx.log("=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ (с валидацией и очисткой) ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
+
+        # Настройка валидатора
+        self.kiz_validator.set_log_path(ctx.work_folder)
+        self.kiz_validator.load()
 
         # Словарь для сбора КИЗов по продавцам (множества для уникальности)
         kiz_by_seller = {seller.name: set() for seller in sellers}
 
+        # Вспомогательная функция очистки КИЗа (использует TextUtils)
+        def clean_kiz(raw: str) -> list[str]:
+            """Возвращает список очищенных КИЗов (может быть несколько из-за слипания)."""
+            if not raw:
+                return []
+            raw = str(raw).strip()
+            if len(raw) <= 31:
+                return []
+
+            # 1. Базовая очистка от управляющих символов
+            cleaned = TextUtils.clean_invalid_excel_chars(raw)
+
+            # 2. Разделение слипшихся строк (если длина > 100)
+            fragments = []
+            if len(cleaned) > 100:
+                pattern = re.compile(r'01\d{14}')
+                match = pattern.search(cleaned, pos=80)
+                if match:
+                    split_pos = match.start()
+                    if split_pos > 0 and len(cleaned) - split_pos >= 31:
+                        fragments.append(cleaned[:split_pos])
+                        fragments.append(cleaned[split_pos:])
+                if not fragments:
+                    fragments.append(cleaned)
+            else:
+                fragments.append(cleaned)
+
+            # 3. Обработка каждого фрагмента: проверка на "01", транслитерация
+            result = []
+            for frag in fragments:
+                if not frag.startswith("01"):
+                    pos_01 = frag.find("01")
+                    if pos_01 != -1 and len(frag) - pos_01 >= 31:
+                        frag = frag[pos_01:]
+                    else:
+                        continue
+                if len(frag) <= 31:
+                    continue
+                if TextUtils.is_cyrillic(frag):
+                    frag = TextUtils.keyboard_translit(frag)
+                result.append(frag)
+            return result
+
+        # ------------------------------------------------------------
         # 1. Обработка ЧЗ_МП
+        # ------------------------------------------------------------
         chz_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ЧЗ_МП*.xlsx")
         for chz_path in chz_files:
             ctx.log(f"\nОбработка ЧЗ_МП: {chz_path.name}")
@@ -102,19 +155,28 @@ class ExportKizService:
                         ctx.log(f"  Лист '{sheet_name}' не соответствует ни одному продавцу – пропущен")
                         continue
                     sheet = wb[sheet_name]
-                    kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=2)
-                    for kiz in kiz_list:
-                        kiz_by_seller[seller.name].add(kiz)
-                    ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': добавлено {len(kiz_list)} КИЗов")
+                    raw_kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=2)
+                    for raw_kiz in raw_kiz_list:
+                        cleaned_list = clean_kiz(raw_kiz)
+                        if not cleaned_list:
+                            ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
+                            continue
+                        for clean_kiz_val in cleaned_list:
+                            if self.kiz_validator.validate_for_sale(clean_kiz_val):
+                                kiz_by_seller[seller.name].add(clean_kiz_val)
+                    ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': обработано {len(raw_kiz_list)} записей")
             finally:
-                wb.close()
+                if wb:
+                    wb.close()
 
-        # 2. Обработка отчётов МП (используем поиск по ключам, как в PreparationService)
+        # ------------------------------------------------------------
+        # 2. Обработка отчётов МП (с датами из листа "Сборочные задания")
+        # ------------------------------------------------------------
         mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ОТЧЁТ МП ПО *.xlsx")
         for mp_path in mp_files:
             ctx.log(f"\nОбработка отчёта МП: {mp_path.name}")
 
-            # Ищем продавца по ключам (без учёта даты в имени файла)
+            # Ищем продавца по ключам
             found_seller = None
             for seller in sellers:
                 if any(key.lower() in mp_path.stem.lower() for key in seller.keys):
@@ -129,106 +191,71 @@ class ExportKizService:
                                                     data_only=True)
             if wb is None:
                 continue
+
             try:
+                # Читаем лист "КИЗ" – собираем словарь {киз: номер_задания}
                 if "КИЗ" not in wb.sheetnames:
                     ctx.log(f"  Лист 'КИЗ' отсутствует – пропущен")
                     continue
-                sheet = wb["КИЗ"]
-                kiz_list = ExcelHelper.read_column_values(sheet, col_index=2, start_row=2)
-                for kiz in kiz_list:
-                    kiz_by_seller[seller.name].add(kiz)
-                ctx.log(f"  Добавлено {len(kiz_list)} КИЗов для продавца '{seller.name}'")
-            finally:
-                wb.close()
+                sheet_kiz = wb["КИЗ"]
+                kiz_to_task = {}
+                for row in sheet_kiz.iter_rows(min_row=2, values_only=True):
+                    if len(row) >= 3:
+                        task_num = row[0]  # столбец A
+                        kiz = row[2]       # столбец C
+                        if kiz and task_num:
+                            kiz_to_task[str(kiz).strip()] = str(task_num).strip()
 
-        # 3. Сохранение текстовых файлов (без изменений)
+                # Читаем лист "Сборочные задания" – собираем словарь {номер_задания: дата_создания}
+                if "Сборочные задания" not in wb.sheetnames:
+                    ctx.log(f"  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
+                    task_to_date = {}
+                else:
+                    sheet_tasks = wb["Сборочные задания"]
+                    task_to_date = {}
+                    for row in sheet_tasks.iter_rows(min_row=2, values_only=True):
+                        if len(row) >= 4:
+                            task_num = row[0]  # столбец A
+                            date_created = row[3]  # столбец D
+                            if task_num and date_created:
+                                task_to_date[str(task_num).strip()] = str(date_created).strip()
+
+                # Проходим по КИЗам с очисткой
+                for raw_kiz, task_num in kiz_to_task.items():
+                    cleaned_list = clean_kiz(raw_kiz)
+                    if not cleaned_list:
+                        ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
+                        continue
+                    for clean_kiz_val in cleaned_list:
+                        sale_date_str = task_to_date.get(task_num)
+                        if sale_date_str is None:
+                            ctx.log(
+                                f"  ⚠️ Для КИЗа {clean_kiz_val} (задание {task_num}) не найдена дата в 'Сборочные задания'. Использую сегодняшнюю.")
+                            if self.kiz_validator.validate_for_sale(clean_kiz_val):
+                                kiz_by_seller[seller.name].add(clean_kiz_val)
+                        else:
+                            if self.kiz_validator.validate_for_sale(clean_kiz_val, sale_date_str):
+                                kiz_by_seller[seller.name].add(clean_kiz_val)
+
+                ctx.log(f"  Добавлено {len(kiz_to_task)} записей для продавца '{seller.name}'")
+            finally:
+                if wb:
+                    wb.close()
+
+        # ------------------------------------------------------------
+        # 3. Сохранение текстовых файлов
+        # ------------------------------------------------------------
         ctx.log("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
-        import re
         for seller_name, kiz_set in kiz_by_seller.items():
             if not kiz_set:
                 ctx.log(f"  {seller_name}: нет КИЗов – файл не создан")
                 continue
 
-            cleaned_kiz_set = set()
-            corrupted_count = 0
-
-            cluster_pattern = re.compile(r'91EE\d{2}92')
-
-            for raw in kiz_set:
-                # Проверка длины (КИЗ должен быть > 31)
-                if len(raw) <= 31:
-                    corrupted_count += 1
-                    ctx.log(f"    ⚠️ Некорректный КИЗ (длина {len(raw)}): {raw[:50]}...")
-                    continue
-
-                # 1. Удаляем XML-представления управляющих символов _x001D_ и _x001d_
-                cleaned = re.sub(r'_x001[dD]_', '', raw)
-                # 2. Удаляем настоящие управляющие символы (код ASCII < 32)
-                cleaned = ''.join(ch for ch in cleaned if ord(ch) >= 32)
-
-                # 3. Если строка слишком длинная (> 100), пытаемся разделить слипшиеся строки
-                fragments = []
-                if len(cleaned) > 100:
-                    # Ищем с позиции 80 кластер из 16 символов, начинающийся с "01" и состоящий из цифр
-                    start_search = 80
-                    found = False
-                    # Ищем подстроку "01" + 14 цифр (всего 16 символов)
-                    pattern = re.compile(r'01\d{14}')
-                    match = pattern.search(cleaned, pos=start_search)
-                    if match:
-                        # Позиция начала второго КИЗа
-                        split_pos = match.start()
-                        # Если найденный кластер начинается с 01 и после него ещё есть символы
-                        if split_pos > 0 and len(cleaned) - split_pos >= 31:
-                            fragments.append(cleaned[:split_pos])
-                            fragments.append(cleaned[split_pos:])
-                            found = True
-                    if not found:
-                        # Если не удалось разделить, оставляем как есть
-                        fragments.append(cleaned)
-                else:
-                    fragments.append(cleaned)
-
-                # 4. Обрабатываем каждый фрагмент
-                for frag in fragments:
-                    # Если фрагмент не начинается с "01", пытаемся найти "01" внутри
-                    if not frag.startswith("01"):
-                        pos_01 = frag.find("01")
-                        if pos_01 != -1 and len(frag) - pos_01 >= 31:
-                            # Обрезаем до "01"
-                            frag = frag[pos_01:]
-                        else:
-                            # Если не найдено или после "01" меньше 31 символов, считаем некорректным
-                            corrupted_count += 1
-                            ctx.log(f"    ⚠️ Некорректный КИЗ (нет '01' или мало символов): {frag[:50]}...")
-                            continue
-
-                    # Проверка длины (должно быть > 31)
-                    if len(frag) <= 31:
-                        corrupted_count += 1
-                        ctx.log(f"    ⚠️ Некорректный КИЗ (длина {len(frag)}): {frag[:50]}...")
-                        continue
-
-                    # Транслитерация кириллицы (если есть)
-                    if TextUtils.is_cyrillic(frag):
-                        frag = TextUtils.keyboard_translit(frag)
-
-                    cleaned_kiz_set.add(frag)
-
-            if not cleaned_kiz_set:
-                ctx.log(f"  {seller_name}: после очистки не осталось КИЗов – файл не создан")
-                continue
-
             txt_path = ctx.work_folder / f"{seller_name}.txt"
             with open(txt_path, "w", encoding="utf-8") as f:
-                for kiz in sorted(cleaned_kiz_set):
+                for kiz in sorted(kiz_set):
                     f.write(kiz + "\n")
-
-            if corrupted_count > 0:
-                ctx.log(
-                    f"  {seller_name}: сохранено {len(cleaned_kiz_set)} КИЗов (пропущено {corrupted_count} некорректных)")
-            else:
-                ctx.log(f"  {seller_name}: сохранено {len(cleaned_kiz_set)} КИЗов в {txt_path.name}")
+            ctx.log(f"  {seller_name}: сохранено {len(kiz_set)} КИЗов в {txt_path.name}")
 
         ctx.log("\n=== ВЫГРУЗКА ЗАВЕРШЕНА ===")
 
@@ -423,6 +450,10 @@ class GenerateSalesService:
 class FinalizePricesService:
     """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""
 
+    def __init__(self, kiz_validator):
+        self.kiz_validator = kiz_validator
+
+
     def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
         if saved_prices is None:
             saved_prices = {}
@@ -430,7 +461,8 @@ class FinalizePricesService:
         ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback)
         ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
-
+        self.kiz_validator.set_log_path(ctx.work_folder)
+        self.kiz_validator.load()
         for seller in sellers:
             # ---- 1. Загрузка цен из отчёта МП ----
             price_map = {}
@@ -547,4 +579,8 @@ class FinalizePricesService:
                     wb.close()
 
         ctx.log("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
+        ctx.log("\n=== ЗАПУСК ОЧИСТКИ СТАРЫХ ЗАПИСЕЙ КИЗ ===")
+        deleted = self.kiz_validator.clean_old_entries(months=1)
+        ctx.log(f"Очистка завершена: удалено {deleted} записей.")
+
         return saved_prices

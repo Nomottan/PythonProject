@@ -322,7 +322,7 @@ class ChzMPWindow(QMainWindow):
         self.status_display.clear()
         self.status_display.append("Выгрузка КИЗов для обработки...")
 
-        service = ExportKizService()
+        service = ExportKizService(self.parent().kiz_validator)
 
         def on_finished():
             self.status_display.append("Выгрузка завершена.")
@@ -431,7 +431,7 @@ class ChzMPWindow(QMainWindow):
         self.status_display.clear()
         self.status_display.append("Внесение цен и финализация...")
 
-        service = FinalizePricesService()
+        service = FinalizePricesService(self.parent().kiz_validator)
 
         def on_finished():
             self.status_display.append("Цены установлены, файлы финализированы.")

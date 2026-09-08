@@ -14,6 +14,8 @@ from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
+from utils.kiz_storage import KizStorage
+from services.kiz_validator import KizValidator
 
 class MainWindow(QMainWindow):
     # ============================================================
@@ -39,6 +41,10 @@ class MainWindow(QMainWindow):
         self.brands_window = None
         self.returns_window = None
         self.compare_window = None
+        path_manager = PathManager()
+        kiz_storage = KizStorage(path_manager)
+        kiz_validator = KizValidator(kiz_storage)
+        self.kiz_validator = kiz_validator
 
         # ---- Таймер для обновления кнопки даты/времени ----
         self.timer = QTimer()

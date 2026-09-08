@@ -4,6 +4,7 @@ from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
 import json
+import re
 
 class ReturnsPreparationService:
     """Сервис подготовки: фильтрует исходный файл возвратов и создаёт рабочий файл."""
@@ -135,7 +136,10 @@ class ReturnsPreparationService:
 
 
 class KizExportService:
-    """Сервис выгрузки КИЗов для возврата."""
+    """Сервис выгрузки КИЗов для возврата с валидацией и очисткой."""
+
+    def __init__(self, kiz_validator):
+        self.kiz_validator = kiz_validator
 
     def export(self, target_dir, log_callback=None):
         ctx = TaskContext(target_dir, "Возвраты_{date}", "log_выгрузка_КИЗов.txt", log_callback)
@@ -144,7 +148,54 @@ class KizExportService:
         if source_file is None:
             return
 
-        ctx.log(f"=== Выгрузка КИЗов для возврата начата {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
+        ctx.log(f"=== Выгрузка КИЗов для возврата (с валидацией и очисткой) ===")
+
+        # Настройка валидатора
+        self.kiz_validator.set_log_path(ctx.work_folder)
+        self.kiz_validator.load()
+
+        # Вспомогательная функция очистки КИЗа (использует TextUtils)
+        def clean_kiz(raw: str) -> list[str]:
+            """Возвращает список очищенных КИЗов (может быть несколько из-за слипания)."""
+            if not raw:
+                return []
+            raw = str(raw).strip()
+            if len(raw) <= 31:
+                return []
+
+            # 1. Базовая очистка от управляющих символов
+            cleaned = TextUtils.clean_invalid_excel_chars(raw)
+
+            # 2. Разделение слипшихся строк (если длина > 100)
+            fragments = []
+            if len(cleaned) > 100:
+                pattern = re.compile(r'01\d{14}')
+                match = pattern.search(cleaned, pos=80)
+                if match:
+                    split_pos = match.start()
+                    if split_pos > 0 and len(cleaned) - split_pos >= 31:
+                        fragments.append(cleaned[:split_pos])
+                        fragments.append(cleaned[split_pos:])
+                if not fragments:
+                    fragments.append(cleaned)
+            else:
+                fragments.append(cleaned)
+
+            # 3. Обработка каждого фрагмента: проверка на "01", транслитерация
+            result = []
+            for frag in fragments:
+                if not frag.startswith("01"):
+                    pos_01 = frag.find("01")
+                    if pos_01 != -1 and len(frag) - pos_01 >= 31:
+                        frag = frag[pos_01:]
+                    else:
+                        continue
+                if len(frag) <= 31:
+                    continue
+                if TextUtils.is_cyrillic(frag):
+                    frag = TextUtils.keyboard_translit(frag)
+                result.append(frag)
+            return result
 
         wb = ExcelHelper.open_workbook_with_ctx(
             source_file, ctx, description="файл возвратов",
@@ -155,45 +206,52 @@ class KizExportService:
 
         try:
             sheet = wb.active
-            counters = {}
+            counters = {}  # {safe_company: count}
+
             for row in sheet.iter_rows(min_row=2, values_only=True):
                 if len(row) < 6:
                     continue
-                kiz = row[0]
-                status = row[1]
-                company = row[5]
+                raw_kiz = row[0]       # столбец A
+                status = row[1]        # столбец B
+                company = row[5]       # столбец F
 
                 if status is None or str(status).strip().upper() != "ВЫБЫЛ":
                     continue
-                if kiz is None or company is None:
-                    continue
-                kiz = str(kiz).strip()
-                company = str(company).strip()
-                if not kiz or not company:
+                if raw_kiz is None or company is None:
                     continue
 
-                safe_company = TextUtils.sanitize_filename(company)
+                # Очистка КИЗа
+                cleaned_list = clean_kiz(raw_kiz)
+                if not cleaned_list:
+                    ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
+                    continue
 
-                txt_path = ctx.work_folder / f"{safe_company}.txt"
-                with open(txt_path, "a", encoding="utf-8") as f:
-                    f.write(kiz + "\n")
+                company_str = str(company).strip()
+                safe_company = TextUtils.sanitize_filename(company_str)
 
-                counters[safe_company] = counters.get(safe_company, 0) + 1
+                for clean_kiz_item in cleaned_list:
+                    if self.kiz_validator.validate_for_return(clean_kiz_item):
+                        txt_path = ctx.work_folder / f"{safe_company}.txt"
+                        with open(txt_path, "a", encoding="utf-8") as f:
+                            f.write(clean_kiz_item + "\n")
+                        counters[safe_company] = counters.get(safe_company, 0) + 1
 
-            with open(ctx.log_path, "a", encoding="utf-8") as log_file:
-                log_file.write("Результаты выгрузки КИЗов для возврата\n")
-                log_file.write("=" * 50 + "\n")
-                if counters:
-                    for comp, cnt in sorted(counters.items(), key=lambda x: x[0].lower()):
-                        log_file.write(f"{comp}: {cnt} КИЗов\n")
-                else:
-                    log_file.write("Не найдено ни одного КИЗа со статусом «ВЫБЫЛ».\n")
+            # Логируем итоги
+            ctx.log("Результаты выгрузки КИЗов для возврата")
+            ctx.log("=" * 50)
+            if counters:
+                for comp, cnt in sorted(counters.items(), key=lambda x: x[0].lower()):
+                    ctx.log(f"{comp}: {cnt} КИЗов")
+            else:
+                ctx.log("Не найдено ни одного КИЗа, прошедшего валидацию (со статусом ВЫБЫЛ).")
 
             ctx.log("Выгрузка завершена.")
+
         except Exception as e:
             ctx.log(f"Ошибка выгрузки КИЗов: {e}")
         finally:
-            wb.close()
+            if wb:
+                wb.close()
 
 
 class KizTransferService:

@@ -1,3 +1,5 @@
+import re
+
 class TextUtils:
     _KEYBOARD_MAP = {
         'а': 'f', 'б': ',', 'в': 'd', 'г': 'u', 'д': 'l', 'е': 't', 'ё': '`',
@@ -102,7 +104,6 @@ class TextUtils:
 
     @staticmethod
     def clean_invalid_excel_chars(text: str) -> str:
-        import re
         """
         Удаляет из строки символы, которые openpyxl не может записать в Excel.
         В основном это управляющие символы (ASCII 0-31), кроме табуляции, перевода строки и возврата каретки.
@@ -113,3 +114,45 @@ class TextUtils:
         # и все символы от 32 до 126 (печатаемые ASCII) и выше (Unicode)
         # Удаляем все управляющие символы, кроме \t, \n, \r
         return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    def clean_kiz(raw: str) -> list[str]:
+        """Очищает КИЗ: удаляет управляющие символы, разделяет слипшиеся, транслитерирует."""
+        if not raw:
+            return []
+        raw = str(raw).strip()
+        if len(raw) <= 31:
+            return []
+
+        # 1. Базовая очистка от управляющих символов (используем существующий метод)
+        cleaned = TextUtils.clean_invalid_excel_chars(raw)
+
+        # 2. Разделение слипшихся строк (если длина > 100)
+        fragments = []
+        if len(cleaned) > 100:
+            pattern = re.compile(r'01\d{14}')
+            match = pattern.search(cleaned, pos=80)
+            if match:
+                split_pos = match.start()
+                if split_pos > 0 and len(cleaned) - split_pos >= 31:
+                    fragments.append(cleaned[:split_pos])
+                    fragments.append(cleaned[split_pos:])
+            if not fragments:
+                fragments.append(cleaned)
+        else:
+            fragments.append(cleaned)
+
+        # 3. Обработка каждого фрагмента: проверка на "01", транслитерация
+        result = []
+        for frag in fragments:
+            if not frag.startswith("01"):
+                pos_01 = frag.find("01")
+                if pos_01 != -1 and len(frag) - pos_01 >= 31:
+                    frag = frag[pos_01:]
+                else:
+                    continue
+            if len(frag) <= 31:
+                continue
+            if TextUtils.is_cyrillic(frag):
+                frag = TextUtils.keyboard_translit(frag)
+            result.append(frag)
+        return result

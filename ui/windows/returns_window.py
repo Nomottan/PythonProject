@@ -175,7 +175,7 @@ class ReturnsWindow(QMainWindow):
             return
 
         self.status_label.setText("Выгрузка КИЗов...")
-        service = KizExportService()
+        service = KizExportService(self.parent().kiz_validator)
 
         ThreadFactory.create_thread(
             parent=self,
