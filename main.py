@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(600, 650)
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #795a7d;
+                background-color: #28323c;
                 border-radius: 15px;
             }
         """)
@@ -55,11 +55,11 @@ class MainWindow(QMainWindow):
         # 2. ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ
         # ============================================================
         _main_button_configs = [
-            ("btn_sellers", "Продавцы", (80, 60, 80), "8px 16px", None),
-            ("btn_brands", "Бренды", (80, 60, 80), "8px 16px", None),
-            ("btn_chz_mp", "Подготовка к списанию кодов по отчётам", (61, 20, 30, 0.6), "8px 16px", None),
-            ("btn_returns", "Подготовка к возврату в оборот", (61, 20, 30, 0.6), "8px 16px", None),
-            ("btn_compare", "Сравнение поставок", (100, 130, 160, 0.8), "8px 16px", None),
+            ("btn_sellers", "Продавцы", (80, 100, 130), "8px 16px", None),
+            ("btn_brands", "Бренды", (80, 100, 130), "8px 16px", None),
+            ("btn_chz_mp", "Подготовка к списанию кодов по отчётам", (70, 90, 100, 0.8), "8px 16px", None),
+            ("btn_returns", "Подготовка к возврату в оборот", (70, 90, 100, 0.8), "8px 16px", None),
+            ("btn_compare", "Сравнение поставок", (100, 90, 70, 0.8), "8px 16px", None),
         ]
 
         _main_handlers = {

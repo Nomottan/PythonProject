@@ -25,15 +25,15 @@ class BrandsWindow(QMainWindow):
             window=self,
             parent=parent,
             title="Бренды",
-            bg_color=(70, 60, 90, 0.9),
+            bg_color=(30, 30, 30, 0.9),
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
-            modal=False,
+            modal=True,
             center=True,
             on_close=self.save_and_close,
             return_content_layout=True,
-            default_width=600,
+            default_width=580,
             default_height=500
         )
 
@@ -69,7 +69,7 @@ class BrandsWindow(QMainWindow):
             container_layout.setContentsMargins(0, 0, 0, 0)
 
             btn = ButtonFactory.create_button(
-                self, brand.name, (100, 80, 130, 0.8),
+                self, brand.name, (30, 50, 80, 0.8),
                 fixed_size=(130, 30),
                 alignment='left'
             )

@@ -16,12 +16,12 @@ class ReturnsWindow(QMainWindow):
 
         main_layout = WindowFactory.setup_child_window(
             self, "Подготовка возвратов в оборот",
-            bg_color=(50, 70, 80, 0.9)
+            bg_color=(70, 60, 70, 0.95)
         )
 
         # ---------- ЭЛЕМЕНТЫ ----------
         self.btn_choose_file = ButtonFactory.create_button(
-            self, "Выбрать файл", (100, 120, 100, 0.8)
+            self, "Выбрать файл", (120, 90, 120, 0.8)
         )
         self.btn_choose_file.clicked.connect(self.select_source_file)
 
@@ -32,7 +32,7 @@ class ReturnsWindow(QMainWindow):
                 "Прогони коды через BestMark и сделай импорт в Excell\n"
                 "С этим файлом всё работать будет\n"
                 "Прежде чем продавать в ЭДО верни КИЗы в оборот",
-            bg_color=(35, 50, 60, 0.9),
+            bg_color=(35, 50, 60, 0),
             text_color="#e0e0e0",
             padding="6px",
             border_radius=5,
@@ -61,7 +61,7 @@ class ReturnsWindow(QMainWindow):
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
         self.btn_prepare = ButtonFactory.create_button(
-            self, "Подготовка", (26, 72, 118),
+            self, "Подготовка", (100, 50, 100),
             padding="6px 12px", fixed_size=(180, 35)
         )
         self.btn_prepare.clicked.connect(self.on_prepare)
@@ -71,13 +71,13 @@ class ReturnsWindow(QMainWindow):
         )
 
         self.btn_export_kiz = ButtonFactory.create_button(
-            self, "Выгрузить КИЗы для возврата", (53, 34, 28),
+            self, "Выгрузить КИЗы для возврата", (130, 50, 100),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_export_kiz.clicked.connect(self.on_export_kiz)
 
         self.btn_prepare_transfer = ButtonFactory.create_button(
-            self, "Подготовить КИЗы для передачи", (83, 54, 58),
+            self, "Подготовить КИЗы для передачи", (100, 50, 70),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_prepare_transfer.clicked.connect(self.on_prepare_transfer)

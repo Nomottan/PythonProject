@@ -29,7 +29,7 @@ class ChzMPWindow(QMainWindow):
         # Настройка окна через фабрику
         main_layout = WindowFactory.setup_child_window(
             self, "Списание проданных КИЗов",
-            bg_color=(64, 48, 66, 0.95)
+            bg_color=(50, 60, 90, 0.95)
         )
 
         # ============================================================
@@ -46,7 +46,7 @@ class ChzMPWindow(QMainWindow):
         # Списки файлов
         self.list_fbs = ListWidgetFactory.create_list_widget(
             self,
-            fixed_width=110,
+            fixed_width=105,
             horizontal_scroll=False,
             bg_color=(30, 20, 35, 0.3),
             text_color="#d4d4d4",
@@ -54,7 +54,7 @@ class ChzMPWindow(QMainWindow):
         )
         self.list_reports = ListWidgetFactory.create_list_widget(
             self,
-            fixed_width=110,
+            fixed_width=105,
             horizontal_scroll=False,
             bg_color=(30, 20, 35, 0.3),
             text_color="#d4d4d4",
@@ -65,10 +65,11 @@ class ChzMPWindow(QMainWindow):
         self.desc_label = LabelFactory.create_label(
             self,
             text="Подготовка отчётов по продавцам для вывода КИЗов из оборота\n"
-                 "Шаг 1: загрузи файлы и отчёты\n"
-                 "Шаг 2: Нажми Подготовка. Файлы будут скопированы в рабочую директорию \n"
-                 "Шаг 3: Нажми Выгрузка для обработки. Будут созданы текстовые файлы\n"
+                 "Загрузи файлы и отчёты выше\n"
+                 "Шаг 1: Нажми Подготовка. Файлы будут скопированы в рабочую директорию, оригиналы будут нетронуты\n"
+                 "Шаг 2: Нажми Выгрузка для обработки. Будут созданы текстовые файлы\n"
                  "Проведи все файлы через BestMark в Excell файлы сохранив названия\n"
+                 "Шаг 3: Нажми Сбор данных. Файлы будут очищены от некорректных статусов и владельцев\n"
                  "Шаг 4: Нажми Продажи. Будут собраны файлы для продаж продавцам не их КИЗов\n"
                  "Проведи продажи через ЭДО\n"
                  "Шаг 5: Нажми установка Цен. \n"
@@ -109,11 +110,11 @@ class ChzMPWindow(QMainWindow):
 
         # ---- КНОПКИ ДЕЙСТВИЙ (НОВЫЙ ПРОЦЕСС) ----
         _action_configs = [
-            ("btn_prepare",          "Подготовка",             (10, 40, 160),  "8px 16px", (180, 35)),
-            ("btn_export_kiz",       "Выгрузка для обработки", (40, 130, 130),  "8px 16px", (180, 35)),
-            ("btn_filter_prefinal",  "Сбор данных",            (70, 160, 100), "8px 16px", (180, 35)),
-            ("btn_generate_sales",   "Продажи",                (100, 160, 70),   "8px 16px", (180, 35)),
-            ("btn_finalize_prices",  "Установка цен",          (130, 130, 40),  "8px 16px", (180, 35)),
+            ("btn_prepare",          "Подготовка",             (80, 90, 120),  "8px 16px", (180, 35)),
+            ("btn_export_kiz",       "Выгрузка для обработки", (70, 100, 120),  "8px 16px", (180, 35)),
+            ("btn_filter_prefinal",  "Сбор данных",            (60, 110, 120), "8px 16px", (180, 35)),
+            ("btn_generate_sales",   "Продажи",                (50, 120, 120),   "8px 16px", (180, 35)),
+            ("btn_finalize_prices",  "Установка цен",          (40, 130, 120),  "8px 16px", (180, 35)),
             ("btn_prices",           "Цены",                   (40, 40, 40),  "2px 2px", (35, 20)),
         ]
         _action_handlers = {

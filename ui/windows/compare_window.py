@@ -41,7 +41,7 @@ class CompareWindow(QMainWindow):
         # Настройка окна через WindowFactory
         main_layout = WindowFactory.setup_child_window(
             self, "Сравнение поставок",
-            bg_color=(80, 70, 90, 0.95)
+            bg_color=(50, 80, 70, 0.95)
         )
 
         # ============================================================
@@ -120,14 +120,14 @@ class CompareWindow(QMainWindow):
 
         # Кнопки действий
         self.btn_prepare = ButtonFactory.create_button(
-            self, "Подготовить для работы", (70, 120, 160, 0.8),
+            self, "Подготовить для работы", (30, 50, 100, 0.8),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_prepare.clicked.connect(self.on_prepare)
         left_layout.addWidget(self.btn_prepare)
 
         self.btn_stage1 = ButtonFactory.create_button(
-            self, "Этап 1 (жёсткая сверка)", (70, 140, 200, 0.8),
+            self, "Этап 1 (жёсткая сверка)", (30, 80, 100, 0.8),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_stage1.clicked.connect(self.on_stage1)
@@ -135,7 +135,7 @@ class CompareWindow(QMainWindow):
         left_layout.addWidget(self.btn_stage1)
 
         self.btn_stage2 = ButtonFactory.create_button(
-            self, "Этап 2 (мягкая сверка)", (140, 140, 70, 0.8),
+            self, "Этап 2 (мягкая сверка)", (30, 110, 100, 0.8),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_stage2.clicked.connect(self.on_stage2)
@@ -143,7 +143,7 @@ class CompareWindow(QMainWindow):
         left_layout.addWidget(self.btn_stage2)
 
         self.btn_stage3 = ButtonFactory.create_button(
-            self, "Этап 3 (ручной выбор)", (200, 140, 70, 0.8),
+            self, "Этап 3 (ручной выбор)", (30, 120, 100, 0.8),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_stage3.clicked.connect(self.on_stage3)
@@ -151,7 +151,7 @@ class CompareWindow(QMainWindow):
         left_layout.addWidget(self.btn_stage3)
 
         self.btn_report = ButtonFactory.create_button(
-            self, "Сформировать отчёт", (70, 160, 200, 0.8),
+            self, "Сформировать отчёт", (90, 110, 160, 0.8),
             padding="8px 16px", fixed_size=(220, 35)
         )
         self.btn_report.clicked.connect(self.on_generate_report)
@@ -662,7 +662,7 @@ class Stage1ReviewDialog(QDialog):
             window=self,
             parent=parent,
             title="Подтверждение жёстких совпадений (этап 1)",
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=(40, 50, 60, 0.95),
             close_button=False,
             modal=True,
             center=True,

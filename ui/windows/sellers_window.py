@@ -21,7 +21,7 @@ class SellersWindow(QMainWindow):
             window=self,
             parent=parent,
             title="Список продавцов",
-            bg_color=(84, 54, 113, 0.9),
+            bg_color=(10, 40, 50, 0.9),
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
@@ -29,7 +29,7 @@ class SellersWindow(QMainWindow):
             center=True,
             on_close=self.save_and_close,
             return_content_layout=True,
-            default_width=600,
+            default_width=580,
             default_height=450
         )
 
@@ -61,28 +61,34 @@ class SellersWindow(QMainWindow):
         layout.addWidget(del_btn)
 
         name_btn = ButtonFactory.create_button(
-            self, seller.name, (100, 80, 130, 0.8)
+            self, seller.name, (30, 50, 90, 0.8),
+            fixed_size=(140, 30)
         )
         name_btn.clicked.connect(lambda checked, b=name_btn, s=seller: self._rename_seller(b, s))
         layout.addWidget(name_btn)
 
+        company_btn = ButtonFactory.create_button(
+            self, "Компания", (80, 100, 120, 0.7),
+            fixed_size=(90, 30)
+        )
+        company_btn.clicked.connect(lambda: self._edit_company(seller))
+        layout.addWidget(company_btn)
+
         brands_btn = ButtonFactory.create_button(
-            self, "Бренды", (80, 100, 120, 0.7)
+            self, "Бренды", (80, 100, 120, 0.7),
+            fixed_size=(90, 30)
         )
         brands_btn.clicked.connect(lambda: self._edit_brands(seller))
         layout.addWidget(brands_btn)
 
         keys_btn = ButtonFactory.create_button(
-            self, "Ключи", (80, 100, 120, 0.7)
+            self, "Ключи", (40, 60, 70, 0.7),
+            fixed_size=(30, 30), padding="8px 1px", font_size="8"
         )
         keys_btn.clicked.connect(lambda: self._edit_keys(seller))
         layout.addWidget(keys_btn)
 
-        company_btn = ButtonFactory.create_button(
-            self, "Компания", (80, 100, 120, 0.7)
-        )
-        company_btn.clicked.connect(lambda: self._edit_company(seller))
-        layout.addWidget(company_btn)
+
 
         self.sellers_layout.addWidget(row)
 
