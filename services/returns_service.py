@@ -4,6 +4,7 @@ from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
 from utils.kiz_utils import KizUtils
+from utils.sales_file_generator import SalesFileGenerator
 import json
 import re
 
@@ -177,19 +178,23 @@ class KizExportService:
                 if raw_kiz is None or company is None:
                     continue
 
-                cleaned_list = KizUtils.clean_kiz(raw_kiz)
-                if not cleaned_list:
+                full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                if not full_cleaned_list:
                     ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
                     continue
 
                 company_str = str(company).strip()
                 safe_company = TextUtils.sanitize_filename(company_str)
 
-                for clean_kiz_item in cleaned_list:
-                    if self.kiz_validator.validate_for_return(clean_kiz_item):
+                for full_kiz in full_cleaned_list:
+                    storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                    if not storage_list:
+                        continue
+                    storage_kiz = storage_list[0]
+                    if self.kiz_validator.validate_for_return(storage_kiz):
                         txt_path = ctx.work_folder / f"{safe_company}.txt"
                         with open(txt_path, "a", encoding="utf-8") as f:
-                            f.write(clean_kiz_item + "\n")
+                            f.write(full_kiz + "\n")
                         counters[safe_company] = counters.get(safe_company, 0) + 1
 
             # Итоги
@@ -241,93 +246,76 @@ class KizTransferService:
 
         try:
             sheet_src = wb_src.active
-            self._write_transfer_result(ctx, sheet_src, company_to_seller, key_to_seller)
+            # Создаём генератор файлов продаж
+            sales_gen = SalesFileGenerator(ctx.work_folder)
+
+            for row_idx, row in enumerate(sheet_src.iter_rows(min_row=2, values_only=True), start=2):
+                if len(row) < 6:
+                    continue
+                kiz = row[0]                # столбец A
+                product_name = row[2]       # столбец C – данные/название товара
+                brand = row[3]              # столбец D – бренд
+                owner_company = row[5]      # столбец F – компания-владелец КИЗа
+
+                if not owner_company or not brand:
+                    continue
+
+                brand_key = TextUtils.normalize(brand)
+                seller_brand = key_to_seller.get(brand_key)  # продавец, которому принадлежит бренд
+                if seller_brand is None:
+                    ctx.log(f"Строка {row_idx}: ключ бренда '{brand}' не найден – пропущена")
+                    continue
+
+                # Ищем продавца-владельца КИЗа по company
+                owner_seller = TextUtils.find_seller_by_company(owner_company, list(company_to_seller.values()))
+                if owner_seller is None:
+                    ctx.log(f"Строка {row_idx}: владелец '{owner_company}' не найден – пропущена")
+                    continue
+
+                # Если владелец КИЗа уже является владельцем бренда – пропускаем
+                if owner_seller == seller_brand:
+                    continue
+
+                # Проверяем, есть ли уже этот бренд у владельца КИЗа
+                has_brand = any(TextUtils.normalize(key) == brand_key
+                                for brand_obj in owner_seller.brands
+                                for key in brand_obj.keys)
+                if has_brand:
+                    ctx.log(f"Строка {row_idx}: бренд '{brand}' уже есть у {owner_seller.name} – пропущена")
+                    continue
+
+                # Добавляем строку через генератор
+                sales_gen.add_sale_row(
+                    from_seller_name=seller_brand.name,
+                    to_seller_name=owner_seller.name,
+                    kiz=kiz if kiz is not None else "",
+                    owner_company=owner_company,
+                    to_seller_inn=owner_seller.inn,
+                    brand=brand,
+                    product_name=product_name if product_name is not None else ""
+                )
+
+            # Удаляем пустые файлы
+            ctx.log("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
+            removed = sales_gen.remove_empty_files()
+            for file_path in sales_gen.get_created_files():
+                ctx.log(f"  Файл сохранён: {file_path.name}")
+
+            if removed:
+                ctx.log(f"  Удалено пустых файлов: {removed}")
+
+            # Логируем статистику
+            ctx.log("\n--- СТАТИСТИКА ПРОДАЖ ---")
+            stats = sales_gen.get_stats()
+            if stats:
+                for (from_seller, to_seller), count in sorted(stats.items()):
+                    ctx.log(f"  {from_seller} → {to_seller}: {count} КИЗов")
+            else:
+                ctx.log("  Нет строк для передачи между продавцами")
+
             ctx.log("Подготовка передач завершена.\n")
+
         except Exception as e:
             ctx.log(f"Ошибка подготовки передач КИЗов: {e}")
         finally:
             wb_src.close()
-
-    def _write_transfer_result(self, ctx, sheet_src, company_to_seller, key_to_seller):
-        """Формирует файлы продаж для каждой пары продавцов (унифицированный формат)."""
-        sales_stats = {}  # {(владелец_бренда, владелец_КИЗа): количество}
-        sales_files_created = []  # список путей к созданным файлам
-        headers = ["КИЗ", "Владелец", "на кого продать", "ИНН того на кого продать", "бренд", "название товара"]
-
-        for row_idx, row in enumerate(sheet_src.iter_rows(min_row=2, values_only=True), start=2):
-            if len(row) < 6:
-                continue
-            kiz = row[0]                # столбец A
-            product_name = row[2]       # столбец C – данные/название товара
-            brand = row[3]              # столбец D – бренд
-            owner_company = row[5]      # столбец F – компания-владелец КИЗа
-
-            if not owner_company or not brand:
-                continue
-
-            brand_key = TextUtils.normalize(brand)
-            seller_brand = key_to_seller.get(brand_key)  # продавец, которому принадлежит бренд
-            if seller_brand is None:
-                ctx.log(f"Строка {row_idx}: ключ бренда '{brand}' не найден – пропущена")
-                continue
-
-            # Ищем продавца-владельца КИЗа по company
-            owner_seller = TextUtils.find_seller_by_company(owner_company, list(company_to_seller.values()))
-            if owner_seller is None:
-                ctx.log(f"Строка {row_idx}: владелец '{owner_company}' не найден – пропущена")
-                continue
-
-            # Если владелец КИЗа уже является владельцем бренда – пропускаем
-            if owner_seller == seller_brand:
-                continue
-
-            # Проверяем, есть ли уже этот бренд у владельца КИЗа
-            has_brand = any(TextUtils.normalize(key) == brand_key
-                            for brand_obj in owner_seller.brands
-                            for key in brand_obj.keys)
-            if has_brand:
-                ctx.log(f"Строка {row_idx}: бренд '{brand}' уже есть у {owner_seller.name} – пропущена")
-                continue
-
-            # Формируем файл продаж
-            safe_from = TextUtils.sanitize_filename(seller_brand.name)
-            safe_to = TextUtils.sanitize_filename(owner_seller.name)
-            sales_file_name = f"продажа {safe_to} - {safe_from}.xlsx"
-            sales_file_path = ctx.work_folder / sales_file_name
-
-            row_data = [
-                kiz if kiz is not None else "",
-                str(owner_company).strip(),
-                seller_brand.name,
-                seller_brand.inn,
-                str(brand).strip(),
-                str(product_name).strip() if product_name is not None else ""
-            ]
-
-            ExcelHelper.append_row_to_file(sales_file_path, row_data, headers=headers)
-
-            if sales_file_path not in sales_files_created:
-                sales_files_created.append(sales_file_path)
-
-            key = (seller_brand.name, owner_seller.name)
-            sales_stats[key] = sales_stats.get(key, 0) + 1
-
-        # Удаляем пустые файлы
-        ctx.log("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
-        for sales_file in sales_files_created:
-            if ExcelHelper.is_file_empty(sales_file):
-                try:
-                    sales_file.unlink()
-                    ctx.log(f"  Удалён пустой файл: {sales_file.name}")
-                except Exception as e:
-                    ctx.log(f"  Ошибка удаления {sales_file.name}: {e}")
-            else:
-                ctx.log(f"  Файл сохранён: {sales_file.name}")
-
-        # Логируем статистику
-        ctx.log("\n--- СТАТИСТИКА ПРОДАЖ ---")
-        if sales_stats:
-            for (from_seller, to_seller), count in sorted(sales_stats.items()):
-                ctx.log(f"  {from_seller} → {to_seller}: {count} КИЗов")
-        else:
-            ctx.log("  Нет строк для передачи между продавцами")

@@ -7,6 +7,7 @@ from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
 from utils.path_manager import PathManager
 from utils.kiz_utils import KizUtils
+from utils.sales_file_generator import SalesFileGenerator
 import re
 
 
@@ -111,13 +112,17 @@ class ExportKizService:
                     sheet = wb[sheet_name]
                     raw_kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=2)
                     for raw_kiz in raw_kiz_list:
-                        cleaned_list = KizUtils.clean_kiz(raw_kiz)
-                        if not cleaned_list:
+                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                        if not full_cleaned_list:
                             ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
                             continue
-                        for clean_kiz_val in cleaned_list:
-                            if self.kiz_validator.validate_for_sale(clean_kiz_val):
-                                kiz_by_seller[seller.name].add(clean_kiz_val)
+                        for full_kiz in full_cleaned_list:
+                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                            if not storage_list:
+                                continue
+                            storage_kiz = storage_list[0]  # обычно один
+                            if self.kiz_validator.validate_for_sale(storage_kiz):
+                                kiz_by_seller[seller.name].add(full_kiz)   # сохраняем полный для txt
                     ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': обработано {len(raw_kiz_list)} записей")
             finally:
                 if wb:
@@ -134,6 +139,7 @@ class ExportKizService:
             for seller in sellers:
                 if any(key.lower() in mp_path.stem.lower() for key in seller.keys):
                     found_seller = seller
+                    ctx.log(f"  Удалось определить продавца из имени файла {mp_path} - {found_seller}")
                     break
             if found_seller is None:
                 ctx.log(f"  Не удалось определить продавца из имени файла – пропущен")
@@ -152,11 +158,14 @@ class ExportKizService:
                 sheet_kiz = wb["КИЗ"]
                 kiz_to_task = {}
                 for row in sheet_kiz.iter_rows(min_row=2, values_only=True):
-                    if len(row) >= 3:
-                        task_num = row[0]
-                        kiz = row[2]
-                        if kiz and task_num:
+                    if len(row) >= 9:  # как минимум до столбца I
+                        task_num = row[0]  # столбец A
+                        kiz = row[2]  # столбец C
+                        operation_type = row[8]  # столбец I (тип операции)
+                        if kiz and task_num and operation_type and str(operation_type).strip().upper() == "ПРОДАЖА":
                             kiz_to_task[str(kiz).strip()] = str(task_num).strip()
+                        else:
+                            ctx.log(f"  Пропущен КИЗ {kiz} (задание {task_num}) – тип операции '{operation_type}'")
 
                 if "Сборочные задания" not in wb.sheetnames:
                     ctx.log(f"  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
@@ -172,19 +181,23 @@ class ExportKizService:
                                 task_to_date[str(task_num).strip()] = str(date_created).strip()
 
                 for raw_kiz, task_num in kiz_to_task.items():
-                    cleaned_list = KizUtils.clean_kiz(raw_kiz)
-                    if not cleaned_list:
+                    full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                    if not full_cleaned_list:
                         ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
                         continue
-                    for clean_kiz_val in cleaned_list:
+                    for full_kiz in full_cleaned_list:
+                        storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                        if not storage_list:
+                            continue
+                        storage_kiz = storage_list[0]
                         sale_date_str = task_to_date.get(task_num)
                         if sale_date_str is None:
-                            ctx.log(f"  ⚠️ Для КИЗа {clean_kiz_val} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
-                            if self.kiz_validator.validate_for_sale(clean_kiz_val):
-                                kiz_by_seller[seller.name].add(clean_kiz_val)
+                            ctx.log(f"  ⚠️ Для КИЗа {storage_kiz} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
+                            if self.kiz_validator.validate_for_sale(storage_kiz):
+                                kiz_by_seller[seller.name].add(full_kiz)
                         else:
-                            if self.kiz_validator.validate_for_sale(clean_kiz_val, sale_date_str):
-                                kiz_by_seller[seller.name].add(clean_kiz_val)
+                            if self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str):
+                                kiz_by_seller[seller.name].add(full_kiz)
 
                 ctx.log(f"  Добавлено {len(kiz_to_task)} записей для продавца '{seller.name}'")
             finally:
@@ -192,7 +205,7 @@ class ExportKizService:
                     wb.close()
 
         # ------------------------------------------------------------
-        # 3. Сохранение текстовых файлов
+        # 3. Сохранение текстовых файлов (полные КИЗы)
         # ------------------------------------------------------------
         ctx.log("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
         for seller_name, kiz_set in kiz_by_seller.items():
@@ -289,8 +302,8 @@ class GenerateSalesService:
         ctx.log("=== ФОРМИРОВАНИЕ ФАЙЛОВ ПРОДАЖ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-        sales_stats = {}  # {(владелец_name, текущий_продавец_name): количество}
-        sales_files_created = []  # список путей к созданным файлам продаж
+        # Создаём генератор файлов продаж
+        sales_gen = SalesFileGenerator(ctx.work_folder)
 
         for seller in sellers:
             file_path = ctx.work_folder / f"{seller.name}.xlsx"
@@ -324,7 +337,6 @@ class GenerateSalesService:
                     # Находим продавца по company (владельцу)
                     owner_seller = TextUtils.find_seller_by_company(owner_company, sellers)
                     if owner_seller is None:
-                        # По условию шага 2 этого не должно происходить, но на всякий случай логируем
                         ctx.log(f"  ⚠️ Строка {row_idx}: владелец '{owner_company}' не найден среди продавцов – пропущена")
                         continue
 
@@ -332,68 +344,39 @@ class GenerateSalesService:
                     if owner_seller.name == seller.name:
                         continue
 
-                    # Формируем файл продаж
-                    safe_from = TextUtils.sanitize_filename(owner_seller.name)
-                    safe_to = TextUtils.sanitize_filename(seller.name)
-                    sales_file_name = f"продажа {safe_from} - {safe_to}.xlsx"
-                    sales_file_path = ctx.work_folder / sales_file_name
-
-                    row_data = {
-                        "КИЗ": kiz,
-                        "Владелец": owner_company,
-                        "на кого продать": seller.name,
-                        "ИНН того на кого продать": seller.inn,
-                        "бренд": brand,
-                        "название товара": product_name
-                    }
-
-                    ExcelHelper.append_row_to_file(
-                        sales_file_path,
-                        [
-                            row_data["КИЗ"],
-                            row_data["Владелец"],
-                            row_data["на кого продать"],
-                            row_data["ИНН того на кого продать"],
-                            row_data["бренд"],
-                            row_data["название товара"]
-                        ],
-                        headers=["КИЗ", "Владелец", "на кого продать", "ИНН того на кого продать", "бренд",
-                                 "название товара"]
+                    # Добавляем строку через генератор
+                    sales_gen.add_sale_row(
+                        from_seller_name=owner_seller.name,
+                        to_seller_name=seller.name,
+                        kiz=kiz,
+                        owner_company=owner_company,
+                        to_seller_inn=seller.inn,
+                        brand=brand,
+                        product_name=product_name
                     )
-
-                    # Запоминаем созданные файлы (только один раз, чтобы не дублировать в списке)
-                    if sales_file_path not in sales_files_created:
-                        sales_files_created.append(sales_file_path)
-
-                    key = (owner_seller.name, seller.name)
-                    sales_stats[key] = sales_stats.get(key, 0) + 1
 
             finally:
                 wb.close()
 
         # ---- УДАЛЕНИЕ ПУСТЫХ ФАЙЛОВ ПРОДАЖ ----
         ctx.log("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
-        for sales_file in sales_files_created:
-            if ExcelHelper.is_file_empty(sales_file):
-                try:
-                    sales_file.unlink()
-                    ctx.log(f"  Удалён пустой файл: {sales_file.name}")
-                except Exception as e:
-                    ctx.log(f"  Ошибка удаления {sales_file.name}: {e}")
-            else:
-                ctx.log(f"  Файл сохранён: {sales_file.name}")
+        removed = sales_gen.remove_empty_files()
+        for file_path in sales_gen.get_created_files():
+            ctx.log(f"  Файл сохранён: {file_path.name}")
+
+        if removed:
+            ctx.log(f"  Удалено пустых файлов: {removed}")
 
         # Логируем статистику
         ctx.log("\n--- СТАТИСТИКА ПРОДАЖ ---")
-        if sales_stats:
-            for (from_seller, to_seller), count in sorted(sales_stats.items()):
+        stats = sales_gen.get_stats()
+        if stats:
+            for (from_seller, to_seller), count in sorted(stats.items()):
                 ctx.log(f"  {from_seller} → {to_seller}: {count} КИЗов")
         else:
             ctx.log("  Нет строк для передачи между продавцами")
 
         ctx.log("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
-
-    # ---------- Приватные методы ----------
 
 
 class FinalizePricesService:
