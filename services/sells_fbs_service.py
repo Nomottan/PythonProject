@@ -327,6 +327,7 @@ class GenerateSalesService:
                     product_name = str(row[5]).strip() if row[5] is not None else ""  # столбец F
 
                     if not kiz or not owner_company:
+                        ctx.log(f"  ⚠️ Строка {row_idx}: Нет КИЗа или Владельца")
                         continue
 
                     # Находим продавца по company (владельцу)

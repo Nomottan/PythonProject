@@ -1816,6 +1816,7 @@ class ThreadFactory:
                         error_callback(thread_error)
                 elif on_finished:
                     on_finished()
+                
 
         check()
 

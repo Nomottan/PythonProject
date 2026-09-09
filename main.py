@@ -38,8 +38,7 @@ class MainWindow(QMainWindow):
         self.brands_window = None
         self.returns_window = None
         self.compare_window = None
-        path_manager = PathManager()
-        kiz_storage = KizStorage(path_manager)
+        kiz_storage = KizStorage(self.paths)
         kiz_validator = KizValidator(kiz_storage)
         self.kiz_validator = kiz_validator
 

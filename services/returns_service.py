@@ -253,11 +253,16 @@ class KizTransferService:
                 brand = row[3]              # столбец D – бренд
                 owner_company = row[5]      # столбец F – компания-владелец КИЗа
 
+                if not kiz:
+                    ctx.log(f"Строка {row_idx}: пустой КИЗ – пропущена")
+                    continue
+
                 if not owner_company or not brand:
                     continue
 
                 brand_key = TextUtils.normalize(brand)
                 seller_brand = key_to_seller.get(brand_key)  # продавец, которому принадлежит бренд
+
                 if seller_brand is None:
                     ctx.log(f"Строка {row_idx}: ключ бренда '{brand}' не найден – пропущена")
                     continue
