@@ -1,5 +1,4 @@
-import json, logging, os
-from pathlib import Path
+import json
 from models.models import Seller, Brand
 from utils.path_manager import PathManager
 

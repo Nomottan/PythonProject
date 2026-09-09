@@ -6,14 +6,7 @@ import json
 from utils.text_utils import TextUtils
 from typing import List, Tuple, Optional, Set, Dict, Any
 from utils.excel_helper import ExcelHelper
-
-# Предполагаем, что models.py содержит классы SupplyItem и Candidate.
-# Если нет – можно определить их прямо здесь, но по заданию они в отдельном файле.
-from models.models import SupplyItem, Candidate   # или из .models import ...
-
-# Вспомогательные утилиты (можно использовать существующие ExcelHelper, FileHelper)
-# Но для простоты используем прямо openpyxl и стандартные средства.
-
+from models.models import SupplyItem, Candidate
 
 class DataLoader:
     """Загрузка данных из подготовленных Excel-файлов."""

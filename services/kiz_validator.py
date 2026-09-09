@@ -1,9 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-
 from utils.kiz_storage import KizStorage
-
 
 class KizValidator:
     """

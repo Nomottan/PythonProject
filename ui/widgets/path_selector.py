@@ -1,6 +1,5 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout
-from pathlib import Path
 from ui.factories.factories import ButtonFactory, LabelFactory, FileDialogFactory
 
 class PathSelector(QWidget):

@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QMainWindow, QDialog, QWidget, QHBoxLayout
 from PySide6.QtCore import Qt
 from ui.factories.factories import (
-    LabelFactory, InputWidgetFactory, LayoutFactory,
+    LabelFactory, InputWidgetFactory,
     ListWidgetFactory, ButtonFactory
 )
 from ui.factories.window_factories import ExtendedWindowFactory

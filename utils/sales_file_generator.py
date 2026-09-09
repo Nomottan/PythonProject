@@ -1,14 +1,9 @@
-from pathlib import Path
-from typing import List, Dict, Optional
-from utils.excel_helper import ExcelHelper
-from utils.text_utils import TextUtils
-
-
 import random
 from pathlib import Path
 from typing import List, Dict, Optional
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
+from utils.kiz_utils import KizUtils
 
 
 class SalesFileGenerator:
@@ -36,28 +31,37 @@ class SalesFileGenerator:
                      to_seller_name: str,
                      to_seller_inn: str,
                      product_name: str,
-                     kiz_short: str,
-                     price: Optional[int] = None) -> Path:
+                     raw_kiz: str,
+                     brand: Optional[str] = None,
+                     owner_company: Optional[str] = None) -> Path:
         """
         Добавляет строку продажи в файл.
-        :param from_seller_name: продавец, от которого передаётся КИЗ (для имени файла)
-        :param to_seller_name: продавец, которому передаётся КИЗ (для имени файла)
-        :param to_seller_inn: ИНН принимающего продавца (для имени файла и не используется в данных)
-        :param product_name: наименование продукта
-        :param kiz_short: сокращённый КИЗ (31 символов)
-        :param price: цена (если None, генерируется случайно от 10 до 20)
-        :return: путь к созданному/обновлённому файлу
+        :param from_seller_name: продавец-отправитель (для имени файла)
+        :param to_seller_name: продавец-получатель (для имени файла)
+        :param to_seller_inn: ИНН получателя (для имени файла)
+        :param product_name: наименование продукта (записывается в файл)
+        :param raw_kiz: полный КИЗ (из него будет взят сокращённый и GTIN)
+        :param brand: бренд (не используется в новой структуре, но передаётся для совместимости)
+        :param owner_company: компания-владелец (не используется, передаётся для совместимости)
+        :return: путь к файлу
         """
+        # Получаем сокращённый КИЗ (31 символ)
+        storage_list = KizUtils.clean_kiz_for_storage(raw_kiz)
+        if not storage_list:
+            raise ValueError(f"Не удалось получить сокращённый КИЗ из {raw_kiz[:30]}...")
+        kiz_short = storage_list[0]
+
+        # GTIN – символы с 3 по 16 (индексы 2..15)
+        gtin = kiz_short[2:16] if len(kiz_short) >= 16 else ""
+
+        # Случайная цена от 10 до 20
+        price = random.randint(10, 20)
+
+        # Имя файла
         safe_from = TextUtils.sanitize_filename(from_seller_name)
         safe_to = TextUtils.sanitize_filename(to_seller_name)
         file_name = f"{safe_from} - {safe_to} : {to_seller_inn}.xlsx"
         file_path = self.work_folder / file_name
-
-        if price is None:
-            price = random.randint(10, 20)
-
-        # GTIN – символы с 3 по 16 (индексы 2..15) если длина >= 16
-        gtin = kiz_short[2:16] if len(kiz_short) >= 16 else ""
 
         row_data = [
             product_name,

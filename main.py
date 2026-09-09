@@ -1,6 +1,4 @@
 import sys
-import asyncio
-
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
                                QVBoxLayout, QHBoxLayout)
 from PySide6.QtCore import QTimer, Qt
@@ -9,7 +7,6 @@ from ui.windows import (
     ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
     StringListDialog
 )
-
 from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from utils.datetime_utils import DateTimeUtils

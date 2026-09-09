@@ -3,19 +3,21 @@ import openpyxl
 from pathlib import Path
 from datetime import date
 from utils.context import TaskContext
-from utils.excel_helper import ExcelHelper
-from utils.text_utils import TextUtils
-
 
 class SalesAccumulatorService:
-    """Сервис аккумуляции файлов продаж из двух папок в одну общую."""
+    """
+    Сервис аккумуляции файлов продаж из двух папок в одну общую.
+    Работает с новым форматом файлов продаж:
+      - Имя: "{от_кого} - {кому} : {ИНН}.xlsx" (содержит " - " и " : ")
+      - Столбцы: Наименование продукта, КИЗ (31 символов), GTIN, Цена.
+    Приоритет отдаётся файлам из ЧЗ_МП (Sells_FBS):
+      - если КИЗ присутствует в ЧЗ_МП, то строки из Возвратов с этим КИЗом игнорируются.
+    """
 
     def accumulate(self, target_dir: str, first_folder: str, log_callback=None):
         """
         Аккумулирует файлы продаж из папок ЧЗ_МП и Возвраты в папку Продажи.
-        Приоритет отдаётся файлам из ЧЗ_МП (Sells_FBS):
-          - если КИЗ присутствует в ЧЗ_МП, то строки из Возвратов с этим КИЗом игнорируются.
-        Параметр first_folder игнорируется (всегда сначала ЧЗ_МП).
+        Параметр first_folder игнорируется (всегда сначала ЧЗ_МП, затем Возвраты).
         """
         today = date.today()
         date_str = f"{today.day}_{today.month}_{today.year}"
@@ -47,22 +49,17 @@ class SalesAccumulatorService:
         returns_files = self._find_sales_files(returns_folder)
         ctx.log(f"\n--- ОБРАБОТКА ВОЗВРАТОВ (фильтрация по КИЗам из ЧЗ_МП) ---")
 
-        # Сбор данных для детального лога
         details = {
             "kiz_from_fbs": kiz_from_fbs,
-            "files": []  # список словарей по каждому файлу
+            "files": []
         }
 
         for src_path in returns_files:
             dst_path = sales_folder / src_path.name
-            # Собираем КИЗы из текущего файла возвратов
             src_kiz_set = self._collect_kiz_set(src_path)
-            # Определяем дубликаты (КИЗы, которые уже есть в ЧЗ_МП)
             duplicates_in_file = src_kiz_set & kiz_from_fbs
-            # Фильтруем: оставляем только те КИЗы, которых нет в kiz_from_fbs
             filtered_kiz = src_kiz_set - kiz_from_fbs
 
-            # Сохраняем данные для лога
             file_info = {
                 "name": src_path.name,
                 "total": len(src_kiz_set),
@@ -76,17 +73,18 @@ class SalesAccumulatorService:
                     f"  Пропущен {src_path.name}: все КИЗы уже есть в ЧЗ_МП (всего {len(src_kiz_set)}, дубликатов {len(duplicates_in_file)})")
                 continue
 
-            # Если целевой файл уже существует (из ЧЗ_МП), дополняем его
+            # Дозапись или создание нового файла
             if dst_path.exists():
+                # Дописываем строки в существующий файл
                 wb_dst = openpyxl.load_workbook(dst_path)
                 sheet_dst = wb_dst.active
                 wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
                 sheet_src = wb_src.active
                 rows_added = 0
                 for row in sheet_src.iter_rows(min_row=2, values_only=True):
-                    # КИЗ в первом столбце (индекс 0)
-                    if len(row) >= 1:
-                        kiz = str(row[0]).strip() if row[0] else ""
+                    # КИЗ теперь во втором столбце (индекс 1)
+                    if len(row) >= 2 and row[1]:
+                        kiz = str(row[1]).strip()
                         if kiz in filtered_kiz:
                             sheet_dst.append(row)
                             rows_added += 1
@@ -96,7 +94,7 @@ class SalesAccumulatorService:
                 ctx.log(
                     f"  Дополнен {dst_path.name}: добавлено {rows_added} строк (всего КИЗов {len(src_kiz_set)}, из них добавлено {len(filtered_kiz)})")
             else:
-                # Если файла нет – создаём новый с фильтрацией
+                # Создаём новый файл с заголовками и только отфильтрованными строками
                 wb_dst = openpyxl.Workbook()
                 sheet_dst = wb_dst.active
                 wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
@@ -105,9 +103,8 @@ class SalesAccumulatorService:
                 sheet_dst.append(header)
                 rows_added = 0
                 for row in sheet_src.iter_rows(min_row=2, values_only=True):
-                    # КИЗ в первом столбце (индекс 0)
-                    if len(row) >= 1:
-                        kiz = str(row[0]).strip() if row[0] else ""
+                    if len(row) >= 2 and row[1]:
+                        kiz = str(row[1]).strip()
                         if kiz in filtered_kiz:
                             sheet_dst.append(row)
                             rows_added += 1
@@ -125,20 +122,28 @@ class SalesAccumulatorService:
         ctx.log("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
 
     # ---------- Вспомогательные методы ----------
+
     def _find_sales_files(self, folder: Path) -> list[Path]:
+        """
+        Возвращает все файлы продаж в папке (новый формат).
+        Отличительный признак: имя содержит " - " и " : ".
+        """
         if not folder.exists():
             return []
-        return list(folder.glob("продажа*.xlsx"))
+        return [f for f in folder.glob("*.xlsx") if " - " in f.stem and " : " in f.stem]
 
     def _collect_kiz_set(self, file_path: Path) -> set:
-        """Читает КИЗы из первого столбца (индекс 0) и возвращает множество."""
+        """
+        Читает КИЗы из второго столбца (индекс 1) и возвращает множество.
+        Структура нового файла: [Наименование, КИЗ, GTIN, Цена].
+        """
         try:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
             sheet = wb.active
             kiz_set = set()
             for row in sheet.iter_rows(min_row=2, values_only=True):
-                if len(row) >= 1 and row[0]:  # первый столбец
-                    kiz = str(row[0]).strip()
+                if len(row) >= 2 and row[1]:  # второй столбец
+                    kiz = str(row[1]).strip()
                     if kiz:
                         kiz_set.add(kiz)
             wb.close()

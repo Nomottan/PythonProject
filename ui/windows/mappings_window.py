@@ -8,8 +8,6 @@ from ui.factories.factories import (
     ListWidgetFactory, LayoutFactory
 )
 from ui.factories.window_factories import ExtendedWindowFactory
-from models.models import Brand
-
 
 class BrandMappingsWindow(QDialog):
     """Окно просмотра и редактирования сохранённых сопоставлений (бренды)."""
@@ -148,7 +146,6 @@ class BrandMappingsWindow(QDialog):
     def _save_and_close(self):
         self.service.save_mappings(self.mappings)
         self.accept()
-
 
 class BrandDetailWindow(QDialog):
     def __init__(self, parent, brand_name, brand_data, all_brands, parent_window):

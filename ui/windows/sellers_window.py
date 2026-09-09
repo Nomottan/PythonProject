@@ -5,7 +5,6 @@ from ui.factories.factories import (
     ListWidgetFactory, ButtonFactory
 )
 from ui.factories.window_factories import ExtendedWindowFactory
-from ui.widgets.editable_list_widget import EditableListWidget
 from models.models import Seller, Brand
 
 class SellersWindow(QMainWindow):

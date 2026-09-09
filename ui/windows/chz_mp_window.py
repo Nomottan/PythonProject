@@ -1,3 +1,6 @@
+from pathlib import Path
+from datetime import date
+from openpyxl import load_workbook
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit
 )
@@ -6,15 +9,11 @@ from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
     FileDialogFactory, ThreadFactory, WindowFactory
 )
-
 from ui.widgets.path_selector import PathSelector
 from ui.windows.shared_dialogs import PricesEditWindow
 from services.sells_fbs_service import PreparationService, ExportKizService, FilterPreFinalService, GenerateSalesService, FinalizePricesService
 from services.sales_accumulator import SalesAccumulatorService
 
-from pathlib import Path
-from datetime import date
-from openpyxl import load_workbook
 
 class ChzMPWindow(QMainWindow):
     def __init__(self, parent=None):

@@ -5,11 +5,8 @@ from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
-from utils.path_manager import PathManager
 from utils.kiz_utils import KizUtils
 from utils.sales_file_generator import SalesFileGenerator
-import re
-
 
 class PreparationService:
     """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
@@ -76,7 +73,6 @@ class PreparationService:
             if any(key.lower() in file_name_lower for key in seller.keys):
                 return seller
         return None
-
 
 class ExportKizService:
     """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы с валидацией."""
@@ -220,7 +216,6 @@ class ExportKizService:
 
         ctx.log("\n=== ВЫГРУЗКА ЗАВЕРШЕНА ===")
 
-
 class FilterPreFinalService:
     """Сервис фильтрации предитоговых файлов по статусу и владельцу."""
 
@@ -348,11 +343,11 @@ class GenerateSalesService:
                     sales_gen.add_sale_row(
                         from_seller_name=owner_seller.name,
                         to_seller_name=seller.name,
-                        kiz=kiz,
-                        owner_company=owner_company,
                         to_seller_inn=seller.inn,
-                        brand=brand,
-                        product_name=product_name
+                        product_name=product_name,
+                        raw_kiz=kiz,  # сырой КИЗ
+                        owner_company=owner_company,
+                        brand=brand
                     )
 
             finally:
@@ -377,7 +372,6 @@ class GenerateSalesService:
             ctx.log("  Нет строк для передачи между продавцами")
 
         ctx.log("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
-
 
 class FinalizePricesService:
     """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""

@@ -649,7 +649,6 @@ class ManualMatchDialog(QDialog):
     def get_result(self):
         return self.selected_candidate, self.skip_all
 
-
 class Stage1ReviewDialog(QDialog):
     """Диалог для подтверждения жёстких совпадений (этап 1)."""
 

@@ -4,9 +4,8 @@ import xlrd
 import csv
 import re
 from openpyxl import Workbook
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from utils.text_utils import TextUtils
-
 
 class ExcelHelper:
     @staticmethod
@@ -261,7 +260,6 @@ class ExcelHelper:
         except Exception:
             return True
 
-
 class CsvReader:
     """Адаптер для чтения CSV-файлов как Excel-листа."""
 
@@ -335,7 +333,6 @@ class CsvReader:
             if row_idx < len(self._data):
                 yield self._data[row_idx]
 
-
 class XlsReader:
     """Адаптер для чтения .xls файлов через xlrd."""
 
@@ -382,7 +379,6 @@ class XlsReader:
         end = min(sheet.nrows, max_row) if max_row is not None else sheet.nrows
         for row_idx in range(start, end):
             yield sheet.row_values(row_idx)
-
 
 class CsvNormalizer:
     """

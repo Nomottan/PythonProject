@@ -5,8 +5,6 @@ from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
 from utils.kiz_utils import KizUtils
 from utils.sales_file_generator import SalesFileGenerator
-import json
-import re
 
 class ReturnsPreparationService:
     """Сервис подготовки: фильтрует исходный файл возвратов и создаёт рабочий файл."""
@@ -136,7 +134,6 @@ class ReturnsPreparationService:
 
         return rows_copied, rows_skipped, unknown_companies, status_counts
 
-
 class KizExportService:
     """Сервис выгрузки КИЗов для возврата с валидацией и очисткой."""
 
@@ -213,7 +210,6 @@ class KizExportService:
             if wb:
                 wb.close()
 
-
 class KizTransferService:
     """Сервис подготовки КИЗов для передачи между продавцами."""
 
@@ -288,7 +284,7 @@ class KizTransferService:
                 sales_gen.add_sale_row(
                     from_seller_name=seller_brand.name,
                     to_seller_name=owner_seller.name,
-                    kiz=kiz if kiz is not None else "",
+                    raw_kiz=kiz if kiz is not None else "",
                     owner_company=owner_company,
                     to_seller_inn=owner_seller.inn,
                     brand=brand,

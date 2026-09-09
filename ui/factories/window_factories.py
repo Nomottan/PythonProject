@@ -1,7 +1,7 @@
 # window_factories.py
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QApplication, QMainWindow, QDialog
-from ui.factories.factories import ButtonFactory, LabelFactory
+from ui.factories.factories import ButtonFactory
 
 class ExtendedWindowFactory:
     """

@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QGridLayout, QFormLayout, QStackedLayout,
     QTextEdit, QSpinBox, QDateTimeEdit, QAbstractSpinBox, QDateEdit
 )
-
 from typing import Callable, Tuple
 
 
