@@ -149,6 +149,7 @@ class KizExportService:
 
         ctx.log(f"=== Выгрузка КИЗов для возврата (с валидацией и очисткой) ===")
 
+        # set_log_path и load остаются ДО батча — как требует промт
         self.kiz_validator.set_log_path(ctx.work_folder)
         self.kiz_validator.load()
 
@@ -163,48 +164,63 @@ class KizExportService:
             sheet = wb.active
             counters = {}
 
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                if len(row) < 6:
-                    continue
-                raw_kiz = row[0]
-                status = row[1]
-                company = row[5]
+            # NEW: батч вокруг всего цикла по строкам листа.
+            # Все validate_for_return накапливают изменения, финальный save()
+            # произойдёт на выходе из with (или при накоплении порога).
+            with self.kiz_validator.batch():
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    # NEW: одна ошибка на строке не должна ронять всю выгрузку —
+                    # логируем и продолжаем со следующей строки.
+                    try:
+                        if len(row) < 6:
+                            continue
+                        raw_kiz = row[0]
+                        status = row[1]
+                        company = row[5]
 
-                if status is None or str(status).strip().upper() != "ВЫБЫЛ":
-                    continue
-                if raw_kiz is None or company is None:
-                    continue
+                        if status is None or str(status).strip().upper() != "ВЫБЫЛ":
+                            continue
+                        if raw_kiz is None or company is None:
+                            continue
 
-                full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
-                if not full_cleaned_list:
-                    ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
-                    continue
+                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                        if not full_cleaned_list:
+                            ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
+                            continue
 
-                company_str = str(company).strip()
-                safe_company = TextUtils.sanitize_filename(company_str)
+                        company_str = str(company).strip()
+                        safe_company = TextUtils.sanitize_filename(company_str)
 
-                for full_kiz in full_cleaned_list:
-                    storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
-                    if not storage_list:
+                        for full_kiz in full_cleaned_list:
+                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                            if not storage_list:
+                                continue
+                            storage_kiz = storage_list[0]
+                            if self.kiz_validator.validate_for_return(storage_kiz):
+                                # Запись .txt остаётся здесь — как есть.
+                                txt_path = ctx.work_folder / f"{safe_company}.txt"
+                                with open(txt_path, "a", encoding="utf-8") as f:
+                                    f.write(full_kiz + "\n")
+                                counters[safe_company] = counters.get(safe_company, 0) + 1
+                    except Exception as e:
+                        ctx.log(f"Ошибка обработки КИЗа: {e}")
                         continue
-                    storage_kiz = storage_list[0]
-                    if self.kiz_validator.validate_for_return(storage_kiz):
-                        txt_path = ctx.work_folder / f"{safe_company}.txt"
-                        with open(txt_path, "a", encoding="utf-8") as f:
-                            f.write(full_kiz + "\n")
-                        counters[safe_company] = counters.get(safe_company, 0) + 1
 
-            # Итоги
-            ctx.log("Результаты выгрузки КИЗов для возврата")
-            ctx.log("=" * 50)
-            if counters:
-                for comp, cnt in sorted(counters.items(), key=lambda x: x[0].lower()):
-                    ctx.log(f"{comp}: {cnt} КИЗов")
-            else:
-                ctx.log("Не найдено ни одного КИЗа, прошедшего валидацию (со статусом ВЫБЫЛ).")
-            ctx.log("Выгрузка завершена.")
+                # Итоги логирования — внутри батча, как договорились.
+                # Тогда финальный save() произойдёт уже после того,
+                # как всё выведено в лог.
+                ctx.log("Результаты выгрузки КИЗов для возврата")
+                ctx.log("=" * 50)
+                if counters:
+                    for comp, cnt in sorted(counters.items(), key=lambda x: x[0].lower()):
+                        ctx.log(f"{comp}: {cnt} КИЗов")
+                else:
+                    ctx.log("Не найдено ни одного КИЗа, прошедшего валидацию (со статусом ВЫБЫЛ).")
+                ctx.log("Выгрузка завершена.")
 
         except Exception as e:
+            # Внешний обработчик оставлен как был — он ловит в том числе
+            # исключение из save() при выходе из батча.
             ctx.log(f"Ошибка выгрузки КИЗов: {e}")
         finally:
             if wb:

@@ -284,7 +284,7 @@ class ChzMPWindow(QMainWindow):
         self.status_display.clear()
         self.status_display.append("Идёт подготовка...")
 
-        service = PreparationService()
+        service = PreparationService(self.parent().kiz_validator)
 
         def on_finished():
             self.status_display.append("Подготовка завершена.")
@@ -431,7 +431,7 @@ class ChzMPWindow(QMainWindow):
         self.status_display.clear()
         self.status_display.append("Внесение цен и финализация...")
 
-        service = FinalizePricesService(self.parent().kiz_validator)
+        service = FinalizePricesService()
 
         def on_finished():
             self.status_display.append("Цены установлены, файлы финализированы.")

@@ -18,6 +18,19 @@ class KizValidator:
         """Загружает данные из used_kiz.json."""
         self.storage.load()
 
+    def batch(self):
+        """Прокси к KizStorage.batch().
+
+        Возвращает контекстный менеджер, чтобы сервисы могли писать
+        with self.kiz_validator.batch(): и не зависеть от внутреннего
+        устройства KizStorage.
+
+        Вход: нет.
+        Выход: _BatchContext.
+        Роль: единая точка группировки сохранений для всех сервисов.
+        """
+        return self.storage.batch()
+
     def set_log_path(self, work_dir: Path) -> None:
         """Устанавливает путь к логу kiz_validation.log в рабочей папке."""
         self.storage.set_log_path(work_dir)

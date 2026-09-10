@@ -38,7 +38,7 @@ class MainWindow(QMainWindow):
         self.brands_window = None
         self.returns_window = None
         self.compare_window = None
-        kiz_storage = KizStorage(self.paths)
+        kiz_storage = KizStorage(self.paths.get_data_file("used_kiz.json"))
         kiz_validator = KizValidator(kiz_storage)
         self.kiz_validator = kiz_validator
 

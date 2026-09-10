@@ -11,6 +11,9 @@ from utils.sales_file_generator import SalesFileGenerator
 class PreparationService:
     """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
 
+    def __init__(self, kiz_validator):
+        self.kiz_validator = kiz_validator
+
     def prepare(self, target_dir, fbs_files=None, mp_files=None, sellers=None, log_callback=None):
         if sellers is None:
             sellers = []
@@ -23,6 +26,15 @@ class PreparationService:
         self._copy_mp_files(ctx, mp_files or [], sellers)
 
         ctx.log("Подготовка завершена.")
+        # очистка устаревших записей КИЗов
+        # set_log_path — чтобы KizStorage логировал в рабочую папку прогона
+        self.kiz_validator.set_log_path(ctx.work_folder)
+        # load() обязателен: clean_old_entries работает с _data,
+        # а он пуст, пока не загружен с диска
+        self.kiz_validator.load()
+        # Удаляем записи старше 1 месяца
+        deleted = self.kiz_validator.clean_old_entries(months=1)
+        ctx.log(f"Очистка старых записей: удалено {deleted}.")
 
     # ---------- Приватные методы ----------
     def _copy_fbs_files(self, ctx: TaskContext, fbs_files):
@@ -90,118 +102,142 @@ class ExportKizService:
 
         kiz_by_seller = {seller.name: set() for seller in sellers}
 
-        # ------------------------------------------------------------
-        # 1. Обработка ЧЗ_МП
-        # ------------------------------------------------------------
-        chz_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ЧЗ_МП*.xlsx")
-        for chz_path in chz_files:
-            ctx.log(f"\nОбработка ЧЗ_МП: {chz_path.name}")
-            wb = ExcelHelper.open_workbook_with_ctx(chz_path, ctx, description="ЧЗ_МП", read_only=True, data_only=True)
-            if wb is None:
-                continue
-            try:
-                for sheet_name in wb.sheetnames:
-                    seller = ExcelHelper.find_seller_by_sheet_name(wb, sellers, sheet_name)
-                    if seller is None:
-                        ctx.log(f"  Лист '{sheet_name}' не соответствует ни одному продавцу – пропущен")
+        # NEW: единый батч на оба цикла. Все вызовы validate_for_sale внутри
+        # накапливают изменения в памяти; финальный save() — на выходе из with.
+        # Промежуточные save() каждые BATCH_SAVE_THRESHOLD изменений добавляет
+        # сам KizStorage.add_or_update — здесь об этом не думаем.
+        with self.kiz_validator.batch():
+            # ------------------------------------------------------------
+            # 1. Обработка ЧЗ_МП
+            # ------------------------------------------------------------
+            chz_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ЧЗ_МП*.xlsx")
+            for chz_path in chz_files:
+                # NEW: ошибка на одном файле не должна прерывать обработку
+                # остальных — логируем и переходим к следующему файлу.
+                # Накопленные изменения сохранятся на выходе из батча.
+                try:
+                    ctx.log(f"\nОбработка ЧЗ_МП: {chz_path.name}")
+                    wb = ExcelHelper.open_workbook_with_ctx(
+                        chz_path, ctx, description="ЧЗ_МП",
+                        read_only=True, data_only=True
+                    )
+                    if wb is None:
                         continue
-                    sheet = wb[sheet_name]
-                    raw_kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=1)
-                    for raw_kiz in raw_kiz_list:
-                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
-                        if not full_cleaned_list:
-                            ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
-                            continue
-                        for full_kiz in full_cleaned_list:
-                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
-                            if not storage_list:
+                    try:
+                        for sheet_name in wb.sheetnames:
+                            seller = ExcelHelper.find_seller_by_sheet_name(wb, sellers, sheet_name)
+                            if seller is None:
+                                ctx.log(f"  Лист '{sheet_name}' не соответствует ни одному продавцу – пропущен")
                                 continue
-                            storage_kiz = storage_list[0]  # обычно один
-                            if self.kiz_validator.validate_for_sale(storage_kiz):
-                                kiz_by_seller[seller.name].add(full_kiz)   # сохраняем полный для txt
-                    ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': обработано {len(raw_kiz_list)} записей")
-            finally:
-                if wb:
-                    wb.close()
-
-        # ------------------------------------------------------------
-        # 2. Обработка отчётов МП (с датами из листа "Сборочные задания")
-        # ------------------------------------------------------------
-        mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ОТЧЁТ МП ПО *.xlsx")
-        for mp_path in mp_files:
-            ctx.log(f"\nОбработка отчёта МП: {mp_path.name}")
-
-            found_seller = None
-            for seller in sellers:
-                if any(key.lower() in mp_path.stem.lower() for key in seller.keys):
-                    found_seller = seller
-                    ctx.log(f"  Удалось определить продавца из имени файла {mp_path} - {found_seller}")
-                    break
-            if found_seller is None:
-                ctx.log(f"  Не удалось определить продавца из имени файла – пропущен")
-                continue
-            seller = found_seller
-
-            wb = ExcelHelper.open_workbook_with_ctx(mp_path, ctx, description="отчёт МП", read_only=True,
-                                                    data_only=True)
-            if wb is None:
-                continue
-
-            try:
-                if "КИЗ" not in wb.sheetnames:
-                    ctx.log(f"  Лист 'КИЗ' отсутствует – пропущен")
+                            sheet = wb[sheet_name]
+                            raw_kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=1)
+                            for raw_kiz in raw_kiz_list:
+                                full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                                if not full_cleaned_list:
+                                    ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
+                                    continue
+                                for full_kiz in full_cleaned_list:
+                                    storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                                    if not storage_list:
+                                        continue
+                                    storage_kiz = storage_list[0]  # обычно один
+                                    if self.kiz_validator.validate_for_sale(storage_kiz):
+                                        kiz_by_seller[seller.name].add(full_kiz)   # сохраняем полный для txt
+                            ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': обработано {len(raw_kiz_list)} записей")
+                    finally:
+                        if wb:
+                            wb.close()
+                except Exception as e:
+                    ctx.log(f"Ошибка обработки файла {chz_path.name}: {e}")
                     continue
-                sheet_kiz = wb["КИЗ"]
-                kiz_to_task = {}
-                for row in sheet_kiz.iter_rows(min_row=2, values_only=True):
-                    if len(row) >= 9:  # как минимум до столбца I
-                        task_num = row[0]  # столбец A
-                        kiz = row[2]  # столбец C
-                        operation_type = row[8]  # столбец I (тип операции)
-                        if kiz and task_num and operation_type and str(operation_type).strip().upper() == "ПРОДАЖА":
-                            kiz_to_task[str(kiz).strip()] = str(task_num).strip()
-                        else:
-                            ctx.log(f"  Пропущен КИЗ {kiz} (задание {task_num}) – тип операции '{operation_type}'")
 
-                if "Сборочные задания" not in wb.sheetnames:
-                    ctx.log(f"  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
-                    task_to_date = {}
-                else:
-                    sheet_tasks = wb["Сборочные задания"]
-                    task_to_date = {}
-                    for row in sheet_tasks.iter_rows(min_row=2, values_only=True):
-                        if len(row) >= 4:
-                            task_num = row[0]
-                            date_created = row[3]
-                            if task_num and date_created:
-                                task_to_date[str(task_num).strip()] = str(date_created).strip()
+            # ------------------------------------------------------------
+            # 2. Обработка отчётов МП (с датами из листа "Сборочные задания")
+            # ------------------------------------------------------------
+            mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ОТЧЁТ МП ПО *.xlsx")
+            for mp_path in mp_files:
+                # NEW: тот же принцип — одна ошибка на файле, продолжаем со следующего
+                try:
+                    ctx.log(f"\nОбработка отчёта МП: {mp_path.name}")
 
-                for raw_kiz, task_num in kiz_to_task.items():
-                    full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
-                    if not full_cleaned_list:
-                        ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
+                    found_seller = None
+                    for seller in sellers:
+                        if any(key.lower() in mp_path.stem.lower() for key in seller.keys):
+                            found_seller = seller
+                            ctx.log(f"  Удалось определить продавца из имени файла {mp_path} - {found_seller}")
+                            break
+                    if found_seller is None:
+                        ctx.log(f"  Не удалось определить продавца из имени файла – пропущен")
                         continue
-                    for full_kiz in full_cleaned_list:
-                        storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
-                        if not storage_list:
-                            continue
-                        storage_kiz = storage_list[0]
-                        sale_date_str = task_to_date.get(task_num)
-                        if sale_date_str is None:
-                            ctx.log(f"  ⚠️ Для КИЗа {storage_kiz} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
-                            if self.kiz_validator.validate_for_sale(storage_kiz):
-                                kiz_by_seller[seller.name].add(full_kiz)
-                        else:
-                            if self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str):
-                                kiz_by_seller[seller.name].add(full_kiz)
+                    seller = found_seller
 
-                ctx.log(f"  Добавлено {len(kiz_to_task)} записей для продавца '{seller.name}'")
-            finally:
-                if wb:
-                    wb.close()
+                    wb = ExcelHelper.open_workbook_with_ctx(
+                        mp_path, ctx, description="отчёт МП",
+                        read_only=True, data_only=True
+                    )
+                    if wb is None:
+                        continue
+
+                    try:
+                        if "КИЗ" not in wb.sheetnames:
+                            ctx.log(f"  Лист 'КИЗ' отсутствует – пропущен")
+                            continue
+                        sheet_kiz = wb["КИЗ"]
+                        kiz_to_task = {}
+                        for row in sheet_kiz.iter_rows(min_row=2, values_only=True):
+                            if len(row) >= 9:  # как минимум до столбца I
+                                task_num = row[0]  # столбец A
+                                kiz = row[2]  # столбец C
+                                operation_type = row[8]  # столбец I (тип операции)
+                                if kiz and task_num and operation_type and str(operation_type).strip().upper() == "ПРОДАЖА":
+                                    kiz_to_task[str(kiz).strip()] = str(task_num).strip()
+                                else:
+                                    ctx.log(f"  Пропущен КИЗ {kiz} (задание {task_num}) – тип операции '{operation_type}'")
+
+                        if "Сборочные задания" not in wb.sheetnames:
+                            ctx.log(f"  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
+                            task_to_date = {}
+                        else:
+                            sheet_tasks = wb["Сборочные задания"]
+                            task_to_date = {}
+                            for row in sheet_tasks.iter_rows(min_row=2, values_only=True):
+                                if len(row) >= 4:
+                                    task_num = row[0]
+                                    date_created = row[3]
+                                    if task_num and date_created:
+                                        task_to_date[str(task_num).strip()] = str(date_created).strip()
+
+                        for raw_kiz, task_num in kiz_to_task.items():
+                            full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                            if not full_cleaned_list:
+                                ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
+                                continue
+                            for full_kiz in full_cleaned_list:
+                                storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                                if not storage_list:
+                                    continue
+                                storage_kiz = storage_list[0]
+                                sale_date_str = task_to_date.get(task_num)
+                                if sale_date_str is None:
+                                    ctx.log(f"  ⚠️ Для КИЗа {storage_kiz} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
+                                    if self.kiz_validator.validate_for_sale(storage_kiz):
+                                        kiz_by_seller[seller.name].add(full_kiz)
+                                else:
+                                    if self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str):
+                                        kiz_by_seller[seller.name].add(full_kiz)
+
+                        ctx.log(f"  Добавлено {len(kiz_to_task)} записей для продавца '{seller.name}'")
+                    finally:
+                        if wb:
+                            wb.close()
+                except Exception as e:
+                    ctx.log(f"Ошибка обработки файла {mp_path.name}: {e}")
+                    continue
 
         # ------------------------------------------------------------
-        # 3. Сохранение текстовых файлов (полные КИЗы)
+        # 3. Сохранение текстовых файлов — ВНЕ батча.
+        # .txt-файлы не связаны с used_kiz.json, поэтому их запись
+        # не должна зависеть от финального save() KizStorage.
         # ------------------------------------------------------------
         ctx.log("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
         for seller_name, kiz_set in kiz_by_seller.items():
@@ -377,9 +413,6 @@ class GenerateSalesService:
 class FinalizePricesService:
     """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""
 
-    def __init__(self, kiz_validator):
-        self.kiz_validator = kiz_validator
-
 
     def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
         if saved_prices is None:
@@ -506,7 +539,4 @@ class FinalizePricesService:
                     wb.close()
 
         ctx.log("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
-        ctx.log("\n=== ЗАПУСК ОЧИСТКИ СТАРЫХ ЗАПИСЕЙ КИЗ ===")
-        deleted = self.kiz_validator.clean_old_entries(months=1)
-        ctx.log(f"Очистка завершена: удалено {deleted} записей.")
         return saved_prices
