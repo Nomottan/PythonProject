@@ -60,7 +60,7 @@ class SalesFileGenerator:
         # Имя файла
         safe_from = TextUtils.sanitize_filename(from_seller_name)
         safe_to = TextUtils.sanitize_filename(to_seller_name)
-        file_name = f"{safe_from} - {safe_to} : {to_seller_inn}.xlsx"
+        file_name = f"{safe_from} - {safe_to} _ {to_seller_inn}.xlsx"
         file_path = self.work_folder / file_name
 
         row_data = [
@@ -86,13 +86,19 @@ class SalesFileGenerator:
     def remove_empty_files(self) -> int:
         removed = 0
         for file_path in self.created_files[:]:
-            if ExcelHelper.is_file_empty(file_path):
-                try:
-                    file_path.unlink()
-                    removed += 1
-                    self.created_files.remove(file_path)
-                except Exception:
-                    pass
+            if file_path.exists():
+                size = file_path.stat().st_size
+                print(f"[DEBUG] Проверка файла {file_path.name}, размер {size} байт")
+                if ExcelHelper.is_file_empty(file_path):
+                    print(f"[DEBUG] Файл {file_path.name} считается пустым, удаляем")
+                    try:
+                        file_path.unlink()
+                        removed += 1
+                        self.created_files.remove(file_path)
+                    except Exception as e:
+                        print(f"[DEBUG] Ошибка удаления {file_path.name}: {e}")
+                else:
+                    print(f"[DEBUG] Файл {file_path.name} не пустой, оставляем")
         return removed
 
     def get_stats(self) -> Dict[tuple, int]:

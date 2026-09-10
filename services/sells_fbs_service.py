@@ -106,7 +106,7 @@ class ExportKizService:
                         ctx.log(f"  Лист '{sheet_name}' не соответствует ни одному продавцу – пропущен")
                         continue
                     sheet = wb[sheet_name]
-                    raw_kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=2)
+                    raw_kiz_list = ExcelHelper.read_column_values(sheet, col_index=1, start_row=1)
                     for raw_kiz in raw_kiz_list:
                         full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
                         if not full_cleaned_list:

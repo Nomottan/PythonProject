@@ -231,19 +231,25 @@ class ExcelHelper:
     @staticmethod
     def append_row_to_file(file_path, row_data, headers=None, sheet_name=None):
         import openpyxl
-        file_path = Path(file_path)
-        if not file_path.exists():
-            if headers is None:
-                return
-            wb, ws = ExcelHelper.create_workbook_with_headers(headers, sheet_name=sheet_name or "Лист1")
+        wb = None
+        try:
+            if file_path.exists():
+                wb = openpyxl.load_workbook(file_path)
+                sheet = wb.active
+            else:
+                wb = openpyxl.Workbook()
+                sheet = wb.active
+                if headers:
+                    sheet.append(headers)
+            sheet.append(row_data)
             wb.save(file_path)
-            wb.close()
-
-        wb = openpyxl.load_workbook(file_path)
-        ws = wb[sheet_name] if sheet_name else wb.active
-        ws.append(row_data)
-        wb.save(file_path)
-        wb.close()
+            print(f"[DEBUG] Файл сохранён: {file_path}, размер {file_path.stat().st_size} байт")
+        except Exception as e:
+            print(f"[ERROR] Ошибка записи в {file_path}: {e}")
+            raise RuntimeError(f"Ошибка записи в {file_path}: {e}")
+        finally:
+            if wb:
+                wb.close()
 
     @staticmethod
     def is_file_empty(file_path, sheet_name=None):

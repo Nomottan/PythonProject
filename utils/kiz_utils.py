@@ -17,7 +17,7 @@ class KizUtils:
         if not raw:
             return []
         raw = str(raw).strip()
-        if len(raw) <= 31:
+        if len(raw) < 31:
             return []
 
         # 1. Удаляем XML-представления управляющих символов
@@ -48,7 +48,7 @@ class KizUtils:
                     frag = frag[pos_01:]
                 else:
                     continue
-            if len(frag) <= 31:
+            if len(frag) < 31:
                 continue
             if TextUtils.is_cyrillic(frag):
                 frag = TextUtils.keyboard_translit(frag)

@@ -130,7 +130,7 @@ class SalesAccumulatorService:
         """
         if not folder.exists():
             return []
-        return [f for f in folder.glob("*.xlsx") if " - " in f.stem and " : " in f.stem]
+        return [f for f in folder.glob("*.xlsx") if " - " in f.stem and " _ " in f.stem]
 
     def _collect_kiz_set(self, file_path: Path) -> set:
         """
