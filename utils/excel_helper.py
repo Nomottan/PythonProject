@@ -1,8 +1,5 @@
 from pathlib import Path
-import openpyxl
-import xlrd
-import csv
-import re
+import xlrd, sys, csv, re, openpyxl
 from openpyxl import Workbook
 from typing import List, Dict, Tuple
 from utils.text_utils import TextUtils
@@ -62,6 +59,38 @@ class ExcelHelper:
             return None
 
     @staticmethod
+    def _is_dimension_broken(wb) -> bool:
+        """Проверяет, «схлопнут» ли workbook из-за отсутствия dimension.
+
+        Назначение:
+            openpyxl в режиме read_only=True опирается на атрибут dimension
+            в XML-структуре файла, чтобы определить границы листа. Если атрибут
+            отсутствует, max_row и max_column остаются =1, и iter_rows не выдаёт
+            ни одной строки. Метод ловит этот случай.
+
+        Вход: wb — открытый workbook (openpyxl).
+        Выход:
+            True — если у ВСЕХ листов max_row is None или max_row <= 1.
+            False — если хотя бы у одного листа max_row > 1.
+            False — при любой ошибке (консервативно, чтобы случайно
+                    не переоткрывать нормальный файл).
+
+        Роль: решает, нужен ли fallback на read_only=False.
+        """
+        try:
+            for sheet_name in wb.sheetnames:
+                sheet = wb[sheet_name]
+                max_row = sheet.max_row
+                # Любой лист с реальными данными снимает подозрение.
+                if max_row is None or max_row > 1:
+                    return False
+            # Дошли до конца — все листы «схлопнуты».
+            return True
+        except Exception:
+            # Ошибка чтения max_row — не рискуем, считаем файл нормальным.
+            return False
+
+    @staticmethod
     def create_workbook_with_headers(headers, sheet_name="Лист1", write_only=False):
         wb = Workbook(write_only=write_only)
         if write_only:
@@ -114,10 +143,65 @@ class ExcelHelper:
         workbooks_dict.clear()
 
     @staticmethod
-    def open_workbook_with_ctx(file_path, ctx, description="файл", read_only=False, data_only=True):
+    def open_workbook_with_ctx(file_path, ctx, description="файл", read_only=False, data_only=True,
+                               auto_fallback: bool = True):
+        """Открывает workbook и логирует результат.
+
+        Назначение:
+            Единая точка открытия для сервисов. Скрывает проблему отсутствующего
+            атрибута dimension: если read_only=True и файл «схлопнут», открывает
+            его повторно в обычном режиме. Бизнес-логика сервисов не знает об этом.
+
+        Вход:
+            file_path — путь к файлу.
+            ctx — TaskContext (даёт log/error/warning).
+            description — описание для сообщений («отчёт МП», «файл возвратов»).
+            read_only — открывать ли в read-only (для .xlsx/.xlsm).
+            data_only — читать значения вместо формул.
+            auto_fallback — включён по умолчанию. При read_only=True проверяет
+                            «схлопнутость» и переоткрывает файл без read_only.
+
+        Выход: openpyxl workbook (или обёртка XlsReader/CsvReader) либо None.
+
+        Роль: централизованное решение проблемы. Вызовы в сервисах менять
+              не нужно — auto_fallback=True работает по умолчанию.
+        """
         wb = ExcelHelper.open_workbook_safe(file_path, read_only=read_only, data_only=data_only)
         if wb is None:
-            ctx.log(f"Ошибка открытия {description}: {Path(file_path).name}")
+            # REPLACE: было ctx.log — теперь ctx.error. Это уже ошибка,
+            # и она должна попадать в errors.txt.
+            ctx.error(f"Ошибка открытия {description}: {Path(file_path).name}")
+            return None
+
+        # Fallback имеет смысл только для .xlsx/.xlsm (openpyxl) и только
+        # при read_only=True. Для .xls (xlrd) и .csv (CsvReader) dimension
+        # не используется, там другой механизм чтения.
+        suffix = Path(file_path).suffix.lower()
+        if auto_fallback and read_only and suffix in ('.xlsx', '.xlsm'):
+            if ExcelHelper._is_dimension_broken(wb):
+                # Пытаемся аккуратно закрыть текущий wb перед переоткрытием.
+                # Ошибку close не пробрасываем — fallback важнее.
+                try:
+                    wb.close()
+                except Exception as e:
+                    sys.stderr.write(
+                        f"[ExcelHelper] Ошибка закрытия wb перед fallback: {e}\n"
+                    )
+
+                # WARNING — файл нестандартный, но обрабатываем. Пользователь
+                # увидит это в логе, но не как ошибку.
+                ctx.warning(
+                    f"Файл {Path(file_path).name} не содержит корректного dimension. "
+                    f"Переоткрываю без read_only."
+                )
+
+                # Переоткрываем без read_only — тогда openpyxl парсит XML
+                # полностью и корректно определяет границы листов.
+                wb = ExcelHelper.open_workbook_safe(file_path, read_only=False, data_only=data_only)
+                if wb is None:
+                    ctx.error(f"Ошибка повторного открытия {description}: {Path(file_path).name}")
+                    return None
+
         return wb
 
     @staticmethod

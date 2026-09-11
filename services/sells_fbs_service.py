@@ -412,7 +412,8 @@ class GenerateSalesService:
 
 class FinalizePricesService:
     """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""
-
+    def __init__(self, kiz_validator):
+        self.kiz_validator = kiz_validator
 
     def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
         if saved_prices is None:
