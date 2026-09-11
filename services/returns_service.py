@@ -6,14 +6,24 @@ from utils.file_helper import FileHelper
 from utils.kiz_utils import KizUtils
 from utils.sales_file_generator import SalesFileGenerator
 
+
 class ReturnsPreparationService:
     """Сервис подготовки: фильтрует исходный файл возвратов и создаёт рабочий файл."""
+
+    def __init__(self, log_manager=None):
+        self.log_manager = log_manager
 
     def prepare(self, target_dir, source_file, sellers=None, log_callback=None):
         if log_callback is None:
             log_callback = print
 
-        ctx = TaskContext(target_dir, "Возвраты_{date}", "log_возвраты.txt", log_callback)
+        # NEW: source для префикса [source] в task-логе.
+        ctx = TaskContext(
+            target_dir, "Возвраты_{date}", "log_возвраты.txt",
+            log_callback=log_callback,
+            log_manager=self.log_manager,
+            source="ReturnsPreparationService.returns_service",
+        )
         ctx.log(f"=== Обработка возвратов начата {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
         ctx.log(f"Исходный файл: {source_file}")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
@@ -27,16 +37,25 @@ class ReturnsPreparationService:
         if not self._copy_source_file(ctx, source_path):
             return
 
-        rows_copied, rows_skipped, unknown_companies, _ = self._filter_returns(
+        # NEW: _filter_returns теперь возвращает 5 значений — добавился
+        # set уникальных компаний, прошедших фильтр (passed_companies).
+        (rows_copied, rows_skipped, unknown_companies, status_counts,
+         passed_companies) = self._filter_returns(
             ctx, source_path, allowed_companies
         )
 
-        TextUtils.log_unknown_entities(
-            unknown_companies,
-            ctx.work_folder / "log_компании_вне_списка.txt",
-            "Компании из столбца L, не соответствующие ни одному продавцу (с количеством строк):",
-            ctx
-        )
+        # NEW: агрегат по исходному файлу на уровне INFO.
+        # Всего строк = те, что прошли + те, что отсеялись по компании.
+        ctx.info(f"Всего строк в исходном файле: {rows_copied + rows_skipped}")
+        ctx.info(f"Уникальных компаний после фильтрации: {len(passed_companies)}")
+
+        if unknown_companies:
+            ctx.log_statistics(
+                "Компании из столбца L, не соответствующие ни одному продавцу (с количеством строк):",
+                unknown_companies,
+            )
+        else:
+            ctx.info("Компаний вне списка не обнаружено.")
 
         ctx.log("Обработка возвратов завершена.\n")
 
@@ -53,16 +72,21 @@ class ReturnsPreparationService:
         )
 
     def _filter_returns(self, ctx: TaskContext, source_path: Path, allowed_companies: set):
-        """
-        Читает исходный файл, отбирает строки по разрешённым компаниям и сохраняет новый файл.
-        Возвращает кортеж (rows_copied, rows_skipped, unknown_companies, status_counts).
+        """Читает исходный файл, отбирает строки по разрешённым компаниям.
+
+        Возвращает кортеж:
+            (rows_copied, rows_skipped, unknown_companies,
+             status_counts, passed_companies)
+
+        passed_companies — set уникальных значений столбца L, прошедших
+        фильтр. Нужен для итогового INFO «Уникальных компаний после фильтрации».
         """
         wb_src = ExcelHelper.open_workbook_with_ctx(
             source_path, ctx, description="исходный файл",
             read_only=True, data_only=True
         )
         if wb_src is None:
-            return 0, 0, {}, {}
+            return 0, 0, {}, {}, set()
         sheet_src = wb_src.active
 
         # Столбцы для копирования (индексы 1-based)
@@ -76,7 +100,8 @@ class ReturnsPreparationService:
                 header_value = sheet_src[f"{col_letter}1"].value
                 header_row.append(header_value)
         except Exception as e:
-            ctx.log(f"Ошибка при чтении заголовков: {e}")
+            # NEW: WARNING — заголовки не прочитались, работаем с пустым списком.
+            ctx.warning(f"Ошибка при чтении заголовков: {e}")
             header_row = []
 
         # Создаём новую книгу с заголовками
@@ -90,6 +115,8 @@ class ReturnsPreparationService:
         rows_skipped = 0
         unknown_companies = {}
         status_counts = {}
+        # NEW: уникальные компании, прошедшие фильтр.
+        passed_companies = set()
 
         def filter_condition(row):
             nonlocal rows_skipped
@@ -97,10 +124,16 @@ class ReturnsPreparationService:
             cell_L_str = str(cell_L_val).strip() if cell_L_val is not None else ""
 
             if not allowed_companies:
+                # Если фильтров нет — считаем, что все компании «прошли».
+                if cell_L_str:
+                    passed_companies.add(cell_L_str)
                 return True
 
             check_val = TextUtils.normalize(cell_L_str)
             if check_val in allowed_companies:
+                # NEW: запоминаем уникальные компании, прошедшие фильтр.
+                if cell_L_str:
+                    passed_companies.add(cell_L_str)
                 return True
 
             if cell_L_str:
@@ -114,7 +147,8 @@ class ReturnsPreparationService:
             columns_to_keep=col_indices,
             condition=filter_condition,
             start_row=2,
-            status_col_idx=3,
+            # Исходный столбец D (4-й) содержит статус возврата.
+            status_col_idx=4,
             status_counts=status_counts
         )
 
@@ -127,30 +161,35 @@ class ReturnsPreparationService:
             ctx.log(f"Пропущено строк (не совпала компания): {rows_skipped}")
             ctx.log_statistics("Статистика по статусам (скопированные строки):", status_counts)
         except Exception as e:
-            ctx.log(f"Ошибка сохранения файла: {e}")
+            # NEW: ERROR — файл не сохранился, это уже не warning.
+            ctx.error(f"Ошибка сохранения файла: {e}")
 
         wb_src.close()
         wb_new.close()
 
-        return rows_copied, rows_skipped, unknown_companies, status_counts
+        return rows_copied, rows_skipped, unknown_companies, status_counts, passed_companies
+
 
 class KizExportService:
     """Сервис выгрузки КИЗов для возврата с валидацией и очисткой."""
 
-    def __init__(self, kiz_validator):
+    def __init__(self, kiz_validator, log_manager=None):
         self.kiz_validator = kiz_validator
+        self.log_manager = log_manager
 
     def export(self, target_dir, log_callback=None):
-        ctx = TaskContext(target_dir, "Возвраты_{date}", "log_выгрузка_КИЗов.txt", log_callback)
+        ctx = TaskContext(
+            target_dir, "Возвраты_{date}", "log_выгрузка_КИЗов.txt",
+            log_callback=log_callback,
+            log_manager=self.log_manager,
+            source="KizExportService.returns_service",
+        )
         source_file = ctx.get_work_file("Возвраты_{date}")
         source_file = FileHelper.ensure_file_exists(ctx, source_file, "файл возвратов")
         if source_file is None:
             return
 
         ctx.log(f"=== Выгрузка КИЗов для возврата (с валидацией и очисткой) ===")
-
-        # set_log_path и load остаются ДО батча — как требует промт
-        self.kiz_validator.set_log_path(ctx.work_folder)
         self.kiz_validator.load()
 
         wb = ExcelHelper.open_workbook_with_ctx(
@@ -163,14 +202,15 @@ class KizExportService:
         try:
             sheet = wb.active
             counters = {}
+            returns_updated_in_base = 0  # КИЗ был в базе — обновили returned_date
+            returns_not_in_base = 0
 
-            # NEW: батч вокруг всего цикла по строкам листа.
-            # Все validate_for_return накапливают изменения, финальный save()
-            # произойдёт на выходе из with (или при накоплении порога).
+            # NEW: включаем сбор статистики KizUtils. Все вызовы clean_kiz_full
+            # и clean_kiz_for_storage в этом блоке будут инкрементить счётчики.
+            KizUtils.start_stats()
+
             with self.kiz_validator.batch():
                 for row in sheet.iter_rows(min_row=2, values_only=True):
-                    # NEW: одна ошибка на строке не должна ронять всю выгрузку —
-                    # логируем и продолжаем со следующей строки.
                     try:
                         if len(row) < 6:
                             continue
@@ -183,7 +223,9 @@ class KizExportService:
                         if raw_kiz is None or company is None:
                             continue
 
-                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
+                        # NEW: передаём ctx.logger — детальные сообщения уйдут
+                        # в debug.txt при включённом debug.
+                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz, logger=ctx.logger)
                         if not full_cleaned_list:
                             ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
                             continue
@@ -192,23 +234,29 @@ class KizExportService:
                         safe_company = TextUtils.sanitize_filename(company_str)
 
                         for full_kiz in full_cleaned_list:
-                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
+                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz, logger=ctx.logger)
                             if not storage_list:
                                 continue
                             storage_kiz = storage_list[0]
+                            existing_before = self.kiz_validator.storage.get(storage_kiz)
+
                             if self.kiz_validator.validate_for_return(storage_kiz):
-                                # Запись .txt остаётся здесь — как есть.
+                                # Всегда True по новой логике; оставляем проверку для читаемости.
+                                if existing_before is None:
+                                    returns_not_in_base += 1
+                                else:
+                                    returns_updated_in_base += 1
+                                # Запись .txt — как раньше.
                                 txt_path = ctx.work_folder / f"{safe_company}.txt"
                                 with open(txt_path, "a", encoding="utf-8") as f:
                                     f.write(full_kiz + "\n")
                                 counters[safe_company] = counters.get(safe_company, 0) + 1
                     except Exception as e:
-                        ctx.log(f"Ошибка обработки КИЗа: {e}")
+                        # NEW: WARNING — ошибка одной строки не должна валить всю задачу.
+                        ctx.warning(f"Ошибка обработки КИЗа: {e}")
                         continue
 
-                # Итоги логирования — внутри батча, как договорились.
-                # Тогда финальный save() произойдёт уже после того,
-                # как всё выведено в лог.
+                # Итоги — ПОСЛЕ цикла for, но внутри with batch.
                 ctx.log("Результаты выгрузки КИЗов для возврата")
                 ctx.log("=" * 50)
                 if counters:
@@ -216,21 +264,50 @@ class KizExportService:
                         ctx.log(f"{comp}: {cnt} КИЗов")
                 else:
                     ctx.log("Не найдено ни одного КИЗа, прошедшего валидацию (со статусом ВЫБЫЛ).")
-                ctx.log("Выгрузка завершена.")
+                ctx.log("---Выгрузка завершена.---\n")
+                ctx.log("=" * 50 + "\n")
+
+            # NEW: после выхода из батча забираем статистику и логируем агрегат.
+            stats = KizUtils.pop_stats()
+            ctx.info(
+                f"Обработка КИЗов: успешно {stats['processed']}\n"
+                f"Транслитерировано {stats['transliterated']}, \n"
+                f"Без '01' {stats['dropped_no_01']}, \n"
+                f"Отброшено коротких {stats['dropped_short']}.\n"
+
+
+            )
+            total_returns = returns_updated_in_base + returns_not_in_base
+            ctx.info(
+                f"Возвраты: обработано {total_returns} \n"
+                f"({returns_updated_in_base} обновлено в базе, \n"
+                f"{returns_not_in_base} отсутствует в базе — запись не создана).\n"
+            )
 
         except Exception as e:
-            # Внешний обработчик оставлен как был — он ловит в том числе
-            # исключение из save() при выходе из батча.
-            ctx.log(f"Ошибка выгрузки КИЗов: {e}")
+            # Сбрасываем статистику, чтобы следующая сессия началась с чистого
+            # состояния. Значение нам здесь не нужно — логируем ошибку.
+            KizUtils.pop_stats()
+            ctx.error(f"Ошибка выгрузки КИЗов: {e}")
         finally:
             if wb:
                 wb.close()
 
+
 class KizTransferService:
     """Сервис подготовки КИЗов для передачи между продавцами."""
 
+    def __init__(self, log_manager=None):
+        self.log_manager = log_manager
+
     def prepare_transfer(self, target_dir, sellers, log_callback=None):
-        ctx = TaskContext(target_dir, "Возвраты_{date}", "log_передачи_КИЗов.txt", log_callback)
+        # NEW: source для префикса [source].
+        ctx = TaskContext(
+            target_dir, "Возвраты_{date}", "log_передачи_КИЗов.txt",
+            log_callback=log_callback,
+            log_manager=self.log_manager,
+            source="KizTransferService.returns_service",
+        )
         source_file = ctx.get_work_file("Возвраты_{date}")
         source_file = FileHelper.ensure_file_exists(ctx, source_file, "файл возвратов")
         if source_file is None:
@@ -258,16 +335,26 @@ class KizTransferService:
 
         try:
             sheet_src = wb_src.active
-            # Создаём генератор файлов продаж
-            sales_gen = SalesFileGenerator(ctx.work_folder)
+            # NEW: прокидываем logger — отладочные сообщения уйдут в debug.txt.
+            sales_gen = SalesFileGenerator(ctx.work_folder, logger=ctx.logger)
+            KizUtils.start_stats()
+
+            # NEW: счётчики для итогового INFO.
+            total_rows = 0
+            unique_brands = set()
 
             for row_idx, row in enumerate(sheet_src.iter_rows(min_row=2, values_only=True), start=2):
                 if len(row) < 6:
                     continue
+                total_rows += 1
                 kiz = row[0]                # столбец A
                 product_name = row[2]       # столбец C – данные/название товара
                 brand = row[3]              # столбец D – бренд
                 owner_company = row[5]      # столбец F – компания-владелец КИЗа
+
+                # NEW: собираем уникальные бренды (для итогового INFO).
+                if brand:
+                    unique_brands.add(str(brand).strip())
 
                 if not kiz:
                     ctx.log(f"Строка {row_idx}: пустой КИЗ – пропущена")
@@ -277,23 +364,20 @@ class KizTransferService:
                     continue
 
                 brand_key = TextUtils.normalize(brand)
-                seller_brand = key_to_seller.get(brand_key)  # продавец, которому принадлежит бренд
+                seller_brand = key_to_seller.get(brand_key)
 
                 if seller_brand is None:
                     ctx.log(f"Строка {row_idx}: ключ бренда '{brand}' не найден – пропущена")
                     continue
 
-                # Ищем продавца-владельца КИЗа по company
                 owner_seller = TextUtils.find_seller_by_company(owner_company, list(company_to_seller.values()))
                 if owner_seller is None:
                     ctx.log(f"Строка {row_idx}: владелец '{owner_company}' не найден – пропущена")
                     continue
 
-                # Если владелец КИЗа уже является владельцем бренда – пропускаем
                 if owner_seller == seller_brand:
                     continue
 
-                # Проверяем, есть ли уже этот бренд у владельца КИЗа
                 has_brand = any(TextUtils.normalize(key) == brand_key
                                 for brand_obj in owner_seller.brands
                                 for key in brand_obj.keys)
@@ -301,7 +385,6 @@ class KizTransferService:
                     ctx.log(f"Строка {row_idx}: бренд '{brand}' уже есть у {owner_seller.name} – пропущена")
                     continue
 
-                # Добавляем строку через генератор
                 sales_gen.add_sale_row(
                     from_seller_name=seller_brand.name,
                     to_seller_name=owner_seller.name,
@@ -311,6 +394,19 @@ class KizTransferService:
                     brand=brand,
                     product_name=product_name if product_name is not None else ""
                 )
+
+            # NEW: агрегат по строкам и брендам — INFO.
+            ctx.info(f"Всего строк: {total_rows}")
+            ctx.info(f"Уникальных брендов: {len(unique_brands)}")
+
+            # Статистика KizUtils — после цикла, до логов по файлам.
+            stats = KizUtils.pop_stats()
+            ctx.info(
+                f"Обработка КИЗов: успешно {stats['processed']}, "
+                f"отброшено коротких {stats['dropped_short']}, "
+                f"без '01' {stats['dropped_no_01']}, "
+                f"транслитерировано {stats['transliterated']}."
+            )
 
             # Удаляем пустые файлы
             ctx.log("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
@@ -333,6 +429,7 @@ class KizTransferService:
             ctx.log("Подготовка передач завершена.\n")
 
         except Exception as e:
-            ctx.log(f"Ошибка подготовки передач КИЗов: {e}")
+            KizUtils.pop_stats()
+            ctx.error(f"Ошибка подготовки передач КИЗов: {e}")
         finally:
             wb_src.close()

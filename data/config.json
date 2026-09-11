@@ -15,11 +15,12 @@
     ],
     "seller_prices": {
         "Фит Икс": 321,
+        "Гаак Наташа": 500,
         "Котова Аня": 435,
         "Степанов Гоша": 1941,
         "Хорошун Ира": 1595,
         "Шилович Света": 1548,
-        "Гаак Наташа": 500
+        "Шилович Настя": 2000
     },
     "sellers": [
         {
@@ -97,7 +98,8 @@
                 "Nature's way",
                 "NUTRIBIOTIC",
                 "ORZAX",
-                "Solaray"
+                "Solaray",
+                "Нет товарного знака"
             ]
         },
         {
@@ -129,11 +131,22 @@
             "company": "ИП ШИЛОВИЧ СВЕТЛАНА НИКОЛАЕВНА",
             "keys": [
                 "света",
-                "светлана",
-                "шилович"
+                "светлана"
             ],
             "brands": [
                 "Lianhua Qingwen"
+            ]
+        },
+        {
+            "name": "Шилович Настя",
+            "inn": "673201835486",
+            "company": "ИП ШИЛОВИЧ АНАСТАСИЯ НИКОЛАЕВНА",
+            "keys": [
+                "настя",
+                "анастасия"
+            ],
+            "brands": [
+                "Нет товарного знака"
             ]
         }
     ],
@@ -393,9 +406,15 @@
                 "BSN",
                 "bsn"
             ]
+        },
+        {
+            "name": "Нет товарного знака",
+            "keys": [
+                "нет товарного знака"
+            ]
         }
     ],
-    "last_returns_dir": "C:\\Users\\Владимир\\Downloads",
-    "last_compare_supply_dir": "C:\\Users\\Владимир\\Desktop",
-    "last_compare_supplies_dir": "C:\\Users\\Владимир\\Desktop"
+    "last_returns_dir": "C:\\Users\\Владимир\\Desktop",
+    "last_compare_supply_dir": "C:\\Users\\Владимир\\Downloads\\Telegram Desktop",
+    "last_compare_supplies_dir": "C:\\Users\\Владимир\\Downloads\\Telegram Desktop"
 }

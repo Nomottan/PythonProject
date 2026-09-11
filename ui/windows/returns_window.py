@@ -9,8 +9,18 @@ from services.returns_service import ReturnsPreparationService, KizExportService
 from services.sales_accumulator import SalesAccumulatorService
 
 class ReturnsWindow(QMainWindow):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, log_manager=None):
+        """Окно возвратов.
+
+        Вход:
+            parent — главное окно (MainWindow).
+            log_manager — LogManager из пакета log_system. Сохраняем как атрибут,
+                          чтобы в Фазе 3 передать в три сервиса возвратов.
+                          Пока не используется: Фаза 1 только про KizStorage.
+        """
         super().__init__(parent)
+        # NEW: сохраняем log_manager — пригодится в Фазе 3 (сервисы Return).
+        self.log_manager = log_manager
         self.target_dir = parent.config.get("target_dir", None)
         self.source_file = None
 
@@ -128,6 +138,10 @@ class ReturnsWindow(QMainWindow):
         self.parent().config.set("target_dir", new_path)
         self.status_label.setText("Целевая папка обновлена.")
 
+    def _ui_log(self, message: str, level: str = "INFO") -> None:
+        """UI-адаптер для нового логгера."""
+        self.status_label.status_update.emit(message)
+
     def select_source_file(self):
         start_dir = self.parent().config.get("last_returns_dir", None) or self.target_dir or str(Path.home())
         file_path = FileDialogFactory.open_file_dialog(
@@ -152,7 +166,7 @@ class ReturnsWindow(QMainWindow):
         sellers = self.parent().config.get_sellers_with_brands()
         self.status_label.setText("Идёт подготовка...")
 
-        service = ReturnsPreparationService()
+        service = ReturnsPreparationService(self.log_manager)
 
         ThreadFactory.create_thread(
             parent=self,
@@ -163,7 +177,8 @@ class ReturnsWindow(QMainWindow):
                 "target_dir": self.target_dir,
                 "source_file": self.source_file,
                 "sellers": sellers,
-                "log_callback": self.status_label.status_update.emit
+                # NEW: используем _ui_log — он принимает (message, level).
+                "log_callback": self._ui_log
             },
             on_finished=lambda: self.status_label.setText("Подготовка завершена."),
             error_callback=lambda e: self.status_label.status_update.emit(f"Ошибка: {e}")
@@ -175,7 +190,7 @@ class ReturnsWindow(QMainWindow):
             return
 
         self.status_label.setText("Выгрузка КИЗов...")
-        service = KizExportService(self.parent().kiz_validator)
+        service = KizExportService(self.parent().kiz_validator, self.log_manager)
 
         ThreadFactory.create_thread(
             parent=self,
@@ -184,7 +199,7 @@ class ReturnsWindow(QMainWindow):
             target_func=service.export,
             kwargs={
                 "target_dir": self.target_dir,
-                "log_callback": self.status_label.status_update.emit
+                "log_callback": self._ui_log
             },
             on_finished=lambda: self.status_label.setText("Выгрузка КИЗов завершена."),
             error_callback=lambda e: self.status_label.status_update.emit(f"Ошибка выгрузки: {e}")
@@ -197,7 +212,7 @@ class ReturnsWindow(QMainWindow):
 
         sellers = self.parent().config.get_sellers_with_brands()
         self.status_label.setText("Подготовка передач КИЗов...")
-        service = KizTransferService()
+        service = KizTransferService(self.log_manager)
 
         ThreadFactory.create_thread(
             parent=self,
@@ -207,7 +222,7 @@ class ReturnsWindow(QMainWindow):
             kwargs={
                 "target_dir": self.target_dir,
                 "sellers": sellers,
-                "log_callback": self.status_label.status_update.emit
+                "log_callback": self._ui_log
             },
             on_finished=lambda: self.status_label.setText("Подготовка передач КИЗов завершена."),
             error_callback=lambda e: self.status_label.status_update.emit(f"Ошибка подготовки передач: {e}")

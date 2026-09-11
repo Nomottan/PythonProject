@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.kiz_utils import KizUtils
+from utils.log_system.logger import Logger
 
 
 class SalesFileGenerator:
@@ -20,11 +21,26 @@ class SalesFileGenerator:
         "Цена"
     ]
 
-    def __init__(self, work_folder: Path, headers: Optional[List[str]] = None):
+    def __init__(self, work_folder: Path, headers: Optional[List[str]] = None,
+                 logger: Optional[Logger] = None):
+        """Генератор файлов продаж.
+
+        Вход:
+            work_folder — папка, куда складываются файлы.
+            headers — заголовки столбцов; None → DEFAULT_HEADERS.
+            logger — опциональный Logger из пакета log_system. Если передан,
+                     отладочные сообщения идут через него (в debug.txt при
+                     включённом debug). Если нет — fallback на print.
+
+        Роль: сервис может создавать генератор с логгером (новый путь)
+              или без (легаси-путь). Поведение не ломается.
+        """
         self.work_folder = work_folder
         self.headers = headers or self.DEFAULT_HEADERS
         self.created_files: List[Path] = []
         self._stats: Dict[tuple, int] = {}
+        # NEW: сохраняем logger. Может быть None — тогда используется print.
+        self._logger = logger
 
     def add_sale_row(self,
                      from_seller_name: str,
@@ -45,8 +61,9 @@ class SalesFileGenerator:
         :param owner_company: компания-владелец (не используется, передаётся для совместимости)
         :return: путь к файлу
         """
-        # Получаем сокращённый КИЗ (31 символ)
-        storage_list = KizUtils.clean_kiz_for_storage(raw_kiz)
+        # Получаем сокращённый КИЗ (31 символ).
+        # NEW: передаём logger — детальные сообщения от KizUtils уйдут в debug.
+        storage_list = KizUtils.clean_kiz_for_storage(raw_kiz, logger=self._logger)
         if not storage_list:
             raise ValueError(f"Не удалось получить сокращённый КИЗ из {raw_kiz[:30]}...")
         kiz_short = storage_list[0]
@@ -84,22 +101,47 @@ class SalesFileGenerator:
         return self.created_files
 
     def remove_empty_files(self) -> int:
+        """Удаляет пустые файлы продаж из списка созданных.
+
+        Вход: нет.
+        Выход: количество удалённых файлов.
+        Роль: после генерации часть файлов может остаться только с
+              заголовками — их удаляем, чтобы не путать пользователя.
+        """
         removed = 0
         for file_path in self.created_files[:]:
             if file_path.exists():
                 size = file_path.stat().st_size
-                print(f"[DEBUG] Проверка файла {file_path.name}, размер {size} байт")
+                # NEW: вместо print — _log_debug, сам выберет канал.
+                self._log_debug(f"Проверка файла {file_path.name}, размер {size} байт")
                 if ExcelHelper.is_file_empty(file_path):
-                    print(f"[DEBUG] Файл {file_path.name} считается пустым, удаляем")
+                    self._log_debug(f"Файл {file_path.name} считается пустым, удаляем")
                     try:
                         file_path.unlink()
                         removed += 1
                         self.created_files.remove(file_path)
                     except Exception as e:
-                        print(f"[DEBUG] Ошибка удаления {file_path.name}: {e}")
+                        self._log_debug(f"Ошибка удаления {file_path.name}: {e}")
                 else:
-                    print(f"[DEBUG] Файл {file_path.name} не пустой, оставляем")
+                    self._log_debug(f"Файл {file_path.name} не пустой, оставляем")
         return removed
 
     def get_stats(self) -> Dict[tuple, int]:
         return self._stats.copy()
+
+    # ---------- Приватные помощники ----------
+
+    def _log_debug(self, message: str) -> None:
+        """Логирует отладочное сообщение через logger или через print.
+
+        Вход: message — текст.
+        Выход: нет.
+        Роль: единая точка выбора канала. При наличии logger — debug-уровень
+              (в debug.txt при включённом debug). Без logger — печать в stdout
+              для обратной совместимости.
+        """
+        if self._logger is not None:
+            self._logger.debug(message)
+        else:
+            # Префикс [DEBUG] только в fallback — Logger сам знает про уровень.
+            print(f"[DEBUG] {message}")

@@ -1,8 +1,9 @@
-import json, os, tempfile
+import json, os, tempfile, sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict
-
+from utils.log_system.manager import LogManager
+from utils.log_system.logger import Logger
 from utils.path_manager import PathManager
 
 class _BatchContext:
@@ -64,56 +65,118 @@ class KizStorage:
     # при долгом прогоне (2–3 тыс. КИЗов) не копить всё в памяти до конца.
     BATCH_SAVE_THRESHOLD = 250
 
-    def __init__(self, file_path, log_callback=None):
+    def __init__(self, file_path, log_callback=None, log_manager: Optional[LogManager] = None):
+        """Хранилище КИЗов.
+
+        Вход:
+            file_path — путь к JSON-файлу (str или Path).
+            log_callback — устаревший колбэк (msg) -> None. Оставлен для
+                           обратной совместимости с легаси-кодом.
+            log_manager — LogManager из нового пакета log_system. Если передан,
+                          KizStorage создаёт собственный Logger и пишет через
+                          него (errors.txt + UI). Если нет — fallback на _log.
+
+        Роль: конструктор определяет, какой канал логирования использовать.
+              Приоритет у log_manager — он «правильный», _log_callback — легаси.
+        """
         self._file_path = Path(file_path)
+        # Легаси-колбэк. Оставлен на случай, если log_manager не передан
+        # (например, в существующих тестах или скриптах).
         self._log_callback = log_callback or (lambda msg: None)
         self._data = {}
+        # _log_path больше не используется при активном _logger, но
+        # оставлен, чтобы set_log_path не падал.
         self._log_path = None
-        # NEW: флаг автосохранения вне батча. True — поведение как раньше:
-        # add_or_update сразу пишет на диск. Нужен для легаси-кода,
-        # который вызывает add_or_update без батча.
+
+        # NEW: если передан LogManager — создаём Logger с источником
+        # «KizStorage.kiz_storage». work_folder=None: KizStorage не привязан
+        # к конкретной задаче, пишет только в errors.txt и UI.
+        self._log_manager = log_manager
+        if log_manager is not None:
+            self._logger: Optional[Logger] = log_manager.create_logger(
+                source="KizStorage.kiz_storage",
+                work_folder=None,
+            )
+        else:
+            self._logger = None
+
         self._autosave_enabled = True
-
-        # NEW: счётчик глубины вложенных batch(). Сохраняем только при выходе с 0.
         self._batch_depth = 0
-
-        # NEW: взведён, если внутри батча были реальные изменения.
-        # Определяет, нужен ли финальный save() на выходе.
         self._batch_dirty = False
-
-        # NEW: счётчик всех вызовов add_or_update внутри батча (включая
-        # повторные обновления одного КИЗа). По достижении порога — промежуточный save.
         self._batch_changes_count = 0
 
     def set_log_path(self, work_dir: Path) -> None:
+        """Устанавливает путь к старому логу kiz_validation.log.
+
+        Оставлен для обратной совместимости с sells_fbs_service.py.
+        При активном _logger (передан log_manager) этот путь НЕ используется:
+        записи идут через errors.txt и UI. Метод — no-op в этом случае.
+
+        Вход: work_dir — рабочая папка задачи.
+        Выход: нет.
+        """
+        # Сохраняем на случай fallback, но _logger его игнорирует.
         self._log_path = work_dir / "kiz_validation.log"
 
     def _log(self, message: str) -> None:
-        """Пишет сообщение в файл лога и, если задан, вызывает колбэк.
+        """Устаревший fallback для логирования.
 
-        Раньше метод был перекрыт lambda-атрибутом self._log — файл
-        kiz_validation.log не писался никогда. Теперь атрибут называется
-        self._log_callback, метод класса достижим.
+        Используется ТОЛЬКО если log_manager не был передан в конструктор.
+        Пишет в старый kiz_validation.log (если задан путь) и в колбэк.
+        Ошибки записи не глотаются молча: пишем в stderr.
 
-        Вход: message — текст для записи.
+        Вход: message — текст сообщения.
         Выход: нет.
         """
-        # 1. Пишем в файл, только если set_log_path уже вызван
         if self._log_path is not None:
             try:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
                 with open(self._log_path, "a", encoding="utf-8") as f:
                     f.write(f"[{timestamp}] {message}\n")
-            except Exception:
-                # Ошибка логирования не должна ронять основную логику
-                pass
+            except Exception as error:
+                # Раньше здесь был молчаливый pass. Теперь хотя бы сообщаем
+                # в stderr — иначе ошибки логирования теряются бесследно.
+                sys.stderr.write(
+                    f"[KizStorage] Не удалось записать в {self._log_path}: {error}\n"
+                )
 
-        # 2. Дополнительно зовём колбэк, если он был передан в конструктор.
-        #    Оборачиваем в try, чтобы падение UI-колбэка не рушило хранилище.
         try:
             self._log_callback(message)
-        except Exception:
-            pass
+        except Exception as error:
+            sys.stderr.write(f"[KizStorage] Ошибка log_callback: {error}\n")
+
+    # NEW: публичные методы логирования. Если есть _logger — делегируем в него,
+    # иначе — fallback на _log. Так существующий код, вызывавший self._log(...),
+    # продолжает работать, а новый код может вызывать info/warning/error/debug
+    # и получать корректный уровень.
+
+    def debug(self, message: str) -> None:
+        """Отладочное сообщение. В fallback-режиме _log игнорируется:
+        старый _log не различает уровни, поэтому debug туда не пишем."""
+        if self._logger is not None:
+            self._logger.debug(message)
+        # Иначе — молча ничего: без логгера уровня DEBUG нет.
+
+    def info(self, message: str) -> None:
+        """Информационное сообщение."""
+        if self._logger is not None:
+            self._logger.info(message)
+        else:
+            self._log(message)
+
+    def warning(self, message: str) -> None:
+        """Предупреждение."""
+        if self._logger is not None:
+            self._logger.warning(message)
+        else:
+            self._log(f"[WARNING] {message}")
+
+    def error(self, message: str) -> None:
+        """Ошибка."""
+        if self._logger is not None:
+            self._logger.error(message)
+        else:
+            self._log(f"[ERROR] {message}")
 
     # ---------- Основные методы ----------
 
@@ -126,12 +189,12 @@ class KizStorage:
         """
         # NEW: предупреждаем, если load() попал внутрь батча
         if self._batch_depth > 0:
-            self._log(
-                "ПРЕДУПРЕЖДЕНИЕ: load() вызван внутри батча. "
-                "Это может привести к неожиданному промежуточному сохранению."
-            )
+            self.warning(
+        "load() вызван внутри батча. "
+        "Это может привести к неожиданному промежуточному сохранению."
+    )
         if not self._file_path.exists():
-            self._log("Файл used_kiz.json не найден, будет создан новый.")
+            self.info("Файл used_kiz.json не найден, будет создан новый.")
             self._data = {}
             self.save()
             return
@@ -150,23 +213,23 @@ class KizStorage:
                     clean_kiz = storage_list[0]  # обычно один
                     if clean_kiz != kiz:
                         migrated = True
-                        self._log(f"Миграция: {kiz[:30]}... → {clean_kiz}")
+                        self.info(f"Миграция: {kiz[:30]}... → {clean_kiz}")
                     # Если ключ уже существует, перезаписываем (можно объединять даты, но упростим)
                     new_data[clean_kiz] = record
                 else:
                     # Некорректный КИЗ – удаляем
-                    self._log(f"Миграция: удалена некорректная запись {kiz[:30]}...")
+                    self.warning(f"Миграция: удалена некорректная запись {kiz[:30]}...")
                     migrated = True
 
             self._data = new_data
             if migrated:
                 self.save()
-                self._log("Миграция завершена: все ключи обрезаны до 31 символа, некорректные удалены.")
+                self.info("Миграция завершена: все ключи обрезаны до 31 символа, некорректные удалены.")
             # -------------------------------------
 
-            self._log(f"Загружено {len(self._data)} записей из used_kiz.json")
+            self.info(f"Загружено {len(self._data)} записей из used_kiz.json")
         except Exception as e:
-            self._log(f"Ошибка чтения: {e}. Создан новый словарь.")
+            self.error(f"Ошибка чтения: {e}. Создан новый словарь.")
             self._data = {}
             self.save()
 
@@ -209,7 +272,7 @@ class KizStorage:
             tmp_path = None
         except Exception as e:
             # Логируем и пробрасываем: скрывать проблему нельзя
-            self._log(f"Ошибка сохранения {self._file_path}: {e}")
+            self.error(f"Ошибка сохранения {self._file_path}: {e}")
             raise
         finally:
             # Подчищаем tmp-файл, если os.replace не сработал
@@ -262,7 +325,7 @@ class KizStorage:
                 # Сбрасываем счётчики после промежуточного сохранения
                 self._batch_dirty = False
                 self._batch_changes_count = 0
-                self._log(
+                self.info(
                     f"Батч: промежуточное сохранение после {self.BATCH_SAVE_THRESHOLD} "
                     f"изменений (всего в _data: {len(self._data)} записей)."
                 )
@@ -289,7 +352,7 @@ class KizStorage:
 
     def clean_old_entries(self, months: int = 1) -> int:
         if not self._data:
-            self._log("Очистка: нет записей для удаления.")
+            self.info("Очистка: нет записей для удаления.")
             return 0
 
         cutoff = datetime.now() - timedelta(days=months * 30)
@@ -303,19 +366,19 @@ class KizStorage:
                 if sold_date < cutoff:
                     to_delete.append((kiz, sold_date_str))
             except ValueError:
-                self._log(f"Очистка: некорректная дата продажи '{sold_date_str}' для КИЗа {kiz}, запись пропущена")
+                self.info(f"Очистка: некорректная дата продажи '{sold_date_str}' для КИЗа {kiz}, запись пропущена")
                 continue
 
         if not to_delete:
-            self._log(f"Очистка: нет записей старше {months} месяца(ев).")
+            self.info(f"Очистка: нет записей старше {months} месяца(ев).")
             return 0
 
         for kiz, sold_date_str in to_delete:
             del self._data[kiz]
-            self._log(f"Очистка: удалён КИЗ {kiz} с датой продажи {sold_date_str}")
+            self.info(f"Очистка: удалён КИЗ {kiz} с датой продажи {sold_date_str}")
 
         self.save()
-        self._log(f"Очистка завершена: удалено {len(to_delete)} записей.")
+        self.info(f"Очистка завершена: удалено {len(to_delete)} записей.")
         return len(to_delete)
 
     # ---------- Дополнительные ----------
@@ -326,4 +389,4 @@ class KizStorage:
     def clear(self) -> None:
         self._data.clear()
         self.save()
-        self._log("Все записи удалены.")
+        self.warning("Все записи удалены.")

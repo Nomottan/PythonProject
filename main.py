@@ -12,6 +12,7 @@ from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
 from utils.kiz_storage import KizStorage
+from utils.log_system import LogManager
 from services.kiz_validator import KizValidator
 
 class MainWindow(QMainWindow):
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
         """)
 
         self.paths = PathManager()
+        self.log_manager = LogManager()
         self.config = ConfigManager(self.paths)
         self.active_child = None
         self.chz_mp_window = None
@@ -38,8 +40,11 @@ class MainWindow(QMainWindow):
         self.brands_window = None
         self.returns_window = None
         self.compare_window = None
-        kiz_storage = KizStorage(self.paths.get_data_file("used_kiz.json"))
-        kiz_validator = KizValidator(kiz_storage)
+        self.kiz_storage = KizStorage(
+            self.paths.get_data_file("used_kiz.json"),
+            log_manager=self.log_manager,
+        )
+        kiz_validator = KizValidator(self.kiz_storage)
         self.kiz_validator = kiz_validator
 
         # ---- Таймер для обновления кнопки даты/времени ----
@@ -139,7 +144,7 @@ class MainWindow(QMainWindow):
 
     def open_returns_window(self):
         if self.returns_window is None or not self.returns_window.isVisible():
-            self.returns_window = ReturnsWindow(self)
+            self.returns_window = ReturnsWindow(self, self.log_manager)
             WindowFactory.show_child_window(self, self.returns_window)
         else:
             self.returns_window.raise_()

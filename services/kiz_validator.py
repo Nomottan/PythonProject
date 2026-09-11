@@ -134,8 +134,8 @@ class KizValidator:
         """
         existing = self.storage.get(kiz)
         if existing is None:
-            self.storage._log(f"Возврат: КИЗ {kiz} отсутствует в хранилище – пропущен")
-            return False
+            self.storage._log(f"Возврат: КИЗ {kiz} отсутствует в хранилище, дата возврата не была зафиксирована")
+            return True
 
         # КИЗ есть – обновляем дату возврата
         return_date = datetime.now().strftime("%d-%m-%Y")
