@@ -1621,31 +1621,37 @@ class WindowFactory:
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(5)
+
+        top_layout.addStretch()
+        top_layout.addWidget(LabelFactory.create_header_label(child, title))
+        top_layout.addStretch()
+
         # Кнопка закрытия
         if close_button:
             close_btn = QPushButton("✕")
             close_btn.setFixedSize(25, 25)
             close_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {close_button_color};
-                    color: white;
-                    font-weight: bold;
-                    border: none;
-                    border-radius: 5px;
-                }}
-                QPushButton:hover {{
-                    background-color: #c10020;
-                }}
-            """)
+                        QPushButton {{
+                            background-color: {close_button_color};
+                            color: white;
+                            font-weight: bold;
+                            border: none;
+                            border-radius: 5px;
+                        }}
+                        QPushButton:hover {{
+                            background-color: #c10020;
+                        }}
+                    """)
             if close_callback:
                 close_btn.clicked.connect(close_callback)
             else:
                 close_btn.clicked.connect(child.close)
+            top_layout.addWidget(close_btn)
 
-            close_layout = QHBoxLayout()
-            close_layout.addStretch()
-            close_layout.addWidget(close_btn)
-            main_layout.addLayout(close_layout)
+        main_layout.addLayout(top_layout)
 
         if return_layout:
             return main_layout

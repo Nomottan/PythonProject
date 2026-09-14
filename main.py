@@ -5,7 +5,7 @@ from PySide6.QtCore import QTimer, Qt
 
 from ui.windows import (
     ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
-    StringListDialog
+    StringListDialog, PlannerWindow
 )
 from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
@@ -40,6 +40,7 @@ class MainWindow(QMainWindow):
         self.brands_window = None
         self.returns_window = None
         self.compare_window = None
+        self.planner_window = None
         self.kiz_storage = KizStorage(
             self.paths.get_data_file("used_kiz.json"),
             log_manager=self.log_manager,
@@ -75,7 +76,6 @@ class MainWindow(QMainWindow):
 
         # Кнопка даты/времени (правая верхняя) — сделать неактивной
         self.datetime_btn = ButtonFactory.create_datetime_button(self, self.open_datetime_window)
-        self.datetime_btn.setEnabled(False)   # <-- отключаем кнопку
 
         # ============================================================
         # 3. МАКЕТ
@@ -178,8 +178,12 @@ class MainWindow(QMainWindow):
         dialog.show()
 
     def open_datetime_window(self):
-        # Кнопка отключена, но на всякий случай оставим заглушку
-        pass
+        if self.planner_window is None or not self.planner_window.isVisible():
+            self.planner_window = PlannerWindow(self)
+            WindowFactory.show_child_window(self, self.planner_window)
+        else:
+            self.planner_window.raise_()
+            self.planner_window.activateWindow()
 
     def open_compare_window(self):
         if self.compare_window is None or not self.compare_window.isVisible():
@@ -192,7 +196,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         for child in (self.chz_mp_window, self.sellers_window,
                       self.brands_window, self.returns_window,
-                      self.compare_window):
+                      self.compare_window, self.planner_window):
             if child and child.isVisible():
                 parent_rect = self.frameGeometry()
                 child.setGeometry(10, 10,
