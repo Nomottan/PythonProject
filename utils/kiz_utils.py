@@ -141,6 +141,19 @@ class KizUtils:
                 if logger is not None:
                     logger.debug(f"КИЗ транслитерирован: {frag[:30]}...")
                 frag = TextUtils.keyboard_translit(frag)
+
+            cleaned_frag = ''.join(ch for ch in frag if 32 <= ord(ch) <= 126)
+            if len(cleaned_frag) < 31:
+                if KizUtils._stats_enabled:
+                    KizUtils._stats["dropped_short"] += 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ отброшен после очистки непечатаемых символов: "
+                        f"{cleaned_frag[:30]}..."
+                    )
+                continue
+            frag = cleaned_frag
+
             result.append(frag)
 
         # Успешно обработанные в этой порции.

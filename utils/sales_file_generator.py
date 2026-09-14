@@ -18,7 +18,7 @@ class SalesFileGenerator:
         "Наименование продукта",
         "КИЗ",
         "GTIN",
-        "Цена"
+        "НДС"
     ]
 
     def __init__(self, work_folder: Path, headers: Optional[List[str]] = None,
@@ -71,8 +71,8 @@ class SalesFileGenerator:
         # GTIN – символы с 3 по 16 (индексы 2..15)
         gtin = kiz_short[2:16] if len(kiz_short) >= 16 else ""
 
-        # Случайная цена от 10 до 20
-        price = random.randint(10, 20)
+        # ндс 5%
+        vad = "5%"
 
         # Имя файла
         safe_from = TextUtils.sanitize_filename(from_seller_name)
@@ -84,7 +84,7 @@ class SalesFileGenerator:
             product_name,
             kiz_short,
             gtin,
-            price
+            vad
         ]
 
         ExcelHelper.append_row_to_file(file_path, row_data, headers=self.headers)
