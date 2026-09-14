@@ -431,7 +431,7 @@ class ChzMPWindow(QMainWindow):
         self.status_display.clear()
         self.status_display.append("Внесение цен и финализация...")
 
-        service = FinalizePricesService()
+        service = FinalizePricesService(self.parent().kiz_validator)
 
         def on_finished():
             self.status_display.append("Цены установлены, файлы финализированы.")
