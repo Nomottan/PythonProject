@@ -175,7 +175,6 @@ class MainWindow(QMainWindow):
     # ============================================================
     def open_string_list_dialog(self, title, strings):
         dialog = StringListDialog(self, title, strings)
-        dialog.setWindowModality(Qt.ApplicationModal)
         dialog.show()
 
     def open_datetime_window(self):

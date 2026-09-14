@@ -162,13 +162,6 @@ class ExtendedWindowFactory:
         if close_on_click_outside:
             ExtendedWindowFactory._setup_click_outside_close(window)
 
-        # 10. Модальность
-        if modal:
-            if isinstance(window, QDialog):
-                window.setModal(True)
-            else:
-                window.setWindowModality(Qt.ApplicationModal)
-
         # 11. Размер и центрирование
         window.resize(default_width, default_height)
         window.setMinimumSize(default_width, default_height)
@@ -179,12 +172,15 @@ class ExtendedWindowFactory:
         # 12. Callback при закрытии
         if on_close:
             original_close = window.closeEvent
+
             def new_close(event):
-                on_close()
+                if not getattr(window, '_cancel_on_close', False):
+                    on_close()
                 if original_close:
                     original_close(event)
                 else:
                     event.accept()
+
             window.closeEvent = new_close
 
         if return_content_layout:
@@ -219,21 +215,57 @@ class ExtendedWindowFactory:
 
     @staticmethod
     def _setup_click_outside_close(window):
-        def eventFilter(obj, event):
+        """Закрывает окно при клике вне его границ.
+
+        Логика:
+            - Подменяем метод eventFilter у окна так, чтобы он ловил
+              MouseButtonPress за пределами window.rect().
+            - Ставим window как фильтр на само себя и на QApplication:
+              QApplication ловит клики по другим виджетам, self — по своим.
+            - При клике вне окна ставим _cancel_on_close=True и закрываем:
+              on_close-обёртка увидит флаг и не выполнит сохранение.
+
+        REPLACE: раньше здесь была строка `window._click_filter = eventFilter`,
+        но она только сохраняла функцию в атрибут — Qt её не вызывал.
+        Qt вызывает window.eventFilter(obj, event), а этот метод у QMainWindow
+        по умолчанию пустой. Теперь подменяем именно eventFilter.
+        """
+
+        def event_filter(obj, event):
             if event.type() == QEvent.MouseButtonPress:
-                if not window.rect().contains(window.mapFromGlobal(event.globalPosition().toPoint())):
-                    window.close()
+                # mapFromGlobal переводит глобальные координаты в локальные
+                # координаты окна. Если точка не попадает в rect() — клик снаружи.
+                local_pos = window.mapFromGlobal(event.globalPosition().toPoint())
+                if not window.rect().contains(local_pos):
+                    if window.isVisible():
+                        # Флаг: закрытие по отмене, on_close не вызывать.
+                        window._cancel_on_close = True
+                        window.close()
+                    # Событие поглощено — не даём ему дойти до других виджетов.
                     return True
             return False
+
+        # Подменяем метод eventFilter у конкретного экземпляра окна.
+        window.eventFilter = event_filter
+        # Фильтр на само окно (ловит клики по его области).
         window.installEventFilter(window)
-        QApplication.instance().installEventFilter(window)
-        window._click_filter = eventFilter
+        # Фильтр на приложение (ловит клики по другим окнам/виджетам).
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(window)
+
+        # Обёртка closeEvent: при закрытии снимаем app-фильтр, чтобы
+        # не осталось висячих ссылок на уже мёртвое окно.
         original_close = window.closeEvent
+
         def new_close(event):
-            QApplication.instance().removeEventFilter(window)
+            app_ref = QApplication.instance()
+            if app_ref is not None:
+                app_ref.removeEventFilter(window)
             if original_close:
                 original_close(event)
             else:
                 event.accept()
+
         window.closeEvent = new_close
 

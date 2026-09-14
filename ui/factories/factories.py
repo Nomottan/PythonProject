@@ -1653,8 +1653,6 @@ class WindowFactory:
 
     @staticmethod
     def show_child_window(parent, child, modal=True):
-        if modal:
-            child.setWindowModality(Qt.WindowModal)
 
         parent_rect = parent.frameGeometry()
         child.setGeometry(10, 10,

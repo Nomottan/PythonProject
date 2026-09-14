@@ -24,7 +24,6 @@ class SellersWindow(QMainWindow):
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
-            modal=False,
             center=True,
             on_close=self.save_and_close,
             return_content_layout=True,
@@ -131,13 +130,11 @@ class SellersWindow(QMainWindow):
 
     def _edit_company(self, seller):
         dialog = CompanyDialog(self, seller)
-        dialog.setWindowModality(Qt.ApplicationModal)
         dialog.show()
 
     def _edit_brands(self, seller):
         brands = self.main_window.config.get_brands_objects()
         dialog = BrandChecklistDialog(self, seller, brands)
-        dialog.setWindowModality(Qt.ApplicationModal)
         dialog.show()
 
     def refresh_ui(self):
@@ -220,7 +217,6 @@ class BrandChecklistDialog(QMainWindow):
             close_button=True,
             draggable=True,
             close_on_click_outside=True,
-            modal=True,
             center=True,
             ok_cancel=True,
             ok_callback=self.accept,

@@ -29,7 +29,6 @@ class BrandsWindow(QMainWindow):
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
-            modal=True,
             center=True,
             on_close=self.save_and_close,
             return_content_layout=True,
@@ -83,7 +82,6 @@ class BrandsWindow(QMainWindow):
         brands_dict = {b.name: b for b in self.brands}
         sellers = self.main_window.config.get_sellers_objects(brands_dict=brands_dict)
         dialog = BrandEditDialog(self, brand, sellers, main_window=self.main_window)
-        dialog.setWindowModality(Qt.ApplicationModal)
         original_close = dialog.closeEvent
         def new_close(event):
             original_close(event)
@@ -99,7 +97,6 @@ class BrandsWindow(QMainWindow):
         brands_dict = {b.name: b for b in self.brands}
         sellers = self.main_window.config.get_sellers_objects(brands_dict=brands_dict)
         dialog = BrandEditDialog(self, new_brand, sellers, main_window=self.main_window)
-        dialog.setWindowModality(Qt.ApplicationModal)
         original_close = dialog.closeEvent
         def new_close(event):
             original_close(event)

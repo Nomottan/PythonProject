@@ -19,12 +19,10 @@ class StringListDialog(QMainWindow):
             parent=parent,
             title=title,
             bg_color=(40, 30, 50, 0.95),
-            close_button=True,
+            close_button=False,
             draggable=True,
             close_on_click_outside=True,
-            modal=True,
             center=True,
-            on_close=self._save_and_close,
             action_button="Готово",
             action_callback=self._save_and_close,
             action_button_alignment="center",
@@ -39,7 +37,7 @@ class StringListDialog(QMainWindow):
         content_layout.addWidget(self.list_widget)
 
     def _save_and_close(self):
-        self.strings = self.list_widget.get_items()
+        self.strings[:] = self.list_widget.get_items()
         self.close()
 
 class AveragePriceInputDialog(QDialog):
@@ -115,7 +113,6 @@ class PricesEditWindow(QDialog):
             close_button=True,
             draggable=True,
             close_on_click_outside=True,
-            modal=True,
             center=True,
             return_content_layout=True,
             default_width=500,
