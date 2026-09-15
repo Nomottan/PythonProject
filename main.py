@@ -14,6 +14,7 @@ from utils.path_manager import PathManager
 from utils.kiz_storage import KizStorage
 from utils.log_system import LogManager
 from services.kiz_validator import KizValidator
+from services.planner_service import PlannerService
 
 class MainWindow(QMainWindow):
     # ============================================================
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         )
         kiz_validator = KizValidator(self.kiz_storage)
         self.kiz_validator = kiz_validator
+        self.planner_service = PlannerService()
 
         # ---- Таймер для обновления кнопки даты/времени ----
         self.timer = QTimer()
@@ -179,7 +181,11 @@ class MainWindow(QMainWindow):
 
     def open_datetime_window(self):
         if self.planner_window is None or not self.planner_window.isVisible():
-            self.planner_window = PlannerWindow(self)
+            # NEW: передаём planner_service, созданный в __init__.
+            self.planner_window = PlannerWindow(
+                self,
+                planner_service=self.planner_service,
+            )
             WindowFactory.show_child_window(self, self.planner_window)
         else:
             self.planner_window.raise_()

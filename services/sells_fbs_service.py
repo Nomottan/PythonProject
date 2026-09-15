@@ -7,6 +7,7 @@ from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
 from utils.kiz_utils import KizUtils
 from utils.sales_file_generator import SalesFileGenerator
+import json, random
 
 class PreparationService:
     """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
@@ -101,7 +102,7 @@ class ExportKizService:
         self.kiz_validator.load()
 
         kiz_by_seller = {seller.name: set() for seller in sellers}
-
+        prices_by_seller = {seller.name: {} for seller in sellers}
         # NEW: единый батч на оба цикла. Все вызовы validate_for_sale внутри
         # накапливают изменения в памяти; финальный save() — на выходе из with.
         # Промежуточные save() каждые BATCH_SAVE_THRESHOLD изменений добавляет
@@ -184,15 +185,25 @@ class ExportKizService:
                             continue
                         sheet_kiz = wb["КИЗ"]
                         kiz_to_task = {}
+                        skipped_by_type={}
                         for row in sheet_kiz.iter_rows(min_row=2, values_only=True):
                             if len(row) >= 9:  # как минимум до столбца I
                                 task_num = row[0]  # столбец A
                                 kiz = row[2]  # столбец C
                                 operation_type = row[8]  # столбец I (тип операции)
-                                if kiz and task_num and operation_type and str(operation_type).strip().upper() == "ПРОДАЖА":
-                                    kiz_to_task[str(kiz).strip()] = str(task_num).strip()
+                                price = row[4] if len(row) > 4 else None  # NEW: столбец E — Стоимость
+                                if kiz and task_num and operation_type and str(
+                                        operation_type).strip().upper() == "ПРОДАЖА":
+                                    kiz_to_task[str(kiz).strip()] = (str(task_num).strip(), price)
                                 else:
-                                    ctx.log(f"  Пропущен КИЗ {kiz} (задание {task_num}) – тип операции '{operation_type}'")
+                                    op_key = str(operation_type).strip() if operation_type else "(пусто)"
+                                    skipped_by_type[op_key] = skipped_by_type.get(op_key, 0) + 1
+                        if skipped_by_type:
+                            ctx.log("  Пропущено строк по типу операции:")
+                            for op_type, count in sorted(skipped_by_type.items(), key=lambda x: x[0].lower()):
+                                ctx.log(f"    '{op_type}': {count}")
+                        else:
+                            ctx.log("  Все строки прошли фильтр по типу операции 'Продажа'")
 
                         if "Сборочные задания" not in wb.sheetnames:
                             ctx.log(f"  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
@@ -207,7 +218,7 @@ class ExportKizService:
                                     if task_num and date_created:
                                         task_to_date[str(task_num).strip()] = str(date_created).strip()
 
-                        for raw_kiz, task_num in kiz_to_task.items():
+                        for raw_kiz, (task_num, price_raw) in kiz_to_task.items():
                             full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
                             if not full_cleaned_list:
                                 ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
@@ -219,12 +230,28 @@ class ExportKizService:
                                 storage_kiz = storage_list[0]
                                 sale_date_str = task_to_date.get(task_num)
                                 if sale_date_str is None:
-                                    ctx.log(f"  ⚠️ Для КИЗа {storage_kiz} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
-                                    if self.kiz_validator.validate_for_sale(storage_kiz):
-                                        kiz_by_seller[seller.name].add(full_kiz)
+                                    ctx.log(
+                                        f"  ⚠️ Для КИЗа {storage_kiz} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
+                                    is_valid = self.kiz_validator.validate_for_sale(storage_kiz)
                                 else:
-                                    if self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str):
-                                        kiz_by_seller[seller.name].add(full_kiz)
+                                    is_valid = self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str)
+
+                                if is_valid:
+                                    kiz_by_seller[seller.name].add(full_kiz)
+                                    # NEW: обработка цены — float() в try/except,
+                                    # проверка > 0, int() при записи (вариант Б).
+                                    price_value = None
+                                    try:
+                                        price_value = float(price_raw)
+                                    except (TypeError, ValueError):
+                                        ctx.log(
+                                            f"    ⚠️ Некорректная цена {price_raw!r} для КИЗа {storage_kiz} – пропущена")
+                                    if price_value is not None and price_value <= 0:
+                                        ctx.log(
+                                            f"    ⚠️ Неположительная цена {price_value} для КИЗа {storage_kiz} – пропущена")
+                                        price_value = None
+                                    if price_value is not None:
+                                        prices_by_seller[seller.name][storage_kiz] = int(price_value)
 
                         ctx.log(f"  Добавлено {len(kiz_to_task)} записей для продавца '{seller.name}'")
                     finally:
@@ -233,7 +260,13 @@ class ExportKizService:
                 except Exception as e:
                     ctx.log(f"Ошибка обработки файла {mp_path.name}: {e}")
                     continue
-
+        prices_json_path = ctx.work_folder / "prices_from_mp.json"
+        try:
+            with open(prices_json_path, "w", encoding="utf-8") as f:
+                json.dump(prices_by_seller, f, ensure_ascii=False, indent=2)
+            ctx.log(f"  Цены сохранены в {prices_json_path.name}")
+        except (IOError, OSError) as e:
+            ctx.log(f"  ⚠️ Не удалось сохранить {prices_json_path.name}: {e}")
         # ------------------------------------------------------------
         # 3. Сохранение текстовых файлов — ВНЕ батча.
         # .txt-файлы не связаны с used_kiz.json, поэтому их запись
@@ -415,6 +448,28 @@ class FinalizePricesService:
     def __init__(self, kiz_validator):
         self.kiz_validator = kiz_validator
 
+    def _load_prices_from_json(self, ctx) -> dict:
+        """Читает prices_from_mp.json из рабочей папки.
+
+        Вход: ctx — TaskContext с work_folder.
+        Выход: dict {seller_name: {storage_kiz: price}} или {} если
+               файл не найден / битый.
+
+        Роль: переносчик цен между ExportKizService.export и
+              FinalizePricesService.finalize. Единая точка обработки
+              ошибок чтения.
+        """
+        path = ctx.work_folder / "prices_from_mp.json"
+        if not path.is_file():
+            ctx.log("  ⚠️ prices_from_mp.json не найден – цены не будут применены")
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            ctx.log(f"  ⚠️ Ошибка чтения prices_from_mp.json: {e}")
+            return {}
+
     def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
         if saved_prices is None:
             saved_prices = {}
@@ -424,47 +479,39 @@ class FinalizePricesService:
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
         self.kiz_validator.set_log_path(ctx.work_folder)
         self.kiz_validator.load()
-        for seller in sellers:
-            # ---- 1. Загрузка цен из отчёта МП ----
-            price_map = {}
-            prices_list = []
-            average_price = None
-            mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, f"ОТЧЁТ МП ПО {seller.name}*.xlsx")
-            if mp_files:
-                mp_path = mp_files[0]
-                ctx.log(f"\nЗагрузка цен из отчёта: {mp_path.name}")
-                wb_mp = ExcelHelper.open_workbook_with_ctx(mp_path, ctx, description="отчёт МП", read_only=True, data_only=True)
-                if wb_mp:
-                    try:
-                        if "КИЗ" in wb_mp.sheetnames:
-                            sheet = wb_mp["КИЗ"]
-                            for row in sheet.iter_rows(min_row=2, values_only=True):
-                                if len(row) >= 3 and row[1] and row[2] is not None:
-                                    kiz = str(row[1]).strip()
-                                    price = row[2]
-                                    if isinstance(price, (int, float)):
-                                        price_map[kiz] = price
-                                        prices_list.append(price)
-                            if prices_list:
-                                average_price = PriceUtils.calculate_average(saved_prices.get(seller.name), prices_list)
-                                ctx.log(f"  Загружено {len(prices_list)} цен, новая средняя: {average_price}")
-                            else:
-                                ctx.log("  В отчёте не найдено ни одной цены")
-                        else:
-                            ctx.log("  Лист 'КИЗ' отсутствует – цены не загружены")
-                    finally:
-                        wb_mp.close()
-            else:
-                ctx.log(f"\nОтчёт МП для продавца '{seller.name}' не найден – цены не загружены")
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback)
+        ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
+        ctx.log(f"Рабочая папка: {ctx.work_folder}")
+        self.kiz_validator.set_log_path(ctx.work_folder)
+        self.kiz_validator.load()
 
+        # NEW: читаем цены из JSON один раз — до цикла по продавцам.
+        all_prices = self._load_prices_from_json(ctx)
+
+        for seller in sellers:
+            # NEW: price_map берётся из JSON, а не из повторного открытия отчёта.
+            price_map = all_prices.get(seller.name, {})
+            prices_list = list(price_map.values())
+            average_price = None
+            # NEW: средняя рассчитывается сразу, если есть цены.
+            if prices_list:
+                average_price = PriceUtils.calculate_average(saved_prices.get(seller.name), prices_list)
+                ctx.log(
+                    f"\nПродавец '{seller.name}': загружено {len(prices_list)} цен из отчёта, средняя: {average_price}")
+            else:
+                ctx.log(f"\nПродавец '{seller.name}': в отчётах нет цен – средняя будет определена ниже")
             # ---- 2. Если средняя цена не определена, запрашиваем у пользователя ----
             if average_price is None:
-                # Используем сохранённую, если есть
+                # NEW: сначала — сохранённая цена текущего продавца.
                 if saved_prices.get(seller.name):
                     average_price = saved_prices[seller.name]
                     ctx.log(f"  Использую сохранённую цену: {average_price}")
+                # NEW: затем — случайная средняя с другого продавца.
+                elif saved_prices:
+                    average_price = random.choice(list(saved_prices.values()))
+                    ctx.log(f"  Использую случайную среднюю с другого продавца: {average_price}")
                 else:
-                    # Вызываем диалог ввода
+                    # NEW: и только если совсем нет цен — диалог ввода.
                     from ui.windows.shared_dialogs import AveragePriceInputDialog
                     dialog = AveragePriceInputDialog(self, seller.name)
                     if dialog.exec_() == QDialog.Accepted:
