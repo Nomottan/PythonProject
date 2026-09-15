@@ -47,7 +47,7 @@ class PreparationService:
                 new_name = ctx.format_filename("ЧЗ_МП_{date}")
             else:
                 new_name = ctx.format_filename(f"ЧЗ_МП_{{date}}_{i + 1}")
-            dst = ctx.work_folder / new_name
+            dst = ctx.reports_dir / new_name
             FileHelper.copy_file_with_log(
                 src_path, dst, ctx,
                 description="ЧЗ МП",
@@ -74,7 +74,7 @@ class PreparationService:
                 new_name = src_path.name
                 ctx.log(f"Не удалось определить продавца для: {src_path.name}")
 
-            dst = ctx.work_folder / new_name
+            dst = ctx.reports_dir / new_name
             FileHelper.copy_file_with_log(
                 src_path, dst, ctx,
                 description="отчёт",
@@ -98,7 +98,7 @@ class ExportKizService:
         ctx.log("=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ (с валидацией и очисткой) ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-        self.kiz_validator.set_log_path(ctx.work_folder)
+        self.kiz_validator.set_log_path(ctx.logs_dir)
         self.kiz_validator.load()
 
         kiz_by_seller = {seller.name: set() for seller in sellers}
@@ -111,7 +111,7 @@ class ExportKizService:
             # ------------------------------------------------------------
             # 1. Обработка ЧЗ_МП
             # ------------------------------------------------------------
-            chz_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ЧЗ_МП*.xlsx")
+            chz_files = FileHelper.find_files_by_pattern(ctx.reports_dir, "ЧЗ_МП*.xlsx")
             for chz_path in chz_files:
                 # NEW: ошибка на одном файле не должна прерывать обработку
                 # остальных — логируем и переходим к следующему файлу.
@@ -155,7 +155,7 @@ class ExportKizService:
             # ------------------------------------------------------------
             # 2. Обработка отчётов МП (с датами из листа "Сборочные задания")
             # ------------------------------------------------------------
-            mp_files = FileHelper.find_files_by_pattern(ctx.work_folder, "ОТЧЁТ МП ПО *.xlsx")
+            mp_files = FileHelper.find_files_by_pattern(ctx.reports_dir, "ОТЧЁТ МП ПО *.xlsx")
             for mp_path in mp_files:
                 # NEW: тот же принцип — одна ошибка на файле, продолжаем со следующего
                 try:
@@ -260,7 +260,7 @@ class ExportKizService:
                 except Exception as e:
                     ctx.log(f"Ошибка обработки файла {mp_path.name}: {e}")
                     continue
-        prices_json_path = ctx.work_folder / "prices_from_mp.json"
+        prices_json_path = ctx.processing_dir / "prices_from_mp.json"
         try:
             with open(prices_json_path, "w", encoding="utf-8") as f:
                 json.dump(prices_by_seller, f, ensure_ascii=False, indent=2)
@@ -277,7 +277,7 @@ class ExportKizService:
             if not kiz_set:
                 ctx.log(f"  {seller_name}: нет КИЗов – файл не создан")
                 continue
-            txt_path = ctx.work_folder / f"{seller_name}.txt"
+            txt_path = ctx.processing_dir/ f"{seller_name}.txt"
             with open(txt_path, "w", encoding="utf-8") as f:
                 for kiz in sorted(kiz_set):
                     f.write(kiz + "\n")
@@ -296,7 +296,7 @@ class FilterPreFinalService:
         allowed_companies = TextUtils.get_allowed_companies(sellers)
 
         for seller in sellers:
-            file_path = ctx.work_folder / f"{seller.name}.xlsx"
+            file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
                 ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
                 continue
@@ -367,10 +367,10 @@ class GenerateSalesService:
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
         # Создаём генератор файлов продаж
-        sales_gen = SalesFileGenerator(ctx.work_folder)
+        sales_gen = SalesFileGenerator(ctx.sales_dir)
 
         for seller in sellers:
-            file_path = ctx.work_folder / f"{seller.name}.xlsx"
+            file_path = ctx.processing_dir  / f"{seller.name}.xlsx"
             if not file_path.is_file():
                 ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
                 continue
@@ -459,7 +459,7 @@ class FinalizePricesService:
               FinalizePricesService.finalize. Единая точка обработки
               ошибок чтения.
         """
-        path = ctx.work_folder / "prices_from_mp.json"
+        path = ctx.processing_dir / "prices_from_mp.json"
         if not path.is_file():
             ctx.log("  ⚠️ prices_from_mp.json не найден – цены не будут применены")
             return {}
@@ -477,12 +477,8 @@ class FinalizePricesService:
         ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback)
         ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
-        self.kiz_validator.set_log_path(ctx.work_folder)
-        self.kiz_validator.load()
-        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback)
-        ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
-        ctx.log(f"Рабочая папка: {ctx.work_folder}")
-        self.kiz_validator.set_log_path(ctx.work_folder)
+        # REPLACE: лог KizValidator — в Логи/.
+        self.kiz_validator.set_log_path(ctx.logs_dir)
         self.kiz_validator.load()
 
         # NEW: читаем цены из JSON один раз — до цикла по продавцам.
@@ -523,7 +519,7 @@ class FinalizePricesService:
                         continue
 
             # ---- 3. Обработка предитогового файла ----
-            file_path = ctx.work_folder / f"{seller.name}.xlsx"
+            file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
                 ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
                 continue
@@ -566,19 +562,19 @@ class FinalizePricesService:
                 wb.save(file_path)
                 wb.close()
 
+                # REPLACE: копируем предитоговый файл в корень с новым именем.
+                # Исходник остаётся в «Обработке». Раньше был rename —
+                # предитоговый файл исчезал из исходного места.
                 new_name = ctx.format_filename(f"ИТОГ {seller.name} {{date}}")
                 new_path = ctx.work_folder / new_name
-                file_path.rename(new_path)
-                ctx.log(f"  Файл переименован в {new_path.name}")
+                FileHelper.copy_file_with_log(
+                    file_path, new_path, ctx,
+                    description="итоговый файл", overwrite=True
+                )
+                ctx.log(f"  Итоговый файл сохранён: {new_path.name}")
 
                 # Сохраняем среднюю цену
                 saved_prices[seller.name] = average_price
-
-                # Дополнительное сохранение (на случай, если rename сбросил изменения)
-                wb = ExcelHelper.open_workbook_with_ctx(new_path, ctx, description="итоговый файл", read_only=False, data_only=True)
-                if wb:
-                    wb.save(new_path)
-                    wb.close()
 
             except Exception as e:
                 ctx.log(f"  Ошибка обработки файла: {e}")

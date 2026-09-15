@@ -248,13 +248,13 @@ class ChzMPWindow(QMainWindow):
                 self.list_reports.addItem(Path(f).name)
 
     def _get_log_path(self, log_filename):
-        """Формирует путь к лог-файлу в рабочей папке."""
+        """Формирует путь к лог-файлу в подпапке Логи/ рабочей папки."""
         if not self.target_dir:
             return None
         today = date.today()
         date_str = f"{today.day}_{today.month}_{today.year}"
         work_folder = Path(self.target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        return work_folder / log_filename
+        return work_folder / "Логи" / log_filename
 
     def _load_log_into_status(self, log_path):
         """Загружает содержимое лог-файла в статусную область."""

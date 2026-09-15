@@ -10,6 +10,13 @@ from utils.log_system.logger import Logger
 class TaskContext:
     """
     Контекст выполнения задачи: рабочая папка, дата, логирование.
+    Структура work_folder:
+        work_folder/
+        ├── Логи/        — все task-логи шагов + лог KizValidator
+        ├── Отчёты/      — скопированные отчёты МП и ЧЗ_МП
+        ├── Продажи/     — файлы продаж между продавцами
+        ├── Обработка/   — {seller}.txt, {seller}.xlsx, prices_from_mp.json
+        └── ИТОГ_*.xlsx  — итоговые файлы (в корне)
     """
 
     def __init__(self, target_dir: str, subfolder_template: str,
@@ -38,7 +45,11 @@ class TaskContext:
         subfolder_name = subfolder_template.format(date=self.date_str)
         from utils.path_manager import PathManager
         self.work_folder = PathManager.ensure_dir(Path(target_dir) / self.date_str / subfolder_name)
-        self.log_path = self.work_folder / log_filename
+        self.logs_dir = PathManager.ensure_dir(self.work_folder / "Логи")
+        self.reports_dir = PathManager.ensure_dir(self.work_folder / "Отчёты")
+        self.sales_dir = PathManager.ensure_dir(self.work_folder / "Продажи")
+        self.processing_dir = PathManager.ensure_dir(self.work_folder / "Обработка")
+        self.log_path = self.logs_dir / log_filename
         # Оставляем callback как есть — код вызывает его для обновления UI.
         self.callback = log_callback or print
 
@@ -48,7 +59,7 @@ class TaskContext:
         if log_manager is not None:
             self.logger: Optional[Logger] = log_manager.create_logger(
                 source=source,
-                work_folder=self.work_folder,
+                work_folder=self.logs_dir,  # REPLACE: task-лог в Логи/
                 log_filename=log_filename,
             )
         else:
