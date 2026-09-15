@@ -29,7 +29,7 @@ class PreparationService:
         ctx.log("Подготовка завершена.")
         # очистка устаревших записей КИЗов
         # set_log_path — чтобы KizStorage логировал в рабочую папку прогона
-        self.kiz_validator.set_log_path(ctx.work_folder)
+        self.kiz_validator.set_log_path(ctx.logs_dir)
         # load() обязателен: clean_old_entries работает с _data,
         # а он пуст, пока не загружен с диска
         self.kiz_validator.load()
