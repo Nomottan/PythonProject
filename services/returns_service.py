@@ -386,11 +386,11 @@ class KizTransferService:
                     continue
 
                 sales_gen.add_sale_row(
-                    from_seller_name=seller_brand.name,
-                    to_seller_name=owner_seller.name,
+                    from_seller_name=owner_seller.name,
+                    to_seller_name=seller_brand.name,
                     raw_kiz=kiz if kiz is not None else "",
-                    owner_company=owner_company,
-                    to_seller_inn=owner_seller.inn,
+                    owner_company=seller_brand,
+                    to_seller_inn=seller_brand.inn,
                     brand=brand,
                     product_name=product_name if product_name is not None else ""
                 )
