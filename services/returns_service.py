@@ -156,7 +156,7 @@ class ReturnsPreparationService:
         )
 
         result_name = ctx.format_filename("Возвраты_{date}")
-        result_path = ctx.work_folder / result_name
+        result_path = ctx.reports_dir / result_name
         try:
             wb_new.save(result_path)
             ctx.log(f"Создан файл с возвратами: {result_name}")
@@ -345,7 +345,7 @@ class KizTransferService:
         try:
             sheet_src = wb_src.active
             # NEW: прокидываем logger — отладочные сообщения уйдут в debug.txt.
-            sales_gen = SalesFileGenerator(ctx.work_folder, logger=ctx.logger)
+            sales_gen = SalesFileGenerator(ctx.sales_dir, logger=ctx.logger)
             KizUtils.start_stats()
 
             # NEW: счётчики для итогового INFO.

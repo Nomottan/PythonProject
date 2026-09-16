@@ -23,9 +23,8 @@ class SalesAccumulatorService:
         date_str = f"{today.day}_{today.month}_{today.year}"
         base_path = Path(target_dir) / date_str
 
-        chz_folder = base_path / f"ЧЗ_МП_{date_str}"
-        returns_folder = base_path / f"Возвраты_{date_str}"
-        sales_folder = base_path / f"Продажи_{date_str}"
+        chz_folder = base_path / f"ЧЗ_МП_{date_str}" / "Продажи"
+        returns_folder = base_path / f"Возвраты_{date_str}" / "Продажи"
 
         ctx = TaskContext(
             target_dir, "Продажи_{date}", "log_аккумуляция.txt", log_callback,
@@ -128,7 +127,7 @@ class SalesAccumulatorService:
     def _find_sales_files(self, folder: Path) -> list[Path]:
         """
         Возвращает все файлы продаж в папке (новый формат).
-        Отличительный признак: имя содержит " - " и " : ".
+        Отличительный признак: имя содержит " - " и " _ ".
         """
         if not folder.exists():
             return []
