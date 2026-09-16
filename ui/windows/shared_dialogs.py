@@ -104,12 +104,13 @@ class PricesEditWindow(QDialog):
         self.config = config
         self.sellers = config.get_sellers_objects()
         self.saved_prices = config.get("seller_prices", {})
+        self.bg_color = (40, 30, 50, 0.95)
 
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title="Цены продавцов",
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=self.bg_color,
             close_button=True,
             draggable=True,
             close_on_click_outside=True,
@@ -122,7 +123,7 @@ class PricesEditWindow(QDialog):
         content_layout.addWidget(LabelFactory.create_header_label(self, "Цены продавцов"))
 
         scroll, self.content_widget, self.content_layout2 = ListWidgetFactory.create_scroll_container(
-            self, spacing=2
+            self, spacing=2, bg_color=self.bg_color
         )
         content_layout.addWidget(scroll)
 

@@ -1,12 +1,12 @@
 from PySide6.QtWidgets import (
     QMainWindow, QDialog, QWidget, QHBoxLayout, QVBoxLayout,
-    QScrollArea, QSizePolicy, QLabel
+    QSizePolicy, QLabel
 )
 from PySide6.QtCore import Qt
 
 from ui.factories.factories import (
     WindowFactory, ButtonFactory, LabelFactory,
-    InputWidgetFactory, LayoutFactory
+    InputWidgetFactory, LayoutFactory, ListWidgetFactory
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
@@ -70,77 +70,20 @@ class PlannerWindow(QMainWindow):
         """
         super().__init__(parent)
         self.service = planner_service or PlannerService()
-
+        self.bg_color = (70, 60, 50, 0.95)
         main_layout = WindowFactory.setup_child_window(
             self, "Планировщик",
-            bg_color=(70, 60, 50, 0.95)
+            bg_color= self.bg_color
         )
 
         # NEW: прокручиваемая область задач.
         # widget_resizable=False — содержимое не подстраивается под ширину
         # окна, появляется горизонтальный скролл при сужении окна.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(False)
+        scroll = ListWidgetFactory.create_scroll_area(
+            self, bg_color=self.bg_color, widget_resizable=False
+        )
         scroll.setMinimumHeight(300)
-        scroll.setStyleSheet("""
-                    QScrollBar:vertical {
-                        background: rgba(55, 45, 38, 0.6);
-                        width: 12px;
-                        margin: 0px;
-                        border: none;
-                        border-radius: 6px;
-                    }
-                    QScrollBar::handle:vertical {
-                        background: rgba(145, 105, 75, 0.9);
-                        min-height: 30px;
-                        border-radius: 6px;
-                    }
-                    QScrollBar::handle:vertical:hover {
-                        background: rgba(165, 125, 90, 0.95);
-                    }
-                    QScrollBar::handle:vertical:pressed {
-                        background: rgba(120, 90, 65, 1.0);
-                    }
-                    QScrollBar::add-line:vertical,
-                    QScrollBar::sub-line:vertical {
-                        height: 0px;
-                        background: none;
-                        border: none;
-                    }
-                    QScrollBar::add-page:vertical,
-                    QScrollBar::sub-page:vertical {
-                        background: none;
-                    }
 
-                    QScrollBar:horizontal {
-                        background: rgba(55, 45, 38, 0.6);
-                        height: 12px;
-                        margin: 0px;
-                        border: none;
-                        border-radius: 6px;
-                    }
-                    QScrollBar::handle:horizontal {
-                        background: rgba(145, 105, 75, 0.9);
-                        min-width: 30px;
-                        border-radius: 6px;
-                    }
-                    QScrollBar::handle:horizontal:hover {
-                        background: rgba(165, 125, 90, 0.95);
-                    }
-                    QScrollBar::handle:horizontal:pressed {
-                        background: rgba(120, 90, 65, 1.0);
-                    }
-                    QScrollBar::add-line:horizontal,
-                    QScrollBar::sub-line:horizontal {
-                        width: 0px;
-                        background: none;
-                        border: none;
-                    }
-                    QScrollBar::add-page:horizontal,
-                    QScrollBar::sub-page:horizontal {
-                        background: none;
-                    }
-                """)
         content_widget = QWidget()
         content_widget.setObjectName("tasks_content")
         content_widget.setMinimumWidth(900)
@@ -148,7 +91,6 @@ class PlannerWindow(QMainWindow):
         self.tasks_layout = QVBoxLayout(content_widget)
         self.tasks_layout.setContentsMargins(5, 5, 5, 5)
         self.tasks_layout.setSpacing(5)
-        # Растяжка внизу — строки прижимаются к верхней кромке.
         self.tasks_layout.addStretch()
 
         scroll.setWidget(content_widget)

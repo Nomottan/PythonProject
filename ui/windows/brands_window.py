@@ -15,6 +15,7 @@ class BrandsWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = parent
+        self.bg_color = (30, 30, 30, 0.9)
         self.brands = parent.config.get_brands_objects()
         for b in self.brands:
             b.sellers.clear()
@@ -25,7 +26,7 @@ class BrandsWindow(QMainWindow):
             window=self,
             parent=parent,
             title="Бренды",
-            bg_color=(30, 30, 30, 0.9),
+            bg_color=self.bg_color,
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
@@ -44,7 +45,7 @@ class BrandsWindow(QMainWindow):
         self.grid_layout.setSpacing(5)
 
         scroll = ListWidgetFactory.create_scroll_area(
-            self, widget=self.brands_widget, widget_resizable=True
+            self, widget=self.brands_widget, widget_resizable=True, bg_color=self.bg_color
         )
         content_layout.addWidget(scroll)
 
@@ -114,12 +115,13 @@ class BrandEditDialog(QMainWindow):
         self.brand = brand
         self.sellers = sellers if sellers is not None else []
         self.main_window = main_window
+        self.bg_color=(40, 30, 50, 0.95)
 
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title=f"Редактирование бренда: {brand.name}",
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=self.bg_color,
             close_button=False,
             draggable=True,
             close_on_click_outside=True,
@@ -158,7 +160,7 @@ class BrandEditDialog(QMainWindow):
         self.sellers_layout = QVBoxLayout(self.sellers_widget)
         self.sellers_layout.setContentsMargins(0, 0, 0, 0)
         self.sellers_layout.setSpacing(2)
-        scroll = ListWidgetFactory.create_scroll_area(self, widget=self.sellers_widget, widget_resizable=True)
+        scroll = ListWidgetFactory.create_scroll_area(self, widget=self.sellers_widget, widget_resizable=True, bg_color=self.bg_color)
         right_layout.addWidget(scroll)
         add_seller_btn = ButtonFactory.create_button(
             self, "+ добавить продавца", (100, 80, 120, 0.7), padding="6px 12px"

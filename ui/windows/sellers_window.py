@@ -15,12 +15,12 @@ class SellersWindow(QMainWindow):
         brands = parent.config.get_brands_objects()
         brands_dict = {b.name: b for b in brands}
         self.sellers = parent.config.get_sellers_objects(brands_dict)
-
+        self.bg_color=(10, 40, 50, 0.9)
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title="Список продавцов",
-            bg_color=(10, 40, 50, 0.9),
+            bg_color=self.bg_color,
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
@@ -34,7 +34,7 @@ class SellersWindow(QMainWindow):
         content_layout.addWidget(LabelFactory.create_header_label(self, "Продавцы"))
 
         scroll, self.sellers_widget, self.sellers_layout = ListWidgetFactory.create_scroll_container(
-            self, spacing=2
+            self, spacing=2, bg_color=self.bg_color
         )
         content_layout.addWidget(scroll)
 
@@ -208,12 +208,12 @@ class BrandChecklistDialog(QMainWindow):
         self.seller = seller
         self.all_brands = all_brands
         self.current_names = {b.name for b in seller.brands}
-
+        self.bg_color = (40, 30, 50, 0.95)
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title=f"Бренды — {seller.name}",
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=self.bg_color,
             close_button=True,
             draggable=True,
             close_on_click_outside=True,
@@ -229,7 +229,7 @@ class BrandChecklistDialog(QMainWindow):
         content_layout.addWidget(LabelFactory.create_header_label(self, f"Бренды — {seller.name}"))
 
         scroll_area, content_widget, content_layout2 = ListWidgetFactory.create_scroll_container(
-            self, spacing=2
+            self, spacing=2, bg_color=self.bg_color
         )
         content_layout.addWidget(scroll_area)
 

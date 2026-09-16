@@ -19,13 +19,13 @@ class BrandMappingsWindow(QDialog):
         self.config = config
         self.mappings = mappings if mappings is not None else self.service.load_mappings()
         self.brands_list = self._get_brands_from_config()
-
+        self.bg_color = (40, 30, 100, 0.95)
         # Настройка окна
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title="Сохранённые бренды",
-            bg_color=(40, 30, 100, 0.95),
+            bg_color=self.bg_color,
             close_button=True,
             draggable=True,
             close_on_click_outside=False,
@@ -49,7 +49,7 @@ class BrandMappingsWindow(QDialog):
 
         # Прокручиваемая область для списка брендов
         scroll, self.content_widget, self.list_layout = ListWidgetFactory.create_scroll_container(
-            self, spacing=4
+            self, spacing=4, bg_color=self.bg_color
         )
         content_layout.addWidget(scroll)
 
@@ -155,12 +155,13 @@ class BrandDetailWindow(QDialog):
         self.all_brands = all_brands
         self.parent_window = parent_window  # BrandMappingsWindow
         self.original_brand_name = brand_name
+        self.bg_color=(40, 80, 110, 0.95)
 
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title=f"Бренд: {brand_name}",
-            bg_color=(40, 80, 110, 0.95),
+            bg_color=self.bg_color,
             close_button=True,
             draggable=True,
             close_on_click_outside=False,
@@ -175,7 +176,7 @@ class BrandDetailWindow(QDialog):
         content_layout.addWidget(title_label)
 
         scroll, self.content_widget, self.list_layout = ListWidgetFactory.create_scroll_container(
-            self, spacing=4
+            self, spacing=4, bg_color= self.bg_color
         )
         content_layout.addWidget(scroll)
 

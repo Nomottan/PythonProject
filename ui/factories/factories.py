@@ -1233,7 +1233,6 @@ class ListWidgetFactory(BaseWidgetFactory):
         return list_widget
 
     @staticmethod
-    @staticmethod
     def create_scroll_area(parent, widget=None, bg_color=(25, 25, 45),
                            border="none", border_radius=0,
                            widget_resizable=True, object_name=None,
@@ -1332,7 +1331,7 @@ class ListWidgetFactory(BaseWidgetFactory):
         handle = (clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.8)
 
         # Ползунок при наведении — сдвиг в ту же сторону.
-        hover_offset = 15 if shift > 0 else -15
+        hover_offset = 30 if shift > 0 else -30
         handle_hover = (
             clamp(r + shift + hover_offset),
             clamp(g + shift + hover_offset),
@@ -1342,9 +1341,9 @@ class ListWidgetFactory(BaseWidgetFactory):
 
         # Ползунок при нажатии — минус 10 от handle.
         handle_pressed = (
-            clamp(r + shift - 10),
-            clamp(g + shift - 10),
-            clamp(b + shift - 10),
+            clamp(r + shift - hover_offset*1.5),
+            clamp(g + shift - hover_offset*1.5),
+            clamp(b + shift - hover_offset*1.5),
             0.8,
         )
 
