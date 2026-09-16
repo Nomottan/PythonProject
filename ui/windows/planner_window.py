@@ -82,7 +82,65 @@ class PlannerWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(False)
         scroll.setMinimumHeight(300)
+        scroll.setStyleSheet("""
+                    QScrollBar:vertical {
+                        background: rgba(55, 45, 38, 0.6);
+                        width: 12px;
+                        margin: 0px;
+                        border: none;
+                        border-radius: 6px;
+                    }
+                    QScrollBar::handle:vertical {
+                        background: rgba(145, 105, 75, 0.9);
+                        min-height: 30px;
+                        border-radius: 6px;
+                    }
+                    QScrollBar::handle:vertical:hover {
+                        background: rgba(165, 125, 90, 0.95);
+                    }
+                    QScrollBar::handle:vertical:pressed {
+                        background: rgba(120, 90, 65, 1.0);
+                    }
+                    QScrollBar::add-line:vertical,
+                    QScrollBar::sub-line:vertical {
+                        height: 0px;
+                        background: none;
+                        border: none;
+                    }
+                    QScrollBar::add-page:vertical,
+                    QScrollBar::sub-page:vertical {
+                        background: none;
+                    }
 
+                    QScrollBar:horizontal {
+                        background: rgba(55, 45, 38, 0.6);
+                        height: 12px;
+                        margin: 0px;
+                        border: none;
+                        border-radius: 6px;
+                    }
+                    QScrollBar::handle:horizontal {
+                        background: rgba(145, 105, 75, 0.9);
+                        min-width: 30px;
+                        border-radius: 6px;
+                    }
+                    QScrollBar::handle:horizontal:hover {
+                        background: rgba(165, 125, 90, 0.95);
+                    }
+                    QScrollBar::handle:horizontal:pressed {
+                        background: rgba(120, 90, 65, 1.0);
+                    }
+                    QScrollBar::add-line:horizontal,
+                    QScrollBar::sub-line:horizontal {
+                        width: 0px;
+                        background: none;
+                        border: none;
+                    }
+                    QScrollBar::add-page:horizontal,
+                    QScrollBar::sub-page:horizontal {
+                        background: none;
+                    }
+                """)
         content_widget = QWidget()
         content_widget.setObjectName("tasks_content")
         content_widget.setMinimumWidth(900)
@@ -99,7 +157,7 @@ class PlannerWindow(QMainWindow):
         # NEW: нижняя панель с кнопкой «Новая задача».
         bottom_layout = QHBoxLayout()
         self.new_task_btn = ButtonFactory.create_button(
-            self, "Новая задача", bg_color=(80, 100, 130),
+            self, "Новая задача", bg_color=(90, 80, 70),
             padding="8px 16px"
         )
         self.new_task_btn.clicked.connect(self._on_new_task)
@@ -287,7 +345,7 @@ class NewTaskDialog(QDialog):
             bg_color=(85, 60, 42, 0.9),
             border="1px solid #6b4a33",
         )
-        self.full_desc_edit.setVisible(False)
+        self.full_desc_edit.setReadOnly(True)
         content_layout.addWidget(self.full_desc_edit)
 
         # NEW: поле «Задача» — без placeholder.
@@ -315,26 +373,41 @@ class NewTaskDialog(QDialog):
 
         # NEW: триггер — при потере фокуса полем «Задача» показать
         # «Подробное описание».
-        self.task_edit.editingFinished.connect(self._show_full_description)
+        self.task_edit.textChanged.connect(self._on_title_changed)
 
         # NEW: форма из двух полей — «Задача» и «Приоритет».
+        label_kwargs = {
+            "bg_color": (145, 105, 75, 0.0),
+            "text_color": "#dabdab",
+            "padding": "4px 8px",
+            "border_radius": 3,
+            "alignment": Qt.AlignLeft | Qt.AlignVCenter,
+            "fixed_size": (120, 24),  # NEW: фиксированный размер
+        }
+        task_label = LabelFactory.create_label(self, "Задача:", **label_kwargs)
+        priority_label = LabelFactory.create_label(self, "Приоритет:", **label_kwargs)
+
         form = LayoutFactory.create_form(
             self,
             rows=[
-                ("Задача:", self.task_edit),
-                ("Приоритет:", self.priority_combo),
+                (task_label, self.task_edit),
+                (priority_label, self.priority_combo),
             ],
             spacing=10,
             margins=(10, 10, 10, 10),
         )
         content_layout.addWidget(form)
 
-    def _show_full_description(self):
-        """Показывает скрытое поле «Подробное описание» и подгоняет размер.
+    def _on_title_changed(self, text: str) -> None:
+        """Разрешает редактирование описания, только если название непустое.
 
-        Роль: обработчик editingFinished у task_edit. Идемпотентен —
-              повторные вызовы просто снова ставят setVisible(True).
+        Вход: text — текущий текст поля «Задача».
+        Выход: нет.
+
+        Роль: переключает readOnly у full_desc_edit. Текст описания
+              НЕ очищается — при возврате названия поле снова доступно
+              с прежним содержимым. adjustSize() убран: диалог больше
+              не «прыгает», поле видно всегда.
         """
-        self.full_desc_edit.setVisible(True)
-        # Подгоняем размер диалога после появления нового поля.
-        self.adjustSize()
+        # strip() — чтобы одни пробелы не считались «непустым» названием.
+        self.full_desc_edit.setReadOnly(not bool(text.strip()))

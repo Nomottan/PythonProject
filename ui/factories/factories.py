@@ -1233,23 +1233,27 @@ class ListWidgetFactory(BaseWidgetFactory):
         return list_widget
 
     @staticmethod
-    def create_scroll_area(parent, widget=None, bg_color=(0,0,0,0),
+    @staticmethod
+    def create_scroll_area(parent, widget=None, bg_color=(25, 25, 45),
                            border="none", border_radius=0,
                            widget_resizable=True, object_name=None,
-                           cursor_shape=None, extra_style=""):
-        """
-        Создаёт прокручиваемую область с прозрачным фоном и помещает в неё виджет.
+                           cursor_shape=None, extra_style="",
+                           scrollbar_width=12, scrollbar_radius=6):
+        """Создаёт прокручиваемую область со стилизованными скроллбарами.
 
         Параметры:
-            parent           – родительский виджет.
-            widget           – виджет, который будет помещён в область (если задан).
-            bg_color         – цвет фона области.
-            border           – рамка.
-            border_radius    – радиус скругления.
-            widget_resizable – разрешить автоматическое изменение размеров виджета.
-            object_name      – objectName.
-            cursor_shape     – курсор.
-            extra_style      – дополнительный CSS.
+            parent — родительский виджет.
+            widget — виджет внутри области (если задан).
+            bg_color — фон окна, от которого считаются цвета скроллбара.
+                       Дефолт (25, 25, 45) — fallback.
+            border, border_radius, widget_resizable, object_name,
+            cursor_shape, extra_style — как раньше.
+            scrollbar_width — толщина скроллбара (px).
+            scrollbar_radius — радиус скругления.
+
+        Возвращает: QScrollArea.
+        Роль: единая точка создания QScrollArea во всём проекте. Скроллбар
+              автоматически подбирает контрастный цвет относительно фона.
         """
         scroll = QScrollArea(parent)
         if object_name:
@@ -1260,13 +1264,22 @@ class ListWidgetFactory(BaseWidgetFactory):
 
         bg_c = BaseWidgetFactory.color_to_str(bg_color)
         selector = f"QScrollArea#{object_name}" if object_name else "QScrollArea"
+
+        # Стиль самой области — как раньше.
         style = f"""
-            {selector} {{
-                background: {bg_c};
-                border: {border};
-                border-radius: {border_radius}px;
-            }}
-        """
+                {selector} {{
+                    background: {bg_c};
+                    border: {border};
+                    border-radius: {border_radius}px;
+                }}
+            """
+
+        # NEW: добавляем QSS для скроллбаров, рассчитанный от фона окна.
+        colors = ListWidgetFactory._calc_scrollbar_colors(bg_color)
+        style += ListWidgetFactory._build_scrollbar_qss(
+            colors, scrollbar_width, scrollbar_radius
+        )
+
         scroll.setStyleSheet(style)
         if extra_style:
             scroll.setStyleSheet(scroll.styleSheet() + extra_style)
@@ -1276,7 +1289,157 @@ class ListWidgetFactory(BaseWidgetFactory):
 
         return scroll
 
-    def create_scroll_container(parent, spacing=2, margins=(0, 0, 0, 0)):
+    @staticmethod
+    def _extract_rgb(color) -> tuple:
+        """Извлекает (r, g, b) из кортежа цвета.
+
+        Вход: color — кортеж (r, g, b) или (r, g, b, a), либо что-то другое.
+        Выход: (r, g, b).
+
+        Роль: для строк и битых значений возвращает fallback (25, 25, 45).
+              Alpha отбрасывается — для скроллбаров она задаётся отдельно.
+        """
+        if isinstance(color, (tuple, list)) and len(color) >= 3:
+            return int(color[0]), int(color[1]), int(color[2])
+        # Fallback: если цвет строкой или нестандартный — берём дефолт.
+        return 25, 25, 45
+
+    @staticmethod
+    def _calc_scrollbar_colors(bg_color) -> dict:
+        """Рассчитывает цвета скроллбара от фона окна.
+
+        Вход: bg_color — кортеж (r, g, b) или (r, g, b, a).
+        Выход: dict с ключами handle, handle_hover, handle_pressed, track —
+               каждый кортеж (r, g, b, a).
+
+        Логика:
+            - Средняя яркость фона avg = (r + g + b) // 3.
+            - Если avg <= 128 (тёмный/средний фон) → сдвиг +30 (ползунок светлее).
+            - Если avg > 128 (светлый фон) → сдвиг -30 (ползунок темнее).
+            - Hover: +15 в ту же сторону, что и сдвиг.
+            - Pressed: -10 от handle.
+            - Дорожка: тот же RGB, что handle, но alpha 0.6.
+        """
+        r, g, b = ListWidgetFactory._extract_rgb(bg_color)
+        avg = (r + g + b) // 3
+        shift = 30 if avg <= 128 else -30
+
+        def clamp(v: int) -> int:
+            """Ограничивает значение в [0, 255]."""
+            return max(0, min(255, int(v)))
+
+        # Ползунок в обычном состоянии.
+        handle = (clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.8)
+
+        # Ползунок при наведении — сдвиг в ту же сторону.
+        hover_offset = 15 if shift > 0 else -15
+        handle_hover = (
+            clamp(r + shift + hover_offset),
+            clamp(g + shift + hover_offset),
+            clamp(b + shift + hover_offset),
+            0.8,
+        )
+
+        # Ползунок при нажатии — минус 10 от handle.
+        handle_pressed = (
+            clamp(r + shift - 10),
+            clamp(g + shift - 10),
+            clamp(b + shift - 10),
+            0.8,
+        )
+
+        # Дорожка: тот же RGB, что handle, alpha 0.6.
+        track = (handle[0], handle[1], handle[2], 0.6)
+
+        return {
+            "handle": handle,
+            "handle_hover": handle_hover,
+            "handle_pressed": handle_pressed,
+            "track": track,
+        }
+
+    @staticmethod
+    def _build_scrollbar_qss(colors: dict, width: int = 12, radius: int = 6) -> str:
+        """Собирает QSS для вертикального и горизонтального скроллбаров.
+
+        Вход: colors — dict из _calc_scrollbar_colors; width — толщина;
+              radius — радиус скругления.
+        Выход: строка QSS.
+        Роль: единая точка генерации стиля — не дублируем в каждом окне.
+        """
+
+        def rgba(c: tuple) -> str:
+            """Форматирует кортеж (r, g, b, a) в CSS-строку rgba(...)."""
+            return f"rgba({c[0]}, {c[1]}, {c[2]}, {c[3]})"
+
+        h = rgba(colors["handle"])
+        hh = rgba(colors["handle_hover"])
+        hp = rgba(colors["handle_pressed"])
+        t = rgba(colors["track"])
+
+        return f"""
+                QScrollBar:vertical {{
+                    background: {t};
+                    width: {width}px;
+                    margin: 0px;
+                    border: none;
+                    border-radius: {radius}px;
+                }}
+                QScrollBar::handle:vertical {{
+                    background: {h};
+                    min-height: 30px;
+                    border-radius: {radius}px;
+                }}
+                QScrollBar::handle:vertical:hover {{
+                    background: {hh};
+                }}
+                QScrollBar::handle:vertical:pressed {{
+                    background: {hp};
+                }}
+                QScrollBar::add-line:vertical,
+                QScrollBar::sub-line:vertical {{
+                    height: 0px;
+                    background: none;
+                    border: none;
+                }}
+                QScrollBar::add-page:vertical,
+                QScrollBar::sub-page:vertical {{
+                    background: none;
+                }}
+
+                QScrollBar:horizontal {{
+                    background: {t};
+                    height: {width}px;
+                    margin: 0px;
+                    border: none;
+                    border-radius: {radius}px;
+                }}
+                QScrollBar::handle:horizontal {{
+                    background: {h};
+                    min-width: 30px;
+                    border-radius: {radius}px;
+                }}
+                QScrollBar::handle:horizontal:hover {{
+                    background: {hh};
+                }}
+                QScrollBar::handle:horizontal:pressed {{
+                    background: {hp};
+                }}
+                QScrollBar::add-line:horizontal,
+                QScrollBar::sub-line:horizontal {{
+                    width: 0px;
+                    background: none;
+                    border: none;
+                }}
+                QScrollBar::add-page:horizontal,
+                QScrollBar::sub-page:horizontal {{
+                    background: none;
+                }}
+            """
+
+    @staticmethod
+    def create_scroll_container(parent, spacing=2, margins=(0, 0, 0, 0),
+                                bg_color=(25, 25, 45)):
         """
         Создаёт прокручиваемую область с внутренним виджетом и вертикальным layout.
 
@@ -1299,7 +1462,8 @@ class ListWidgetFactory(BaseWidgetFactory):
 
         # Создаём прокручиваемую область и помещаем в неё виджет
         scroll_area = ListWidgetFactory.create_scroll_area(
-            parent, widget=content_widget, widget_resizable=True
+            parent, widget=content_widget, widget_resizable=True,
+            bg_color=bg_color,
         )
 
         return scroll_area, content_widget, content_layout
