@@ -19,7 +19,8 @@ class PreparationService:
         if sellers is None:
             sellers = []
 
-        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_подготовка.txt", log_callback)
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_подготовка.txt", log_callback,
+                          subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log(f"=== Подготовка от {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
@@ -94,7 +95,8 @@ class ExportKizService:
         self.kiz_validator = kiz_validator
 
     def export(self, target_dir, sellers, log_callback=None):
-        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_выгрузка_кизов.txt", log_callback)
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_выгрузка_кизов.txt", log_callback,
+                          subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ (с валидацией и очисткой) ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
@@ -289,7 +291,8 @@ class FilterPreFinalService:
     """Сервис фильтрации предитоговых файлов по статусу и владельцу."""
 
     def filter_files(self, target_dir, sellers, log_callback=None):
-        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_фильтрация.txt", log_callback)
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_фильтрация.txt", log_callback,
+                          subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ФИЛЬТРАЦИЯ ПРЕДИТОГОВЫХ ФАЙЛОВ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
@@ -362,7 +365,8 @@ class GenerateSalesService:
     """Сервис формирования файлов продаж на основе владельца (company) КИЗов."""
 
     def generate(self, target_dir, sellers, log_callback=None):
-        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_продажи.txt", log_callback)
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_продажи.txt", log_callback,
+                          subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ФОРМИРОВАНИЕ ФАЙЛОВ ПРОДАЖ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
@@ -474,7 +478,8 @@ class FinalizePricesService:
         if saved_prices is None:
             saved_prices = {}
 
-        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback)
+        ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_цены.txt", log_callback,
+                          subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
         # REPLACE: лог KizValidator — в Логи/.

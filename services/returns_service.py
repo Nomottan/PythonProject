@@ -19,10 +19,13 @@ class ReturnsPreparationService:
 
         # NEW: source для префикса [source] в task-логе.
         ctx = TaskContext(
-            target_dir, "Возвраты_{date}", "log_возвраты.txt",
+            target_dir,
+            "Возвраты_{date}",
+            "log_возвраты.txt",
             log_callback=log_callback,
             log_manager=self.log_manager,
             source="ReturnsPreparationService.returns_service",
+            subfolders=["Логи", "Отчёты", "Продажи"],
         )
         ctx.log(f"=== Обработка возвратов начата {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
         ctx.log(f"Исходный файл: {source_file}")
@@ -64,7 +67,7 @@ class ReturnsPreparationService:
     def _copy_source_file(self, ctx: TaskContext, source_path: Path) -> bool:
         """Копирует исходный файл в рабочую папку (с перезаписью)."""
         copy_name = ctx.format_filename("Исходные данные возвратов {date}")
-        copy_dest = ctx.work_folder / copy_name
+        copy_dest = ctx.reports_dir  / copy_name
         return FileHelper.copy_file_with_log(
             source_path, copy_dest, ctx,
             description="исходный файл",
@@ -179,12 +182,15 @@ class KizExportService:
 
     def export(self, target_dir, log_callback=None):
         ctx = TaskContext(
-            target_dir, "Возвраты_{date}", "log_выгрузка_КИЗов.txt",
+            target_dir,
+            "Возвраты_{date}",
+            "log_возвраты.txt",
             log_callback=log_callback,
             log_manager=self.log_manager,
-            source="KizExportService.returns_service",
+            source="ReturnsPreparationService.returns_service",
+            subfolders=["Логи", "Отчёты", "Продажи"],
         )
-        source_file = ctx.get_work_file("Возвраты_{date}")
+        source_file = ctx.reports_dir / ctx.format_filename("Возвраты_{date}")
         source_file = FileHelper.ensure_file_exists(ctx, source_file, "файл возвратов")
         if source_file is None:
             return
@@ -303,12 +309,15 @@ class KizTransferService:
     def prepare_transfer(self, target_dir, sellers, log_callback=None):
         # NEW: source для префикса [source].
         ctx = TaskContext(
-            target_dir, "Возвраты_{date}", "log_передачи_КИЗов.txt",
+            target_dir,
+            "Возвраты_{date}",
+            "log_передачи_КИЗов.txt",
             log_callback=log_callback,
             log_manager=self.log_manager,
             source="KizTransferService.returns_service",
+            subfolders=["Логи", "Отчёты", "Продажи"],
         )
-        source_file = ctx.get_work_file("Возвраты_{date}")
+        source_file = ctx.reports_dir / ctx.format_filename("Возвраты_{date}")
         source_file = FileHelper.ensure_file_exists(ctx, source_file, "файл возвратов")
         if source_file is None:
             return

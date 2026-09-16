@@ -27,9 +27,11 @@ class SalesAccumulatorService:
         returns_folder = base_path / f"Возвраты_{date_str}"
         sales_folder = base_path / f"Продажи_{date_str}"
 
-        ctx = TaskContext(target_dir, "Продажи_{date}", "log_аккумуляция.txt", log_callback)
-        sales_folder.mkdir(parents=True, exist_ok=True)
-
+        ctx = TaskContext(
+            target_dir, "Продажи_{date}", "log_аккумуляция.txt", log_callback,
+            subfolders=["Логи"]
+        )
+        sales_folder = ctx.work_folder
         ctx.log("=== АККУМУЛЯЦИЯ ПРОДАЖ (приоритет ЧЗ_МП) ===")
         ctx.log(f"Рабочая папка: {sales_folder}")
 
@@ -116,7 +118,7 @@ class SalesAccumulatorService:
 
         # Сохраняем детальный лог
         if details["files"]:
-            log_path = sales_folder / "log_фильтрация_КИЗов.txt"
+            log_path = ctx.logs_dir / "log_фильтрация_КИЗов.txt"
             self._log_kiz_details(log_path, details, ctx)
 
         ctx.log("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
