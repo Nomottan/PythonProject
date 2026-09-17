@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QDialog
+from datetime import datetime
 from pathlib import Path
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
@@ -7,6 +8,7 @@ from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
 from utils.kiz_utils import KizUtils
 from utils.sales_file_generator import SalesFileGenerator
+from services.kiz_validator import ValidationResult, KizValidator
 import json, random
 
 class PreparationService:
@@ -144,8 +146,9 @@ class ExportKizService:
                                     if not storage_list:
                                         continue
                                     storage_kiz = storage_list[0]  # обычно один
-                                    if self.kiz_validator.validate_for_sale(storage_kiz):
-                                        kiz_by_seller[seller.name].add(full_kiz)   # сохраняем полный для txt
+                                    result = self.kiz_validator.validate_for_sale(storage_kiz)
+                                    if result == ValidationResult.ADDED:
+                                        kiz_by_seller[seller.name].add(full_kiz)  # сохраняем полный для txt
                             ctx.log(f"  Лист '{sheet_name}' → продавец '{seller.name}': обработано {len(raw_kiz_list)} записей")
                     finally:
                         if wb:
@@ -186,20 +189,51 @@ class ExportKizService:
                             ctx.log(f"  Лист 'КИЗ' отсутствует – пропущен")
                             continue
                         sheet_kiz = wb["КИЗ"]
-                        kiz_to_task = {}
-                        skipped_by_type={}
+                        # REPLACE: occurrences вместо kiz_to_task.
+                        # {storage_kiz: [(full_kiz, sale_date_str, price_value, task_num), ...]}
+                        occurrences = {}
+                        skipped_by_type = {}
+
                         for row in sheet_kiz.iter_rows(min_row=2, values_only=True):
-                            if len(row) >= 9:  # как минимум до столбца I
-                                task_num = row[0]  # столбец A
-                                kiz = row[2]  # столбец C
-                                operation_type = row[8]  # столбец I (тип операции)
-                                price = row[4] if len(row) > 4 else None  # NEW: столбец E — Стоимость
-                                if kiz and task_num and operation_type and str(
-                                        operation_type).strip().upper() == "ПРОДАЖА":
-                                    kiz_to_task[str(kiz).strip()] = (str(task_num).strip(), price)
-                                else:
+                            if len(row) >= 9:
+                                task_num = row[0]
+                                raw_kiz = row[2]
+                                operation_type = row[8]
+                                price_raw = row[4] if len(row) > 4 else None
+
+                                # Фильтр "ПРОДАЖА".
+                                if not (raw_kiz and task_num and operation_type and
+                                        str(operation_type).strip().upper() == "ПРОДАЖА"):
                                     op_key = str(operation_type).strip() if operation_type else "(пусто)"
                                     skipped_by_type[op_key] = skipped_by_type.get(op_key, 0) + 1
+                                    continue
+
+                                full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz, logger=ctx.logger)
+                                if not full_cleaned_list:
+                                    ctx.log(
+                                        f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
+                                    continue
+
+                                task_num_str = str(task_num).strip()
+
+                                # Обработка цены.
+                                price_value = None
+                                try:
+                                    price_value = float(price_raw)
+                                except (TypeError, ValueError):
+                                    pass
+                                if price_value is not None and price_value <= 0:
+                                    price_value = None
+
+                                for full_kiz in full_cleaned_list:
+                                    storage_list = KizUtils.clean_kiz_for_storage(full_kiz, logger=ctx.logger)
+                                    if not storage_list:
+                                        continue
+                                    storage_kiz = storage_list[0]
+                                    occurrences.setdefault(storage_kiz, []).append(
+                                        (full_kiz, task_num_str, price_value)
+                                    )
+
                         if skipped_by_type:
                             ctx.log("  Пропущено строк по типу операции:")
                             for op_type, count in sorted(skipped_by_type.items(), key=lambda x: x[0].lower()):
@@ -207,8 +241,13 @@ class ExportKizService:
                         else:
                             ctx.log("  Все строки прошли фильтр по типу операции 'Продажа'")
 
+                            # NEW: загрузка дат продажи из листа "Сборочные задания".
+                            # Формат ячейки D: "HH:MM:SS DD.MM.YYYY" или "DD.MM.YYYY".
+                            # Если листа нет — работаем с пустым словарём, в
+                            # validate_for_sale передастся сегодняшняя дата.
                         if "Сборочные задания" not in wb.sheetnames:
-                            ctx.log(f"  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
+                            ctx.log(
+                                "  Лист 'Сборочные задания' отсутствует – даты не будут загружены, используем сегодняшнюю")
                             task_to_date = {}
                         else:
                             sheet_tasks = wb["Сборочные задания"]
@@ -220,42 +259,56 @@ class ExportKizService:
                                     if task_num and date_created:
                                         task_to_date[str(task_num).strip()] = str(date_created).strip()
 
-                        for raw_kiz, (task_num, price_raw) in kiz_to_task.items():
-                            full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz)
-                            if not full_cleaned_list:
-                                ctx.log(f"    ⚠️ Некорректный КИЗ (очистка не дала результатов): {raw_kiz[:50]}...")
-                                continue
-                            for full_kiz in full_cleaned_list:
-                                storage_list = KizUtils.clean_kiz_for_storage(full_kiz)
-                                if not storage_list:
-                                    continue
-                                storage_kiz = storage_list[0]
-                                sale_date_str = task_to_date.get(task_num)
-                                if sale_date_str is None:
-                                    ctx.log(
-                                        f"  ⚠️ Для КИЗа {storage_kiz} (задание {task_num}) не найдена дата. Использую сегодняшнюю.")
-                                    is_valid = self.kiz_validator.validate_for_sale(storage_kiz)
-                                else:
-                                    is_valid = self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str)
+                        # NEW: обработка сгруппированных по storage_kiz вхождений.
+                        added = 0
+                        skipped_dup = 0
+                        skipped_no_return = 0
+                        skipped_date_before_return = 0
 
-                                if is_valid:
-                                    kiz_by_seller[seller.name].add(full_kiz)
-                                    # NEW: обработка цены — float() в try/except,
-                                    # проверка > 0, int() при записи (вариант Б).
-                                    price_value = None
-                                    try:
-                                        price_value = float(price_raw)
-                                    except (TypeError, ValueError):
-                                        ctx.log(
-                                            f"    ⚠️ Некорректная цена {price_raw!r} для КИЗа {storage_kiz} – пропущена")
-                                    if price_value is not None and price_value <= 0:
-                                        ctx.log(
-                                            f"    ⚠️ Неположительная цена {price_value} для КИЗа {storage_kiz} – пропущена")
-                                        price_value = None
-                                    if price_value is not None:
-                                        prices_by_seller[seller.name][storage_kiz] = int(price_value)
+                        for storage_kiz, entries in occurrences.items():
+                            # REPLACE: task_to_date уже загружена — вычисляем
+                            # sale_date_str здесь. У каждой записи свой task_num.
+                            def get_sale_date(entry):
+                                """Возвращает sale_date_str из task_to_date или None."""
+                                task_num = entry[1]
+                                return task_to_date.get(task_num)
 
-                        ctx.log(f"  Добавлено {len(kiz_to_task)} записей для продавца '{seller.name}'")
+                            def sort_key(entry):
+                                """Ключ сортировки: самая поздняя дата — первая."""
+                                dt = KizValidator._parse_date(get_sale_date(entry))
+                                return dt or datetime.min
+
+                            entries_sorted = sorted(entries, key=sort_key, reverse=True)
+                            chosen = entries_sorted[0]
+                            skipped_dup += len(entries) - 1
+
+                            full_kiz, task_num, price_value = chosen
+                            sale_date_str = get_sale_date(chosen)
+
+                            # Если дата не найдена или не парсится — today.
+                            if sale_date_str is None or KizValidator._parse_date(sale_date_str) is None:
+                                sale_date_str = datetime.now().strftime("%d-%m-%Y")
+
+                            result = self.kiz_validator.validate_for_sale(storage_kiz, sale_date_str)
+
+                            if result == ValidationResult.ADDED:
+                                kiz_by_seller[seller.name].add(full_kiz)
+                                added += 1
+                                if price_value is not None:
+                                    prices_by_seller[seller.name][storage_kiz] = int(price_value)
+                            elif result == ValidationResult.SKIPPED_NO_RETURN:
+                                skipped_no_return += 1
+                            elif result == ValidationResult.SKIPPED_DATE_BEFORE_RETURN:
+                                skipped_date_before_return += 1
+
+                        total_unique = added + skipped_no_return + skipped_date_before_return + skipped_dup
+
+                        ctx.log(f"  Пропущено КИЗов:")
+                        ctx.log(f"    нет в одном экземпляре (дубликаты в отчёте): {skipped_dup}")
+                        ctx.log(f"    уже проданы без возврата: {skipped_no_return}")
+                        ctx.log(f"    дата продажи раньше даты возврата: {skipped_date_before_return}")
+                        ctx.log(f"    Итого уникальных КИЗов в отчёте: {total_unique}")
+                        ctx.log(f"  Добавлено {added} записей для продавца '{seller.name}'")
                     finally:
                         if wb:
                             wb.close()

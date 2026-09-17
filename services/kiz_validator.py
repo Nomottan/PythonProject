@@ -1,7 +1,22 @@
+from enum import Enum
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from utils.kiz_storage import KizStorage
+
+class ValidationResult(Enum):
+    """Результат валидации КИЗа для продажи.
+
+    ADDED — КИЗ прошёл валидацию и записан в used_kiz.json.
+    SKIPPED_NO_RETURN — КИЗ уже продан и не возвращён → отсев.
+    SKIPPED_DATE_BEFORE_RETURN — дата продажи не позже даты возврата → отсев.
+    SKIPPED_DUPLICATE — дубликат внутри отчёта (используется сервисом,
+                        не самим валидатором).
+    """
+    ADDED = "added"
+    SKIPPED_NO_RETURN = "skipped_no_return"
+    SKIPPED_DATE_BEFORE_RETURN = "skipped_date_before_return"
+    SKIPPED_DUPLICATE = "skipped_duplicate"
 
 class KizValidator:
     """
@@ -43,88 +58,93 @@ class KizValidator:
 
     # ---------- Валидация для продаж (Отчёты МП и ЧЗ МП) ----------
 
-    def validate_for_sale(self, kiz: str, sale_date_str: Optional[str] = None) -> bool:
-        """
-        Проверяет КИЗ для списания (продажа).
-        - Если sale_date_str не указана (ЧЗ МП) → используется сегодняшняя дата.
-        - Если указана (Отчёт МП) → парсится из строки вида "HH:MM:SS DD.MM.YYYY".
-        Возвращает True, если КИЗ можно добавить в список списания.
-        Логирует все значимые события в kiz_validation.log.
-        """
-        # Определяем дату продажи
-        if sale_date_str is None:
-            sale_date = datetime.now().strftime("%d-%m-%Y")
-            self.storage._log(f"ЧЗ МП: дата продажи для КИЗа {kiz} установлена как сегодня ({sale_date})")
-        else:
-            try:
-                # Парсим "HH:MM:SS DD.MM.YYYY"
-                dt = datetime.strptime(sale_date_str, "%H:%M:%S %d.%m.%Y")
-                sale_date = dt.strftime("%d-%m-%Y")
-            except ValueError:
-                # Если формат не совпадает, пробуем просто "DD.MM.YYYY"
-                try:
-                    dt = datetime.strptime(sale_date_str, "%d.%m.%Y")
-                    sale_date = dt.strftime("%d-%m-%Y")
-                except ValueError:
-                    self.storage._log(f"ОШИБКА: не удалось распарсить дату '{sale_date_str}' для КИЗа {kiz}. Использую сегодняшнюю.")
-                    sale_date = datetime.now().strftime("%d-%m-%Y")
+    def validate_for_sale(self, kiz: str, sale_date_str: Optional[str] = None) -> ValidationResult:
+        """Проверяет КИЗ для списания (продажа).
 
-        # Проверяем, есть ли КИЗ в хранилище
+        Вход:
+            kiz — 31-символьный КИЗ.
+            sale_date_str — дата продажи из отчёта МП (формат "HH:MM:SS DD.MM.YYYY"
+                            или "DD.MM.YYYY"). None — для ЧЗ_МП.
+
+        Выход: ValidationResult.
+
+        Роль: ЧЗ_МП — всегда ADDED с сегодняшней датой.
+              Отчёт МП — правила отсева: продано без возврата, дата продажи
+              раньше возврата. Обновление записи при возврате.
+        """
+        # --- ЧЗ_МП: без проверок, всегда списываем ---
+        if sale_date_str is None:
+            today_str = datetime.now().strftime("%d-%m-%Y")
+            self.storage.add_or_update(kiz, today_str, None)
+            self.storage._log(f"Списание (ЧЗ_МП): {kiz} – сегодня {today_str}")
+            return ValidationResult.ADDED
+
+        # --- Отчёт МП: парсим дату ---
+        sale_dt = self._parse_date(sale_date_str)
+        if sale_dt is None:
+            sale_dt = datetime.now()
+            self.storage._log(
+                f"Не удалось распарсить дату '{sale_date_str}' для КИЗа {kiz}. "
+                f"Использую сегодняшнюю."
+            )
+        sale_str = sale_dt.strftime("%d-%m-%Y")
+
         existing = self.storage.get(kiz)
 
+        # 1. Новый КИЗ — списываем.
         if existing is None:
-            # Новый КИЗ – добавляем
-            self.storage.add_or_update(kiz, sale_date, None)
-            self.storage._log(f"Добавлен новый КИЗ {kiz} с датой продажи {sale_date}")
-            return True
+            self.storage.add_or_update(kiz, sale_str, None)
+            self.storage._log(f"Списание (новый): {kiz} – продажа {sale_str}")
+            return ValidationResult.ADDED
 
-        # КИЗ уже есть
-        existing_sold = existing.get("sold_date")
-        existing_returned = existing.get("returned_date")
+        existing_sold_str = existing.get("sold_date")
+        existing_returned_str = existing.get("returned_date")
 
-        # Если дата продажи совпадает – дубликат
-        if existing_sold == sale_date:
-            self.storage._log(f"Дубликат: КИЗ {kiz} уже продан {existing_sold}, повторная попытка продажи в тот же день пропущена")
-            return False
+        # 2. Аномалия: нет даты продажи — списываем.
+        if existing_sold_str is None:
+            self.storage.add_or_update(kiz, sale_str, None)
+            self.storage._log(f"Списание (аномалия, нет sold_date): {kiz} – продажа {sale_str}")
+            return ValidationResult.ADDED
 
-        # Если дата продажи отличается
-        if existing_returned:
-            # Был возврат
-            # Проверяем, был ли возврат после предыдущей продажи
-            # Если дата возврата > даты предыдущей продажи, то это повторная продажа
-            try:
-                sold_dt = datetime.strptime(existing_sold, "%d-%m-%Y")
-                returned_dt = datetime.strptime(existing_returned, "%d-%m-%Y")
-                new_sale_dt = datetime.strptime(sale_date, "%d-%m-%Y")
+        # 3. Продано без возврата — отсев.
+        if existing_returned_str is None:
+            self.storage._log(f"Отсев (продано без возврата): {kiz}, продажа {existing_sold_str}")
+            return ValidationResult.SKIPPED_NO_RETURN
 
-                if returned_dt > sold_dt:
-                    # Возврат был после продажи – это нормальная повторная продажа
-                    self.storage._log(
-                        f"Повторная продажа {kiz}: ранее был продан {existing_sold}, возвращён {existing_returned}, теперь продаётся {sale_date}"
-                    )
-                    # Обновляем запись: новая дата продажи, возврат удаляем
-                    self.storage.add_or_update(kiz, sale_date, None)
-                    return True
-                else:
-                    # Возврат был до продажи (аномалия) – логируем, но всё равно обновляем дату продажи
-                    self.storage._log(
-                        f"Аномалия: КИЗ {kiz} имеет возврат {existing_returned} до продажи {existing_sold}. Обновляю дату продажи на {sale_date}, возврат удалён"
-                    )
-                    self.storage.add_or_update(kiz, sale_date, None)
-                    return True
-            except Exception as e:
-                self.storage._log(f"Ошибка сравнения дат для КИЗа {kiz}: {e}. Обновляю дату продажи.")
-                self.storage.add_or_update(kiz, sale_date, None)
-                return True
+        # 4. Есть и продажа, и возврат — сравниваем даты.
+        existing_returned_dt = self._parse_date(existing_returned_str)
+        if existing_returned_dt is None:
+            self.storage._log(f"Отсев (битая дата возврата): {kiz}")
+            return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
+
+        if sale_dt > existing_returned_dt:
+            self.storage.add_or_update(kiz, sale_str, None)
+            self.storage._log(f"Списание (возврат был раньше): {kiz}, продажа {sale_str}")
+            return ValidationResult.ADDED
         else:
-            # Нет возврата – просто обновляем дату продажи
-            self.storage._log(
-                f"Обновление даты продажи для КИЗа {kiz}: было {existing_sold}, стало {sale_date}"
-            )
-            self.storage.add_or_update(kiz, sale_date, None)
-            return True
+            self.storage._log(f"Отсев (дата продажи раньше возврата): {kiz}")
+            return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
 
     # ---------- Валидация для возвратов ----------
+    @staticmethod
+    def _parse_date(date_str: Optional[str]) -> Optional[datetime]:
+        """Парсит дату в одном из поддерживаемых форматов.
+
+        Вход: date_str — строка даты.
+        Выход: datetime или None, если не удалось распарсить.
+
+        Роль: единая точка парсинга. Поддерживает формат отчёта МП
+              ("HH:MM:SS DD.MM.YYYY" и "DD.MM.YYYY") и формат хранилища
+              ("DD-MM-YYYY").
+        """
+        if not date_str:
+            return None
+        for fmt in ("%H:%M:%S %d.%m.%Y", "%d.%m.%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(date_str, fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
 
     def validate_for_return(self, kiz: str) -> bool:
         """
