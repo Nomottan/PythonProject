@@ -6,7 +6,7 @@
 всё это на стороне сервиса (PlannerService). Модель — контейнер для полей
 и умеет сериализоваться/десериализоваться в JSON.
 """
-
+from datetime import date
 from enum import Enum
 from typing import Optional
 
@@ -20,6 +20,11 @@ class TaskStatus(Enum):
     COMPLETED = "Выполнена"
     CANCELLED = "Отменена"
 
+    @property
+    def display_name(self) -> str:
+        """Человекочитаемое имя для отображения в UI."""
+        return self.value
+
 
 class TaskPriority(Enum):
     """Приоритет задачи.
@@ -30,6 +35,10 @@ class TaskPriority(Enum):
     MEDIUM = 2
     LOW = 3
 
+    @property
+    def display_name(self) -> str:
+        """Человекочитаемое имя для отображения в UI."""
+        return {1: "Высокий", 2: "Средний", 3: "Низкий"}[self.value]
 
 class PlannerTask:
     """Модель задачи планировщика.

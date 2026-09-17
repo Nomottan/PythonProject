@@ -15,6 +15,7 @@ from utils.kiz_storage import KizStorage
 from utils.log_system import LogManager
 from services.kiz_validator import KizValidator
 from services.planner_service import PlannerService
+from storage.planner_task_storage import PlannerTaskStorage
 
 class MainWindow(QMainWindow):
     # ============================================================
@@ -48,7 +49,14 @@ class MainWindow(QMainWindow):
         )
         kiz_validator = KizValidator(self.kiz_storage)
         self.kiz_validator = kiz_validator
-        self.planner_service = PlannerService()
+        self.planner_storage = PlannerTaskStorage(
+            self.paths.get_data_file("planner_tasks.json"),
+            log_manager=self.log_manager,
+        )
+        self.planner_service = PlannerService(
+            self.planner_storage,
+            log_manager=self.log_manager,
+        )
 
         # ---- Таймер для обновления кнопки даты/времени ----
         self.timer = QTimer()
