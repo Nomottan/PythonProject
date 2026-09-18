@@ -1,5 +1,5 @@
 from datetime import date
-
+from utils.task_id_generator import TaskIdGenerator
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus
 from storage.planner_task_storage import PlannerTaskStorage
 
@@ -11,16 +11,18 @@ class PlannerService:
     Не знает про UI. Задачи отдаёт отсортированными по task_id убыв.
     """
 
-    def __init__(self, storage: PlannerTaskStorage, log_manager=None):
+    def __init__(self, storage: PlannerTaskStorage,
+                 archive_storage=None, log_manager=None):
         """Конструктор.
 
         Вход:
             storage — PlannerTaskStorage с путём к planner_tasks.json.
+            archive_storage — PlannerArchiveStorage для архива. Если None,
+                              архивация отключена (только удаление).
             log_manager — LogManager для будущего логирования.
-
-        Роль: сохраняет storage, через который идут все операции с файлом.
         """
         self._storage = storage
+        self._archive_storage = archive_storage
         self._log_manager = log_manager
 
     def get_tasks(self) -> list[PlannerTask]:
@@ -38,7 +40,7 @@ class PlannerService:
         """
         if not title or not title.strip():
             raise ValueError("Название задачи не может быть пустым")
-        task_id = self._generate_task_id()
+        task_id = TaskIdGenerator.generate(self._storage)
         task = PlannerTask(
             task_id=task_id,
             title=title.strip(),
@@ -51,18 +53,39 @@ class PlannerService:
         self._storage.add(task)
         return task
 
-    def archive_task(self, task_id: int) -> bool:
-        """Архивирует задачу: сейчас — удаляет из активного файла.
+    def archive_task(self, task_id: int, final_status: TaskStatus) -> bool:
+        """Архивирует задачу: удаляет из активных, добавляет в архив.
 
-        Вход: task_id — идентификатор задачи.
+        Вход:
+            task_id — идентификатор задачи.
+            final_status — TaskStatus.COMPLETED или TaskStatus.CANCELLED.
+
         Выход: True — задача найдена и заархивирована; False — не найдена.
 
-        Роль: заглушка. Сейчас делегирует в storage.remove (задача
-              исчезает из planner_tasks.json). В будущем будет
-              перемещать задачу в planner_archive.json через фасад
-              PlannerRepository (вариант 3 архитектуры).
+        Роль: помечает задачу финальным статусом, ставит completed_date,
+              добавляет в архивный storage, затем удаляет из активного.
+              Порядок важен: сначала добавить в архив, потом удалить
+              из активных — чтобы при падении между шагами задача
+              не потерялась полностью.
         """
-        return self._storage.remove(task_id)
+        # Ищем задачу в активных.
+        target = None
+        for task in self._storage.get_all():
+            if task.task_id == task_id:
+                target = task
+                break
+        if target is None:
+            return False
+
+        # Проставляем финальный статус и дату завершения.
+        target.status = final_status
+        target.completed_date = date.today().strftime("%d.%m.%Y")
+
+        # Сначала архив, потом удаление из активных.
+        if self._archive_storage is not None:
+            self._archive_storage.add(target)
+        self._storage.remove(task_id)
+        return True
 
     def update_task(self, task_id: int, title: str, description: str = "",
                     priority: TaskPriority = TaskPriority.MEDIUM) -> PlannerTask:
@@ -101,22 +124,6 @@ class PlannerService:
         target.priority = priority
         self._storage.save()
         return target
-
-    def _generate_task_id(self) -> int:
-        """Генерирует task_id формата YYYYMMDDNNN.
-
-        NNN = max(NNN существующих за сегодня, default=0) + 1.
-        Дырки от удалённых задач не заполняются.
-        """
-        today_str = date.today().strftime("%Y%m%d")
-        existing = self._storage.get_all()
-        today_nnn = [
-            t.task_id % 1000
-            for t in existing
-            if str(t.task_id).startswith(today_str)
-        ]
-        max_nnn = max(today_nnn, default=0)
-        return int(today_str) * 1000 + max_nnn + 1
 
     def get_priorities(self) -> list[str]:
         """Возвращает список приоритетов в виде строк для UI."""

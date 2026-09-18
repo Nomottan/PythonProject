@@ -15,7 +15,9 @@ from utils.kiz_storage import KizStorage
 from utils.log_system import LogManager
 from services.kiz_validator import KizValidator
 from services.planner_service import PlannerService
+from services.planner_archive_service import PlannerArchiveService
 from storage.planner_task_storage import PlannerTaskStorage
+from storage.planner_archive_storage import PlannerArchiveStorage
 
 class MainWindow(QMainWindow):
     # ============================================================
@@ -53,7 +55,18 @@ class MainWindow(QMainWindow):
             self.paths.get_data_file("planner_tasks.json"),
             log_manager=self.log_manager,
         )
+        # NEW: storage и сервис архива задач.
+        self.planner_archive_storage = PlannerArchiveStorage(
+            self.paths.get_data_file("planner_archive.json"),
+            log_manager=self.log_manager,
+        )
         self.planner_service = PlannerService(
+            self.planner_storage,
+            archive_storage=self.planner_archive_storage,
+            log_manager=self.log_manager,
+        )
+        self.planner_archive_service = PlannerArchiveService(
+            self.planner_archive_storage,
             self.planner_storage,
             log_manager=self.log_manager,
         )
@@ -193,6 +206,7 @@ class MainWindow(QMainWindow):
             self.planner_window = PlannerWindow(
                 self,
                 planner_service=self.planner_service,
+                archive_service=self.planner_archive_service,
             )
             WindowFactory.show_child_window(self, self.planner_window)
         else:

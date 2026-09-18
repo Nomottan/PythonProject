@@ -1860,12 +1860,33 @@ class WindowFactory:
         return None
 
     @staticmethod
-    def show_child_window(parent, child, modal=True):
+    @staticmethod
+    def show_child_window(parent, child, modal=True, cover_parent=False):
+        """Показывает дочернее окно с геометрией относительно родителя.
 
+        Вход:
+            parent — родительское окно.
+            child — дочернее окно (QMainWindow или QDialog).
+            modal — параметр оставлен для совместимости (не используется).
+            cover_parent — если True, дочернее окно перекрывает родителя
+                           полностью, без отступов. По умолчанию False —
+                           как раньше, с отступами 10/10/-20/-50.
+
+        Роль: единая точка показа дочерних окон. cover_parent используется
+              для окон, которые должны визуально «заменить» родителя
+              (например, архив планировщика).
+        """
         parent_rect = parent.frameGeometry()
-        child.setGeometry(10, 10,
-                          parent_rect.width() - 20,
-                          parent_rect.height() - 50)
+
+        if cover_parent:
+            # Полное перекрытие: дочернее окно занимает площадь родителя.
+            child.setGeometry(parent_rect)
+        else:
+            # Со старыми отступами: 10px по краям, 50px снизу.
+            child.setGeometry(10, 10,
+                              parent_rect.width() - 20,
+                              parent_rect.height() - 50)
+
         child.show()
         child.activateWindow()
 

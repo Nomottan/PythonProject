@@ -17,10 +17,9 @@ from ui.factories.factories import (
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
-from models.planner_task import PlannerTask, TaskPriority
+from models.planner_task import PlannerTask, TaskPriority, TaskStatus
 from ui.windows.message_dialog import MessageDialog, NotificationDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
-
 
 class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
@@ -39,10 +38,18 @@ class PlannerWindow(_BasePlannerListWindow):
         "actions": "_build_actions",
     }
 
-    def __init__(self, parent=None, planner_service=None):
+    def __init__(self, parent=None, planner_service=None, archive_service=None):
+        """Конструктор.
+
+        Вход:
+            parent — родительское окно.
+            planner_service — сервис активных задач. Обязателен.
+            archive_service — сервис архива. Передаётся в архивное окно.
+        """
         if planner_service is None:
             raise ValueError("planner_service обязателен")
         self.service = planner_service
+        self.archive_service = archive_service
 
         super().__init__(
             parent, "Планировщик", bg_color=(70, 60, 50, 0.95),
@@ -113,23 +120,31 @@ class PlannerWindow(_BasePlannerListWindow):
     def _on_open_archive(self):
         """Открывает окно архива модально относительно PlannerWindow.
 
-        Архив перекрывает планировщик полностью — cover_parent=True.
+        Архив перекрывает планировщик полностью — cover_parent=True,
+        плюс сдвиг на 10 пикселей влево и вверх, чтобы точно закрыть
+        рамку PlannerWindow.
         """
         from ui.windows.planner_archive_window import PlannerArchiveWindow
-        window = PlannerArchiveWindow(self)
+        window = PlannerArchiveWindow(self, archive_service=self.archive_service)
         window.setWindowModality(Qt.WindowModal)
         WindowFactory.show_child_window(self, window, cover_parent=True)
         geo = window.geometry()
         window.setGeometry(geo.x() - 10, geo.y() - 10, geo.width(), geo.height())
 
     def _on_task_done(self, task: PlannerTask) -> None:
-        """Заглушка: сейчас удаляет. В будущем — архивация как COMPLETED."""
-        self.service.archive_task(task.task_id)
+        """Кнопка ✓ — задача завершается и уходит в архив.
+
+        status = COMPLETED, completed_date = сегодня.
+        """
+        self.service.archive_task(task.task_id, TaskStatus.COMPLETED)
         self._reload_tasks()
 
     def _on_task_delete(self, task: PlannerTask) -> None:
-        """Заглушка: сейчас удаляет. В будущем — архивация как CANCELLED."""
-        self.service.archive_task(task.task_id)
+        """Кнопка ✕ — задача отменяется и уходит в архив.
+
+        status = CANCELLED, completed_date = сегодня.
+        """
+        self.service.archive_task(task.task_id, TaskStatus.CANCELLED)
         self._reload_tasks()
 
     def _on_edit_task(self, task: PlannerTask) -> None:
