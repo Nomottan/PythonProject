@@ -11,7 +11,7 @@ from ui.factories.factories import (
 from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
 from models.planner_task import PlannerTask, TaskPriority
-
+from ui.windows.message_dialog import MessageDialog
 
 class PlannerWindow(QMainWindow):
     """Окно планировщика задач.
