@@ -1,3 +1,10 @@
+"""
+Окно планировщика задач.
+
+Наследник _BasePlannerListWindow. Отображает активные задачи,
+позволяет создавать и редактировать, открывает окно архива.
+"""
+
 from PySide6.QtWidgets import (
     QMainWindow, QDialog, QWidget, QHBoxLayout, QVBoxLayout,
     QSizePolicy, QLabel, QLayout
@@ -12,139 +19,90 @@ from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
 from models.planner_task import PlannerTask, TaskPriority
 from ui.windows.message_dialog import MessageDialog, NotificationDialog
+from ui.windows.planner_base_window import _BasePlannerListWindow
 
-class PlannerWindow(QMainWindow):
+
+class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
 
-    Назначение:
-        Отображает список задач в прокручиваемой области, предоставляет
-        кнопку «Новая задача» для открытия диалога-заглушки.
-
-    Роль в программе:
-        Открывается по кнопке даты/времени в главном окне. Данные берёт
-        из PlannerService. Конструкция строки задачи — через конфигурацию
-        колонок, чтобы добавление нового типа задачи было одной записью.
+    Роль: отображает активные задачи, позволяет создавать и удалять,
+          открывает окно архива.
     """
 
-    # Конфигурация колонок по типу задачи.
-    # Добавление нового типа — одна запись в этом словаре.
     TASK_TYPE_COLUMNS = {
         "default": ["actions", "title", "priority", "status", "date"],
     }
 
-    # Карта: идентификатор колонки → имя метода-строителя.
+    # Расширяем базовые билдеры колонкой действий.
     COLUMN_BUILDERS = {
+        **_BasePlannerListWindow.COLUMN_BUILDERS,
         "actions": "_build_actions",
-        "title": "_build_title",
-        "priority": "_build_priority",
-        "status": "_build_status",
-        "date": "_build_date",
     }
-
-    # Цвета приоритетов.
-    PRIORITY_COLORS = {
-        "Высокий": (180, 70, 70, 0.85),
-        "Средний": (180, 150, 70, 0.85),
-        "Низкий":  (100, 150, 100, 0.85),
-    }
-
-    # Цвета статусов.
-    STATUS_COLORS = {
-        "Активная":  (80, 100, 160, 0.85),
-        "Выполнена": (100, 150, 100, 0.85),
-        "Отменена":  (120, 120, 120, 0.85),
-    }
-
-    # Нейтральный цвет для неизвестных значений (fallback).
-    NEUTRAL_COLOR = (120, 120, 120, 0.85)
 
     def __init__(self, parent=None, planner_service=None):
-        """Конструктор.
-
-        Вход:
-            parent — родительское окно (MainWindow).
-            planner_service — сервис планировщика. Обязателен.
-
-        Роль: создаёт UI-каркас: заголовок, крестик, скролл с задачами
-              и кнопку «Новая задача» внизу. Подключает таймер автообновления.
-        """
-        super().__init__(parent)
         if planner_service is None:
             raise ValueError("planner_service обязателен")
         self.service = planner_service
-        self.bg_color = (70, 60, 50, 0.95)
 
-        main_layout = WindowFactory.setup_child_window(
-            self, "Планировщик",
-            bg_color=self.bg_color
+        super().__init__(
+            parent, "Планировщик", bg_color=(70, 60, 50, 0.95),
         )
 
-        # NEW: прокручиваемая область задач.
-        scroll = ListWidgetFactory.create_scroll_area(
-            self, bg_color=self.bg_color, widget_resizable=False
-        )
-        scroll.setMinimumHeight(300)
-
-        content_widget = QWidget()
-        content_widget.setObjectName("tasks_content")
-        content_widget.setMinimumWidth(900)
-
-        self.tasks_layout = QVBoxLayout(content_widget)
-        self.tasks_layout.setContentsMargins(5, 5, 5, 5)
-        self.tasks_layout.setSpacing(5)
-        # NEW: layout сам следит за размером content_widget — при добавлении
-        # строк минимум растёт, и виджет автоматически пересчитывает высоту.
-        # Без этого widgetResizable=False не даёт контейнеру расти,
-        # и задачи остаются за пределами видимой области.
-        self.tasks_layout.setSizeConstraint(QLayout.SetMinAndMaxSize)
-        # Растяжка внизу — строки прижимаются к верхней кромке.
-        self.tasks_layout.addStretch()
-
-        scroll.setWidget(content_widget)
-        main_layout.addWidget(scroll)
-
-        # NEW: нижняя панель с кнопкой «Новая задача».
+        # Нижняя панель: «Новая задача» + «Архив» + растяжка.
         bottom_layout = QHBoxLayout()
         self.new_task_btn = ButtonFactory.create_button(
-            self, "Новая задача", bg_color=(90, 80, 70),
-            padding="8px 16px"
+            self, "Новая задача", bg_color=(90, 80, 70), padding="8px 16px",
         )
         self.new_task_btn.clicked.connect(self._on_new_task)
         bottom_layout.addWidget(self.new_task_btn)
         bottom_layout.addStretch()
-        main_layout.addLayout(bottom_layout)
+        self.archive_btn = ButtonFactory.create_button(
+            self, "Архив", bg_color=(40, 40, 40), padding="8px 16px",
+        )
+        self.archive_btn.clicked.connect(self._on_open_archive)
+        bottom_layout.addWidget(self.archive_btn)
 
-        # NEW: заполняем задачи через единый метод.
+
+        self._main_layout.addLayout(bottom_layout)
+
+        # Первая загрузка задач.
         self._reload_tasks()
 
-        # NEW: таймер автообновления раз в 5 минут.
-        self._timer = QTimer(self)
-        self._timer.setInterval(5 * 60 * 1000)
-        self._timer.timeout.connect(self._reload_tasks)
-        self._timer.start()
+    # ---------- Источник данных ----------
 
-    # ---------- Публичные методы ----------
-    def _reload_tasks(self):
-        """Очищает список строк и перерисовывает задачи из сервиса.
+    def _get_tasks(self):
+        return self.service.get_tasks()
 
-        Единая точка обновления: вызывается при открытии окна,
-        после создания задачи и по таймеру. Stretch в конце сохраняется.
-        """
-        # Удаляем все виджеты, кроме stretch (последний элемент).
-        while self.tasks_layout.count() > 1:
-            item = self.tasks_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        for task in self.service.get_tasks():
-            self._add_task_row(task)
+    # ---------- Билдер actions ----------
+
+    def _build_actions(self, task: PlannerTask) -> QWidget:
+        """Кнопки действий: ✓, ✎, ✕."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        layout.addWidget(ButtonFactory.create_complete_button(
+            container, lambda checked=False, t=task: self._on_task_done(t),
+        ))
+        layout.addWidget(ButtonFactory.create_edit_button(
+            container, lambda checked=False, t=task: self._on_edit_task(t),
+        ))
+        layout.addWidget(ButtonFactory.create_delete_button(
+            container, lambda checked=False, t=task: self._on_task_delete(t),
+        ))
+        return container
+
+    # ---------- Обработчики ----------
 
     def _on_new_task(self):
         """Открывает диалог, создаёт задачу, перерисовывает список."""
         dialog = NewTaskDialog(self, self.service)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
-            priority = self.service.get_priority_by_display_name(dialog.get_priority())
+            priority = self.service.get_priority_by_display_name(
+                dialog.get_priority()
+            )
             self.service.create_task(
                 title=dialog.get_title(),
                 description=dialog.get_description(),
@@ -152,138 +110,36 @@ class PlannerWindow(QMainWindow):
             )
             self._reload_tasks()
 
-    # ---------- Построение строк ----------
+    def _on_open_archive(self):
+        """Открывает окно архива модально относительно PlannerWindow.
 
-    def _build_task_row(self, task: PlannerTask) -> QWidget:
-        columns = self.TASK_TYPE_COLUMNS["default"]
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(8)
-
-        for col_id in columns:
-            builder_name = self.COLUMN_BUILDERS[col_id]
-            widget = getattr(self, builder_name)(task)
-            if widget is not None:
-                if col_id == "title":
-                    layout.addWidget(widget, 1)
-                else:
-                    layout.addWidget(widget)
-        layout.addStretch(1)
-        return row
-
-    def _add_task_row(self, task: dict):
-        """Добавляет строку задачи перед растяжкой.
-
-        Вход: task — словарь задачи.
-        Роль: вставляет строку в tasks_layout, сохраняя stretch в конце.
+        Архив перекрывает планировщик полностью — cover_parent=True.
         """
-        row = self._build_task_row(task)
-        self.tasks_layout.insertWidget(self.tasks_layout.count() - 1, row)
+        from ui.windows.planner_archive_window import PlannerArchiveWindow
+        window = PlannerArchiveWindow(self)
+        window.setWindowModality(Qt.WindowModal)
+        WindowFactory.show_child_window(self, window, cover_parent=True)
+        geo = window.geometry()
+        window.setGeometry(geo.x() - 10, geo.y() - 10, geo.width(), geo.height())
 
-    # ---------- Методы-билдеры колонок ----------
+    def _on_task_done(self, task: PlannerTask) -> None:
+        """Заглушка: сейчас удаляет. В будущем — архивация как COMPLETED."""
+        self.service.archive_task(task.task_id)
+        self._reload_tasks()
 
-    def _build_actions(self, task: PlannerTask) -> QWidget:
-        """Кнопки действий: ✓ (выполнено), ✎ (редактировать), ✕ (удалить).
+    def _on_task_delete(self, task: PlannerTask) -> None:
+        """Заглушка: сейчас удаляет. В будущем — архивация как CANCELLED."""
+        self.service.archive_task(task.task_id)
+        self._reload_tasks()
 
-        Вход: task — PlannerTask.
-        Выход: QWidget с тремя кнопками.
-        Роль: complete и delete — реальные обработчики, edit — открывает
-              диалог редактирования. Замыкаем task через параметр по
-              умолчанию, чтобы lambda не поймала последнее значение цикла.
-        """
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        layout.addWidget(ButtonFactory.create_complete_button(
-            container,
-            lambda checked=False, t=task: self._on_task_done(t)
-        ))
-        layout.addWidget(ButtonFactory.create_edit_button(
-            container,
-            lambda checked=False, t=task: self._on_edit_task(t)
-        ))
-        layout.addWidget(ButtonFactory.create_delete_button(
-            container,
-            lambda checked=False, t=task: self._on_task_delete(t)
-        ))
-        return container
-
-    def _build_title(self, task: PlannerTask):
-        """Название задачи — кликабельная кнопка.
-
-        Вход: task — PlannerTask.
-        Выход: QPushButton с названием.
-        Роль: клик открывает NotificationDialog с подробным описанием.
-              Кнопка вместо метки — потому что нужен сигнал clicked.
-              Максимальная ширина 300px, полный текст — в tooltip.
-        """
-        btn = ButtonFactory.create_button(
-            self,
-            text=task.title,
-            bg_color=(95, 80, 65, 0.7),
-            text_color="#e8dcc8",
-            padding="4px 8px",
-            border_radius=4,
-            alignment="left",              # text-align в основном QSS-блоке
-            font_family="Consolas",
-            font_size=11,
-        )
-        # Максимальная ширина — чтобы длинное название не растягивало
-        # строку до бесконечности. Полный текст — в tooltip.
-        btn.setMaximumWidth(300)
-        btn.setToolTip(task.title)
-        btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-
-        # Замыкаем task через параметр по умолчанию.
-        btn.clicked.connect(
-            lambda checked=False, t=task: self._on_title_clicked(t)
-        )
-        return btn
-
-    def _build_priority(self, task: PlannerTask):
-        priority = task.priority.display_name
-        color = self.PRIORITY_COLORS.get(priority, self.NEUTRAL_COLOR)
-        return LabelFactory.create_label(
-            self, text=priority, bg_color=color,
-            font_weight="bold", min_size=(100, 0)
-        )
-
-    def _build_status(self, task: PlannerTask):
-        status = task.status.display_name
-        color = self.STATUS_COLORS.get(status, self.NEUTRAL_COLOR)
-        return LabelFactory.create_label(
-            self, text=status, bg_color=color,
-            font_weight="bold", min_size=(100, 0)
-        )
-
-    def _build_date(self, task: PlannerTask):
-        return LabelFactory.create_label(
-            self,
-            text=task.created_date,
-            bg_color=(95, 80, 65, 0.7),      # NEW: тот же фон, что у названия
-            text_color="#e8dcc8",            # NEW: тот же светлый текст
-            alignment=Qt.AlignCenter,
-            min_size=(100, 0),
-            padding="4px 8px",
-            border_radius=4,
-        )
-
-    def _on_edit_task(self, task: PlannerTask):
-        """Открывает диалог в режиме редактирования и сохраняет изменения.
-
-        Вход: task — PlannerTask, которую редактируем.
-        Выход: нет.
-
-        Роль: если пользователь подтвердил — вызывает service.update_task
-              и перерисовывает список. При отмене ничего не меняется.
-        """
+    def _on_edit_task(self, task: PlannerTask) -> None:
+        """Редактирование задачи."""
         dialog = NewTaskDialog(self, self.service, task=task)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
-            priority = self.service.get_priority_by_display_name(dialog.get_priority())
+            priority = self.service.get_priority_by_display_name(
+                dialog.get_priority()
+            )
             self.service.update_task(
                 task_id=task.task_id,
                 title=dialog.get_title(),
@@ -292,60 +148,13 @@ class PlannerWindow(QMainWindow):
             )
             self._reload_tasks()
 
-    def _on_task_done(self, task: PlannerTask):
-        """Обработчик кнопки ✓ — завершение задачи.
-
-        Вход: task — PlannerTask.
-        Выход: нет.
-        Роль: заглушка. Сейчас — архивирует задачу (удаляет из активных).
-              В будущем — перевод в статус COMPLETED с заполнением
-              completed_date и перемещением в planner_archive.json.
-        """
-        # TODO: статус COMPLETED + completed_date + перенос в архив.
-        # Сейчас — та же логика, что у delete: задача исчезает.
-        self.service.archive_task(task.task_id)
-        self._reload_tasks()
-
-    def _on_task_delete(self, task: PlannerTask):
-        """Обработчик кнопки ✕ — удаление задачи.
-
-        Вход: task — PlannerTask.
-        Выход: нет.
-        Роль: заглушка. Сейчас — удаляет из planner_tasks.json.
-              В будущем — перемещает в planner_archive.json.
-        """
-        self.service.archive_task(task.task_id)
-        self._reload_tasks()
-
-    def _on_title_clicked(self, task: PlannerTask):
-        """Обработчик клика по названию — показывает описание.
-
-        Вход: task — PlannerTask.
-        Выход: нет.
-        Роль: открывает NotificationDialog с подробным описанием.
-              Если описание пустое — показывает заглушку.
-        """
-        text = task.description or "Подробное описание отсутствует."
-        NotificationDialog.notify(
-            self,
-            text,
-            bg_color=self.bg_color,
-            title_text=task.title,
-        )
-    # ---------- Очистка ----------
-
-    def cleanup(self):
-        """Очистка состояния при закрытии. Пока нечего чистить."""
-        pass
+    # ---------- Закрытие ----------
 
     def closeEvent(self, event):
-        """Обработка закрытия окна: остановка таймера, очистка."""
-        if hasattr(self, "_timer"):
-            self._timer.stop()
-        self.cleanup()
-        if self.parent() and hasattr(self.parent(), 'active_child'):
+        """Чистит active_child у MainWindow, затем — базовая логика."""
+        if self.parent() and hasattr(self.parent(), "active_child"):
             self.parent().active_child = None
-        event.accept()
+        super().closeEvent(event)
 
 
 class NewTaskDialog(QDialog):
