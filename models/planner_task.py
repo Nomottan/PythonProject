@@ -56,6 +56,9 @@ class PlannerTask:
         created_date: str — дата создания в формате %d.%m.%Y.
         completed_date: Optional[str] — дата завершения/отмены в формате
                         %d.%m.%Y. None для ACTIVE.
+        spawner_task: Optional[int] — task_id архивной задачи, из которой
+                      была порождена эта задача при восстановлении COMPLETED.
+                      None для обычных задач, созданных вручную.
     """
 
     def __init__(self, task_id: int, title: str,
@@ -63,7 +66,8 @@ class PlannerTask:
                  priority: TaskPriority = TaskPriority.MEDIUM,
                  status: TaskStatus = TaskStatus.ACTIVE,
                  created_date: str = "",
-                 completed_date: Optional[str] = None):
+                 completed_date: Optional[str] = None,
+                 spawner_task: Optional[int] = None):
         """Конструктор.
 
         Вход:
@@ -74,6 +78,7 @@ class PlannerTask:
             status — по умолчанию ACTIVE.
             created_date — по умолчанию "".
             completed_date — по умолчанию None.
+            spawner_task — task_id архивной задачи-родителя. По умолчанию None.
 
         Роль: сохраняет поля без валидации. Ответственность за корректность
               переданных значений — на стороне сервиса.
@@ -85,6 +90,7 @@ class PlannerTask:
         self.status = status
         self.created_date = created_date
         self.completed_date = completed_date
+        self.spawner_task = spawner_task
 
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
@@ -102,6 +108,7 @@ class PlannerTask:
             "status": self.status.value,
             "created_date": self.created_date,
             "completed_date": self.completed_date,
+            "spawner_task": self.spawner_task,
         }
 
     @classmethod
@@ -141,4 +148,5 @@ class PlannerTask:
             status=status,
             created_date=data.get("created_date", ""),
             completed_date=data.get("completed_date"),
+            spawner_task=data.get("spawner_task"),
         )

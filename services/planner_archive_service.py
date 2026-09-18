@@ -34,6 +34,22 @@ class PlannerArchiveService:
         tasks = self._archive_storage.get_all()
         return sorted(tasks, key=lambda t: t.task_id, reverse=True)
 
+    def get_spawned_tasks(self, parent_id: int) -> list[PlannerTask]:
+        """Возвращает активные задачи, порождённые задачей parent_id.
+
+        Вход: parent_id — task_id архивной задачи-родителя.
+        Выход: список PlannerTask из активного storage, у которых
+               spawner_task == parent_id.
+
+        Роль: проверка повторного восстановления COMPLETED-задачи.
+              Если задача уже восстанавливалась, в активных есть
+              запись с spawner_task = этой архивной задачи.
+        """
+        return [
+            t for t in self._active_storage.get_all()
+            if t.spawner_task == parent_id
+        ]
+
     def delete_forever(self, task_id: int) -> bool:
         """Удаляет задачу из архива навсегда.
 
@@ -83,6 +99,9 @@ class PlannerArchiveService:
                 status=TaskStatus.ACTIVE,
                 created_date=date.today().strftime("%d.%m.%Y"),
                 completed_date=None,
+                # NEW: новая задача порождена архивной задачей task_id.
+                # Позволяет при повторном ↺ показать предупреждение.
+                spawner_task=task_id,
             )
             self._active_storage.add(new_task)
             return new_task

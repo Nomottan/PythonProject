@@ -1,0 +1,22 @@
+[
+  {
+    "task_id": 20260918001,
+    "title": "Проверка задачника",
+    "description": "Тестовая задача",
+    "priority": 1,
+    "status": "Выполнена",
+    "created_date": "18.09.2026",
+    "completed_date": "18.09.2026",
+    "spawner_task": null
+  },
+  {
+    "task_id": 20260918005,
+    "title": "Проверка задачника",
+    "description": "Тестовая задача",
+    "priority": 1,
+    "status": "Отменена",
+    "created_date": "18.09.2026",
+    "completed_date": "18.09.2026",
+    "spawner_task": null
+  }
+]

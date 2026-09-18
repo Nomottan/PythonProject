@@ -1,0 +1,6 @@
+[TestModule.test_logger] Информационное сообщение
+[TestModule.test_logger] Предупреждение
+[TestModule.test_logger] Ошибка
+[TestModule.test_logger] Информационное сообщение 2
+[TestModule.test_logger] Первая строка
+[TestModule.test_logger] Вторая строка

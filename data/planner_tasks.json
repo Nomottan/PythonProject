@@ -1,0 +1,42 @@
+[
+  {
+    "task_id": 20260918003,
+    "title": "ывафы",
+    "description": "фывавп",
+    "priority": 3,
+    "status": "Активная",
+    "created_date": "18.09.2026",
+    "completed_date": null,
+    "spawner_task": null
+  },
+  {
+    "task_id": 20260918004,
+    "title": "Перенести все json модули в storage",
+    "description": "mapping, config и чтот ещё",
+    "priority": 1,
+    "status": "Активная",
+    "created_date": "18.09.2026",
+    "completed_date": null,
+    "spawner_task": null
+  },
+  {
+    "task_id": 20260918011,
+    "title": "Проверка задачника",
+    "description": "Тестовая задача",
+    "priority": 1,
+    "status": "Активная",
+    "created_date": "18.09.2026",
+    "completed_date": null,
+    "spawner_task": null
+  },
+  {
+    "task_id": 20260918012,
+    "title": "Проверка задачника",
+    "description": "Тестовая задача",
+    "priority": 1,
+    "status": "Активная",
+    "created_date": "18.09.2026",
+    "completed_date": null,
+    "spawner_task": 20260918001
+  }
+]

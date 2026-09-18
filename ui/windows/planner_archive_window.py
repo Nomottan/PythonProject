@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from ui.factories.factories import ButtonFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
-from models.planner_task import PlannerTask
+from models.planner_task import PlannerTask, TaskStatus
 
 
 class PlannerArchiveWindow(_BasePlannerListWindow):
@@ -99,8 +99,22 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
 
         CANCELLED — возвращается в активные с тем же task_id.
         COMPLETED — создаётся новая задача в активных, оригинал
-                    остаётся в архиве.
+                    остаётся в архиве. Перед восстановлением проверяет,
+                    была ли задача уже восстановлена (в активных есть
+                    задача со spawner_task = task.task_id).
         """
+        if task.status == TaskStatus.COMPLETED:
+            spawned = self.service.get_spawned_tasks(task.task_id)
+            if spawned:
+                reply = MessageDialog.question(
+                    self,
+                    f"Задача «{task.title}» уже была восстановлена. "
+                    f"Создать ещё одну задачу с теми же параметрами?",
+                    title_text="Уже восстановлена",
+                    bg_color=self.bg_color,
+                )
+                if reply != QDialog.Accepted:
+                    return
         self.service.restore_task(task.task_id)
         self._reload_tasks()
 

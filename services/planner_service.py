@@ -2,6 +2,7 @@ from datetime import date
 from utils.task_id_generator import TaskIdGenerator
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus
 from storage.planner_task_storage import PlannerTaskStorage
+from typing import Optional
 
 
 class PlannerService:
@@ -31,10 +32,15 @@ class PlannerService:
         return sorted(tasks, key=lambda t: t.task_id, reverse=True)
 
     def create_task(self, title: str, description: str = "",
-                    priority: TaskPriority = TaskPriority.MEDIUM) -> PlannerTask:
+                    priority: TaskPriority = TaskPriority.MEDIUM,
+                    spawner_task: Optional[int] = None) -> PlannerTask:
         """Создаёт задачу, генерирует task_id, сохраняет.
 
-        Вход: title, description, priority.
+        Вход:
+            title, description, priority — как раньше.
+            spawner_task — task_id архивной задачи-родителя, если задача
+                           создаётся при восстановлении COMPLETED. По умолчанию None.
+
         Выход: созданный PlannerTask.
         Ошибка: ValueError, если title пустой.
         """
@@ -49,6 +55,7 @@ class PlannerService:
             status=TaskStatus.ACTIVE,
             created_date=date.today().strftime("%d.%m.%Y"),
             completed_date=None,
+            spawner_task=spawner_task,
         )
         self._storage.add(task)
         return task
