@@ -53,6 +53,29 @@ class BaseWidgetFactory:
         return ""
 
     @staticmethod
+    def calc_pressed_color(bg_color):
+        """Рассчитывает цвет для состояния :pressed.
+
+        Вход: bg_color — кортеж (r, g, b) или (r, g, b, a).
+        Выход: CSS-строка rgba/rgb или "" для несовместимых типов.
+
+        Логика: c − 25, если c ≥ 25, иначе c + 25. Темнее для светлых,
+                 светлее для тёмных — эффект «вдавливания».
+        """
+        if isinstance(bg_color, (tuple, list)) and len(bg_color) >= 3:
+            base = bg_color[:3]
+            pressed = []
+            for c in base:
+                if c >= 25:
+                    pressed.append(c - 25)
+                else:
+                    pressed.append(c + 25)
+            if len(bg_color) == 4:
+                pressed.append(bg_color[3])
+            return BaseWidgetFactory.color_to_str(tuple(pressed))
+        return ""
+
+    @staticmethod
     def calc_text_color(bg_color, forced=None):
         """
         Определяет контрастный цвет текста для заданного фона.
@@ -126,10 +149,10 @@ class ButtonFactory(BaseWidgetFactory):
     def create_button(parent, text, bg_color, text_color=None,
                       padding="8px 16px", fixed_size=None, alignment=None,
                       object_name=None, cursor_shape=None, border_radius=5,
-                      border="none", font_size=None, font_weight=None,
-                      extra_style="", checkable=False, checked=False,
-                      tooltip=None, min_size=None, max_size=None,
-                      hover_color=None):
+                      border="none", font_size=None, font_family=None,
+                      font_weight=None, extra_style="", checkable=False,
+                      checked=False, tooltip=None, min_size=None, max_size=None,
+                      hover_color=None, pressed_color=None):
         btn = QPushButton(text, parent)
         # Устанавливаем общие параметры
         if object_name:
@@ -147,13 +170,15 @@ class ButtonFactory(BaseWidgetFactory):
         if checkable:
             btn.setCheckable(True)
             btn.setChecked(checked)
-        if alignment:
-            btn.setStyleSheet(f"text-align: {alignment};")
+        # REPLACE: alignment больше не применяется отдельным setStyleSheet —
+        # передаём в _apply_button_style, где он попадает в основной блок QSS
+        # и не теряется при перезаписи стиля.
 
         # Применяем стиль через общий метод
         ButtonFactory._apply_button_style(
             btn, bg_color, text_color, padding, border_radius, border,
-            font_size, font_weight, extra_style, hover_color
+            font_size, font_weight, extra_style, hover_color, pressed_color,
+            alignment, font_family
         )
         return btn
 
@@ -175,13 +200,11 @@ class ButtonFactory(BaseWidgetFactory):
             border_radius=5,
             border="none",
             font_size=None,
+            font_family=None,
             font_weight=None,
             extra_style="",
-            hover_color=None,
-            tooltip=None,
-            min_size=None,
-            max_size=None,
-            initial_state=None,
+            hover_color=None, tooltip=None, min_size=None, max_size=None,
+            initial_state=None, pressed_color=None,
     ):
         from ui.widgets.process_button import ProcessButton, ButtonState
         if initial_state is None:
@@ -213,22 +236,14 @@ class ButtonFactory(BaseWidgetFactory):
             btn.setMaximumSize(*max_size)
         if fixed_size:
             btn.setFixedSize(*fixed_size)
-        if alignment:
-            btn.setStyleSheet(f"text-align: {alignment};")
+        # REPLACE: alignment передаём в _apply_button_style — как в create_button.
 
         # Применяем базовый стиль через общий метод
         ButtonFactory._apply_button_style(
             btn, bg_color, text_color, padding, border_radius, border,
-            font_size, font_weight, extra_style, hover_color
+            font_size, font_weight, extra_style, hover_color, pressed_color,
+            alignment, font_family
         )
-
-        # Сохраняем базовый стиль в кнопке (для последующего использования в состояниях)
-        btn._base_style = btn.styleSheet()
-
-        # Применяем начальное состояние (перерисовывает кнопку)
-        btn.update_state(initial_state)
-
-        return btn
 
     @staticmethod
     def create_datetime_button(parent, callback):
@@ -261,36 +276,63 @@ class ButtonFactory(BaseWidgetFactory):
     @staticmethod
     def _apply_button_style(btn, bg_color, text_color=None, padding="8px 16px",
                             border_radius=5, border="none", font_size=None,
-                            font_weight=None, extra_style="", hover_color=None):
-        """
-        Применяет стиль к любой кнопке (QPushButton или ProcessButton).
+                            font_weight=None, extra_style="", hover_color=None,
+                            pressed_color=None, alignment=None, font_family=None):
+        """Применяет стиль к любой кнопке (QPushButton или ProcessButton).
+
+        Вход:
+            btn, bg_color, text_color, padding, border_radius, border,
+            font_size, font_weight, extra_style, hover_color — как раньше.
+            pressed_color — цвет :pressed. Если None, считается calc_pressed_color.
+            alignment — text-align в основном блоке (left/center/right).
+                        Раньше применялся отдельным setStyleSheet и терялся
+                        при последующем вызове setStyleSheet — теперь встроен.
+
+        Роль: единая точка стилизации кнопок. Собирает QSS: основной блок,
+              :hover, :pressed, extra_style.
         """
         bg_c = BaseWidgetFactory.color_to_str(bg_color)
         text_c = BaseWidgetFactory.calc_text_color(bg_color, text_color)
         hover_c = hover_color if hover_color else BaseWidgetFactory.calc_hover_color(bg_color)
+        pressed_c = pressed_color if pressed_color else BaseWidgetFactory.calc_pressed_color(bg_color)
 
         selector = f"QPushButton#{btn.objectName()}" if btn.objectName() else "QPushButton"
 
+        # Основной блок: теперь с text-align внутри.
         style = f"""
-                {selector} {{
-                    background-color: {bg_c};
-                    color: {text_c};
-                    padding: {padding};
-                    border: {border};
-                    border-radius: {border_radius}px;
-            """
+                    {selector} {{
+                        background-color: {bg_c};
+                        color: {text_c};
+                        padding: {padding};
+                        border: {border};
+                        border-radius: {border_radius}px;
+                """
+        if alignment:
+            style += f"text-align: {alignment};"
         if font_size:
             style += f"font-size: {font_size}px;"
+        if font_family:
+            style += f"font-family: {font_family};"
         if font_weight:
             style += f"font-weight: {font_weight};"
         style += "}"
 
+        # :hover — как раньше.
         if hover_c:
             style += f"""
-                {selector}:hover {{
-                    background-color: {hover_c};
-                }}
-                """
+                    {selector}:hover {{
+                        background-color: {hover_c};
+                    }}
+                    """
+
+        # NEW: :pressed — после :hover, чтобы перекрывать его при нажатии.
+        if pressed_c:
+            style += f"""
+                    {selector}:pressed {{
+                        background-color: {pressed_c};
+                    }}
+                    """
+
         if extra_style:
             style += extra_style
 
@@ -417,7 +459,6 @@ class ButtonFactory(BaseWidgetFactory):
             padding="0px",
             font_size=14,
             font_weight="bold",
-            hover_color=(90, 170, 110)
         )
         btn.clicked.connect(callback)
         return btn
@@ -434,7 +475,6 @@ class ButtonFactory(BaseWidgetFactory):
             fixed_size=size,
             padding="0px",
             font_size=14,
-            hover_color=(140, 140, 170)
         )
         btn.clicked.connect(callback)
         return btn
@@ -452,7 +492,6 @@ class ButtonFactory(BaseWidgetFactory):
             fixed_size=size,
             padding="0px",
             font_size=14,
-            hover_color=(200, 170, 90)
         )
         btn.clicked.connect(callback)
         return btn

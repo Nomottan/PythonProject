@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import date
 from openpyxl import load_workbook
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
 )
 from PySide6.QtCore import Qt
 from ui.factories.factories import (
@@ -13,7 +13,7 @@ from ui.widgets.path_selector import PathSelector
 from ui.windows.shared_dialogs import PricesEditWindow
 from services.sells_fbs_service import PreparationService, ExportKizService, FilterPreFinalService, GenerateSalesService, FinalizePricesService
 from services.sales_accumulator import SalesAccumulatorService
-
+from ui.windows.message_dialog import NotificationDialog
 
 class ChzMPWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -24,11 +24,11 @@ class ChzMPWindow(QMainWindow):
         self.fbs_files = []
         self.mp_files = []
         self.fbs_signatures = []
-
+        self.bg_color = (50, 60, 90, 0.95)
         # Настройка окна через фабрику
         main_layout = WindowFactory.setup_child_window(
             self, "Списание проданных КИЗов",
-            bg_color=(50, 60, 90, 0.95)
+            bg_color=self.bg_color
         )
 
         # ============================================================
@@ -225,10 +225,11 @@ class ChzMPWindow(QMainWindow):
                 first_val = ""
 
             if first_val in self.fbs_signatures:
-                QMessageBox.warning(
+                NotificationDialog.notify(
                     self,
-                    "Дубликат",
-                    f"Файл {Path(f).name} уже выбран (совпадает первая строка). Дубль не был добавлен"
+                    f"Файл {Path(f).name} уже выбран (совпадает первая строка). Дубль не был добавлен",
+                    title_text="Дубликат",
+                    bg_color=self.bg_color,
                 )
                 continue
 

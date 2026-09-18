@@ -1,6 +1,6 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QComboBox, QLabel
 )
 from ui.factories.factories import (
@@ -8,6 +8,7 @@ from ui.factories.factories import (
     ListWidgetFactory, LayoutFactory
 )
 from ui.factories.window_factories import ExtendedWindowFactory
+from ui.windows.message_dialog import MessageDialog
 
 class BrandMappingsWindow(QDialog):
     """Окно просмотра и редактирования сохранённых сопоставлений (бренды)."""
@@ -103,26 +104,26 @@ class BrandMappingsWindow(QDialog):
 
     def _delete_brand(self, brand_name):
         if brand_name in self.mappings:
-            reply = QMessageBox.question(
+            reply = MessageDialog.question(
                 self,
-                "Подтверждение удаления",
                 f"Вы уверены, что хотите удалить бренд '{brand_name}' и все его сопоставления?",
-                QMessageBox.Yes | QMessageBox.No
+                title_text="Подтверждение удаления",
+                bg_color=self.bg_color,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QDialog.Accepted:
                 del self.mappings[brand_name]
                 self._populate_list()
 
     def _delete_all(self):
         if not self.mappings:
             return
-        reply = QMessageBox.question(
+        reply = MessageDialog.question(
             self,
-            "Подтверждение удаления",
             "Вы уверены, что хотите удалить все сохранённые сопоставления?",
-            QMessageBox.Yes | QMessageBox.No
+            title_text="Подтверждение удаления",
+            bg_color=self.bg_color,
         )
-        if reply == QMessageBox.Yes:
+        if reply == QDialog.Accepted:
             self.mappings.clear()
             self._populate_list()
 
@@ -236,13 +237,13 @@ class BrandDetailWindow(QDialog):
     def _delete_mapping(self, article):
         """Удаляет одно сопоставление."""
         if article in self.brand_data:
-            reply = QMessageBox.question(
+            reply = MessageDialog.question(
                 self,
-                "Подтверждение удаления",
                 "Удалить это сопоставление?",
-                QMessageBox.Yes | QMessageBox.No
+                title_text="Подтверждение удаления",
+                bg_color=self.bg_color,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QDialog.Accepted:
                 # Удаляем из локального словаря
                 del self.brand_data[article]
                 # Удаляем из родительского словаря
@@ -265,13 +266,13 @@ class BrandDetailWindow(QDialog):
         brand_names = [b.name for b in self.all_brands]
         if not brand_names:
             msg = "Нет доступных брендов. Сначала добавьте бренды в окне 'Бренды'."
-            reply = QMessageBox.question(
+            reply = MessageDialog.question(
                 self,
-                "Нет брендов",
                 msg + "\n\nПерейти в окно брендов?",
-                QMessageBox.Yes | QMessageBox.No
+                title_text="Нет брендов",
+                bg_color=self.bg_color,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QDialog.Accepted:
                 main_window = self.parent_window.parent_window.main_window
                 if hasattr(main_window, 'open_brands_window'):
                     main_window.open_brands_window()

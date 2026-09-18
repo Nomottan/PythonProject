@@ -1,7 +1,7 @@
 from ui.factories.factories import ButtonFactory, LabelFactory, LayoutFactory, FileDialogFactory, ThreadFactory, WindowFactory
 from ui.widgets.path_selector import PathSelector
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
 )
 from pathlib import Path
 from PySide6.QtCore import Qt

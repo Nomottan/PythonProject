@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QMainWindow, QDialog, QWidget, QHBoxLayout, QVBoxLayout,
-    QSizePolicy, QLabel, QMessageBox, QLayout
+    QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -11,7 +11,7 @@ from ui.factories.factories import (
 from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
 from models.planner_task import PlannerTask, TaskPriority
-from ui.windows.message_dialog import MessageDialog
+from ui.windows.message_dialog import MessageDialog, NotificationDialog
 
 class PlannerWindow(QMainWindow):
     """Окно планировщика задач.
@@ -183,46 +183,65 @@ class PlannerWindow(QMainWindow):
 
     # ---------- Методы-билдеры колонок ----------
 
-    def _build_actions(self, task: dict) -> QWidget:
+    def _build_actions(self, task: PlannerTask) -> QWidget:
         """Кнопки действий: ✓ (выполнено), ✎ (редактировать), ✕ (удалить).
 
-        Пока — заглушки lambda: None. Логика появится в следующих задачах.
+        Вход: task — PlannerTask.
+        Выход: QWidget с тремя кнопками.
+        Роль: complete и delete — реальные обработчики, edit — открывает
+              диалог редактирования. Замыкаем task через параметр по
+              умолчанию, чтобы lambda не поймала последнее значение цикла.
         """
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        layout.addWidget(ButtonFactory.create_complete_button(container, lambda: None))
+        layout.addWidget(ButtonFactory.create_complete_button(
+            container,
+            lambda checked=False, t=task: self._on_task_done(t)
+        ))
         layout.addWidget(ButtonFactory.create_edit_button(
             container,
             lambda checked=False, t=task: self._on_edit_task(t)
         ))
-        layout.addWidget(ButtonFactory.create_delete_button(container, lambda: None))
+        layout.addWidget(ButtonFactory.create_delete_button(
+            container,
+            lambda checked=False, t=task: self._on_task_delete(t)
+        ))
         return container
 
     def _build_title(self, task: PlannerTask):
-        """Название задачи — растягивающаяся метка с переносом слов.
+        """Название задачи — кликабельная кнопка.
 
         Вход: task — PlannerTask.
-        Выход: QLabel с названием.
-        Роль: главная текстовая колонка строки. Раньше здесь было
-              подробное описание — заменено на название задачи.
+        Выход: QPushButton с названием.
+        Роль: клик открывает NotificationDialog с подробным описанием.
+              Кнопка вместо метки — потому что нужен сигнал clicked.
+              Максимальная ширина 300px, полный текст — в tooltip.
         """
-        lbl = LabelFactory.create_label(
+        btn = ButtonFactory.create_button(
             self,
             text=task.title,
-            bg_color=(95, 80, 65, 0.7),  # NEW: мягкий тёплый фон
-            text_color="#e8dcc8",  # NEW: светлый тёплый текст
-            alignment=Qt.AlignLeft | Qt.AlignVCenter,
-            word_wrap=True,
+            bg_color=(95, 80, 65, 0.7),
+            text_color="#e8dcc8",
+            padding="4px 8px",
+            border_radius=4,
+            alignment="left",              # text-align в основном QSS-блоке
             font_family="Consolas",
             font_size=11,
-            padding="4px 8px",  # NEW: воздух вокруг текста
-            border_radius=4,
         )
-        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        return lbl
+        # Максимальная ширина — чтобы длинное название не растягивало
+        # строку до бесконечности. Полный текст — в tooltip.
+        btn.setMaximumWidth(300)
+        btn.setToolTip(task.title)
+        btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        # Замыкаем task через параметр по умолчанию.
+        btn.clicked.connect(
+            lambda checked=False, t=task: self._on_title_clicked(t)
+        )
+        return btn
 
     def _build_priority(self, task: PlannerTask):
         priority = task.priority.display_name
@@ -272,6 +291,47 @@ class PlannerWindow(QMainWindow):
                 priority=priority,
             )
             self._reload_tasks()
+
+    def _on_task_done(self, task: PlannerTask):
+        """Обработчик кнопки ✓ — завершение задачи.
+
+        Вход: task — PlannerTask.
+        Выход: нет.
+        Роль: заглушка. Сейчас — архивирует задачу (удаляет из активных).
+              В будущем — перевод в статус COMPLETED с заполнением
+              completed_date и перемещением в planner_archive.json.
+        """
+        # TODO: статус COMPLETED + completed_date + перенос в архив.
+        # Сейчас — та же логика, что у delete: задача исчезает.
+        self.service.archive_task(task.task_id)
+        self._reload_tasks()
+
+    def _on_task_delete(self, task: PlannerTask):
+        """Обработчик кнопки ✕ — удаление задачи.
+
+        Вход: task — PlannerTask.
+        Выход: нет.
+        Роль: заглушка. Сейчас — удаляет из planner_tasks.json.
+              В будущем — перемещает в planner_archive.json.
+        """
+        self.service.archive_task(task.task_id)
+        self._reload_tasks()
+
+    def _on_title_clicked(self, task: PlannerTask):
+        """Обработчик клика по названию — показывает описание.
+
+        Вход: task — PlannerTask.
+        Выход: нет.
+        Роль: открывает NotificationDialog с подробным описанием.
+              Если описание пустое — показывает заглушку.
+        """
+        text = task.description or "Подробное описание отсутствует."
+        NotificationDialog.notify(
+            self,
+            text,
+            bg_color=self.bg_color,
+            title_text=task.title,
+        )
     # ---------- Очистка ----------
 
     def cleanup(self):
@@ -316,18 +376,19 @@ class NewTaskDialog(QDialog):
         self.service = planner_service
         self.task = task
         self.creator = task is None
-
+        self.bg_color = (111, 78, 55, 0.95)
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
             parent=parent,
             title="Новая задача",
-            bg_color=(111, 78, 55, 0.95),
+            bg_color=self.bg_color,
             # NEW: крестик убран — единое поведение остальных диалогов.
             close_button=False,
             ok_cancel=True,
             # Заглушки: обе кнопки вызывают accept/reject.
             ok_callback=self.accept,
             cancel_callback=self.reject,
+            draggable= True,
             return_content_layout=True,
             default_width=400,
             default_height=350,
@@ -420,9 +481,26 @@ class NewTaskDialog(QDialog):
         return self.priority_combo.currentText()
 
     def accept(self):
-        """Проверяет title. Если пуст — warning и не закрывает."""
+        """Проверяет title. Пустое название — предупреждение.
+
+        Поведение кнопок MessageDialog:
+            «Да»  (Accepted) — закрыть только предупреждение,
+                               остаться в диалоге создания.
+            «Нет» (Rejected) — закрыть предупреждение и отменить
+                               создание задачи (закрыть этот диалог).
+        """
         if not self.get_title():
-            QMessageBox.warning(self, "Ошибка", "Название задачи не может быть пустым.")
+            result = MessageDialog.warning(
+                self,
+                "Название задачи не может быть пустым.\n"
+                "Хотите продолжить создание задачи?",
+                bg_color=self.bg_color,
+            )
+            if result == QDialog.Rejected:
+                # «Нет» — пользователь решил не продолжать.
+                # reject() закроет NewTaskDialog с результатом Rejected,
+                # и в _on_new_task ветка создания задачи не сработает.
+                self.reject()
             return
         super().accept()
 

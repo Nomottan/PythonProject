@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QMessageBox, QInputDialog
+    QInputDialog
 )
 from PySide6.QtCore import Qt
 from ui.factories.factories import (
@@ -10,6 +10,7 @@ from ui.factories.factories import (
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
 from models.models import Seller, Brand
+from ui.windows.message_dialog import NotificationDialog
 
 class BrandsWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -224,7 +225,12 @@ class BrandEditDialog(QMainWindow):
     def _add_seller(self):
         available = [s for s in self.sellers if self.brand not in s.brands]
         if not available:
-            QMessageBox.information(self, "Информация", "Все продавцы уже привязаны к этому бренду.")
+            NotificationDialog.notify(
+                self,
+                "Все продавцы уже привязаны к этому бренду.",
+                title_text="Информация",
+                bg_color=self.bg_color,
+            )
             return
         names = [s.name for s in available]
         item, ok = QInputDialog.getItem(self, "Выбор продавца", "Продавец:", names, 0, False)

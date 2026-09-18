@@ -51,6 +51,19 @@ class PlannerService:
         self._storage.add(task)
         return task
 
+    def archive_task(self, task_id: int) -> bool:
+        """Архивирует задачу: сейчас — удаляет из активного файла.
+
+        Вход: task_id — идентификатор задачи.
+        Выход: True — задача найдена и заархивирована; False — не найдена.
+
+        Роль: заглушка. Сейчас делегирует в storage.remove (задача
+              исчезает из planner_tasks.json). В будущем будет
+              перемещать задачу в planner_archive.json через фасад
+              PlannerRepository (вариант 3 архитектуры).
+        """
+        return self._storage.remove(task_id)
+
     def update_task(self, task_id: int, title: str, description: str = "",
                     priority: TaskPriority = TaskPriority.MEDIUM) -> PlannerTask:
         """Обновляет существующую задачу.

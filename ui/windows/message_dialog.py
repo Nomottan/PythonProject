@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QDialogButtonBox
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QDialogButtonBox, QApplication
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, BaseWidgetFactory
@@ -86,7 +86,7 @@ class _BaseMessageDialog(QDialog):
         def clamp(v):
             return max(0, min(255, v))
 
-        return (clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.95)
+        return clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.95
 
     @staticmethod
     def _calc_dialog_border(parent_bg: tuple) -> tuple:
@@ -122,15 +122,17 @@ class _BaseMessageDialog(QDialog):
               — хук для наследников (например, добавление кнопок).
         """
         central = QWidget()
+        # Даём objectName, чтобы стиль не протекал на дочерние QWidget.
+        central.setObjectName("message_dialog_root")
         bg_c = BaseWidgetFactory.color_to_str(self._dialog_bg)
         border_c = BaseWidgetFactory.color_to_str(self._border_color)
         central.setStyleSheet(f"""
-            QWidget {{
-                background-color: {bg_c};
-                border: 2px solid {border_c};
-                border-radius: 10px;
-            }}
-        """)
+                    QWidget#message_dialog_root {{
+                        background-color: {bg_c};
+                        border: 2px solid {border_c};
+                        border-radius: 10px;
+                    }}
+                """)
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -156,6 +158,11 @@ class _BaseMessageDialog(QDialog):
 
         if min_size:
             self.setMinimumSize(*min_size)
+        else:
+            self.setMinimumSize(320, 180)
+
+            # Подгоняем окно под содержимое ДО показа.
+        self.adjustSize()
 
     # ---------- Хуки для наследников ----------
 
@@ -184,6 +191,23 @@ class _BaseMessageDialog(QDialog):
                     - self.frameGeometry().topLeft()
                 )
                 event.accept()
+
+        def showEvent(self, event):
+            """Центрирует окно относительно родителя и поднимает поверх.
+
+            Роль: без явного raise_() при вложенном exec() (MessageDialog
+                  открывается поверх модального NewTaskDialog) диалог может
+                  уйти за родителя или остаться невидимым.
+            """
+            super().showEvent(event)
+            parent = self.parent()
+            if parent is not None:
+                pr = parent.frameGeometry()
+                x = pr.x() + (pr.width() - self.width()) // 2
+                y = pr.y() + (pr.height() - self.height()) // 2
+                self.move(x, y)
+            self.raise_()
+            self.activateWindow()
 
         def mouseMoveEvent(event):
             if hasattr(self, "_drag_pos") and event.buttons() & Qt.LeftButton:
@@ -240,10 +264,16 @@ class MessageDialog(_BaseMessageDialog):
         )
 
     def _setup_window_flags(self) -> None:
-        """Модальный диалог на уровне приложения, без рамки."""
+        """Модальный диалог на уровне приложения, без рамки.
+
+        Qt.Dialog обязателен: без него Qt не считает окно диалогом,
+        и setWindowModality не действует — окно показывается как
+        обычное top-level окно и не блокирует родителя.
+        """
         self.setWindowFlags(
-            Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint
+            Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint
         )
+        self.setModal(True)
         self.setWindowModality(Qt.ApplicationModal)
 
     def _build_content(self, layout) -> None:
@@ -315,29 +345,66 @@ class NotificationDialog(_BaseMessageDialog):
 
     Назначение:
         Показать пользователю краткое сообщение и не блокировать его.
-        Пользователь может продолжать работу, уведомление закроется
-        само при клике вне окна.
+        Уведомление закрывается при клике вне окна, по Esc или при
+        клике по другой части интерфейса.
 
-    Роль в программе:
-        Информационные «всплывашки»: файл сохранён, задача добавлена,
-        операция завершена. Вызов через show() — не блокирует поток.
+    Реализация закрытия по клику вне:
+        Qt.Popup не используется — в связке с Qt.Dialog он ведёт себя
+        непредсказуемо, а без родителя-QMainWindow часто вообще не
+        срабатывает. Вместо этого ставим eventFilter на QApplication
+        и ловим клики вне границ окна вручную.
     """
 
     def _setup_window_flags(self) -> None:
-        """Не модальное окно с Qt.Popup: клик вне закрывает автоматически.
-
-        Родитель остаётся активным. Первый клик по нему только
-        закрывает уведомление (это стандартное поведение Popup).
-        """
+        """Не модальное окно поверх остальных, без системной рамки."""
+        # Qt.Dialog — базовый тип (нужен для WA_TranslucentBackground).
+        # WindowStaysOnTopHint — поверх родителя.
+        # FramelessWindowHint — без системного заголовка.
+        # Qt.Popup НЕ используется — конфликтует с Qt.Dialog.
         self.setWindowFlags(
-            Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Popup
+            Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint
         )
 
-    # Кнопки не добавляются — _build_content не переопределён.
+    def __init__(self, *args, **kwargs):
+        """Конструктор. После базовой инициализации ставит eventFilter
+        на QApplication, чтобы ловить клики вне окна.
+        """
+        super().__init__(*args, **kwargs)
+        # Ставим фильтр на приложение: клик по любому окну/виджету
+        # пройдёт через нас, и мы проверим координаты.
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:
+        """Ловит MouseButtonPress вне границ окна и закрывает его.
+
+        Вход: obj — объект, на котором произошло событие; event — событие.
+        Выход: True — событие поглощено; False — пропускаем дальше.
+
+        Роль: имитирует поведение Qt.Popup без его побочных эффектов.
+        """
+        if event.type() == QEvent.MouseButtonPress and self.isVisible():
+            # Переводим глобальные координаты клика в локальные окна.
+            local = self.mapFromGlobal(event.globalPosition().toPoint())
+            if not self.rect().contains(local):
+                self.close()
+                # Возвращаем False — пусть клик дойдёт до того, по кому
+                # кликнули (например, по кнопке родителя). Если хочется
+                # «съесть» клик — верни True.
+                return False
+        return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):
+        """Снимает eventFilter при закрытии, чтобы не копить мёртвые фильтры."""
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        super().closeEvent(event)
 
     @staticmethod
-    def show(parent, text, bg_color=None,
-             title_text=None, min_size=None) -> None:
+    def notify(parent, text, bg_color=None,
+               title_text=None, min_size=None) -> None:
         """Показывает уведомление. Не блокирует вызывающий код.
 
         Вход:
@@ -346,8 +413,9 @@ class NotificationDialog(_BaseMessageDialog):
             bg_color, title_text, min_size — как у MessageDialog.
 
         Выход: нет.
-        Роль: создаёт NotificationDialog и вызывает show().
-              WA_DeleteOnClose — Qt сам удалит окно при закрытии.
+        Роль: создаёт NotificationDialog и вызывает QWidget.show()
+              (не exec — уведомление не блокирует).
+              WA_DeleteOnClose — Qt удалит окно при закрытии.
         """
         dialog = NotificationDialog(
             parent=parent,
@@ -356,7 +424,5 @@ class NotificationDialog(_BaseMessageDialog):
             bg_color=bg_color,
             min_size=min_size,
         )
-        # Qt владеет объектом, удалит при закрытии — родитель держит
-        # ссылку через parent-child, GC не соберёт раньше времени.
         dialog.setAttribute(Qt.WA_DeleteOnClose)
         dialog.show()

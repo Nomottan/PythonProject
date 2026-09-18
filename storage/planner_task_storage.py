@@ -96,6 +96,26 @@ class PlannerTaskStorage:
         self._tasks.append(task)
         self.save()
 
+    def remove(self, task_id: int) -> bool:
+        """Удаляет задачу по task_id и сохраняет файл.
+
+        Вход: task_id — идентификатор задачи.
+        Выход: True — задача была найдена и удалена; False — не найдена.
+
+        Роль: удаление из planner_tasks.json. В будущем — перемещение
+              в planner_archive.json через отдельный storage.
+              Сейчас — окончательное удаление (скелет архитектуры).
+        """
+        original_len = len(self._tasks)
+        self._tasks = [t for t in self._tasks if t.task_id != task_id]
+        if len(self._tasks) == original_len:
+            self._log_warning(
+                f"Удаление: задача с id={task_id} не найдена в {self._file_path.name}"
+            )
+            return False
+        self.save()
+        return True
+
     # ---------- Приватные методы ----------
 
     def _log_warning(self, message: str) -> None:
