@@ -115,3 +115,22 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         if reply == QDialog.Accepted:
             self.service.delete_forever(task.task_id)
             self._reload_tasks()
+
+    def closeEvent(self, event):
+        """При закрытии архива — обновляем список задач в PlannerWindow.
+
+        Родитель (PlannerWindow) не знает, что мы меняли активные задачи
+        через restore_task. После закрытия архива просим родителя
+        перерисовать список.
+
+        Вход: event — событие закрытия.
+        Выход: нет.
+        Роль: связь архив → планировщик без глобальных сигналов.
+              Проверка hasattr защищает от ситуации, когда родитель
+              не PlannerWindow (например, в будущем архив откроют
+              из другого окна).
+        """
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_reload_tasks"):
+            parent._reload_tasks()
+        super().closeEvent(event)
