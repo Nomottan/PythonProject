@@ -71,6 +71,10 @@ class MainWindow(QMainWindow):
             self.planner_archive_storage,
             self.planner_storage,
             log_manager=self.log_manager,
+            # NEW: передаём PlannerService, чтобы archive мог эмитить
+            # tasks_changed после restore_task — мини-планировщик
+            # в MainWindow обновится автоматически.
+            planner_service=self.planner_service,
         )
         self.planner_quick_view = PlannerQuickView(self)
         self.planner_quick_controller = PlannerQuickViewController(

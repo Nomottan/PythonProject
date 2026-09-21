@@ -6,7 +6,7 @@
 всё это на стороне сервиса (PlannerService). Модель — контейнер для полей
 и умеет сериализоваться/десериализоваться в JSON.
 """
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
@@ -19,6 +19,7 @@ class TaskStatus(Enum):
     ACTIVE = "Активная"
     COMPLETED = "Выполнена"
     CANCELLED = "Отменена"
+    OVERDUE = "Просрочено"
 
     @property
     def display_name(self) -> str:
@@ -31,14 +32,19 @@ class TaskPriority(Enum):
 
     1 — самый важный, 3 — наименее важный. Значения — числа, пишутся в JSON.
     """
-    HIGH = 1
+    LOW = 1
     MEDIUM = 2
-    LOW = 3
+    HIGH = 3
+    DEADLINE = 4
 
     @property
     def display_name(self) -> str:
-        """Человекочитаемое имя для отображения в UI."""
-        return {1: "Высокий", 2: "Средний", 3: "Низкий"}[self.value]
+        return {
+            1: "Низкий",
+            2: "Средний",
+            3: "Высокий",
+            4: "Дедлайн",
+        }[self.value]
 
 class PlannerTask:
     """Модель задачи планировщика.
@@ -59,6 +65,10 @@ class PlannerTask:
         spawner_task: Optional[int] — task_id архивной задачи, из которой
                       была порождена эта задача при восстановлении COMPLETED.
                       None для обычных задач, созданных вручную.
+        deadline_datetime: Optional[str] — дата и время дедлайна в формате
+                      "%d.%m.%Y %H:%M". None для не-дедлайн задач.
+        created_datetime: Optional[str] — точный момент создания в формате
+                      "%d.%m.%Y %H:%M". None для старых записей.
     """
 
     def __init__(self, task_id: int, title: str,
@@ -67,7 +77,9 @@ class PlannerTask:
                  status: TaskStatus = TaskStatus.ACTIVE,
                  created_date: str = "",
                  completed_date: Optional[str] = None,
-                 spawner_task: Optional[int] = None):
+                 spawner_task: Optional[int] = None,
+                 deadline_datetime: Optional[str] = None,
+                 created_datetime: Optional[str] = None):
         """Конструктор.
 
         Вход:
@@ -91,6 +103,8 @@ class PlannerTask:
         self.created_date = created_date
         self.completed_date = completed_date
         self.spawner_task = spawner_task
+        self.deadline_datetime = deadline_datetime
+        self.created_datetime = created_datetime
 
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
@@ -109,6 +123,8 @@ class PlannerTask:
             "created_date": self.created_date,
             "completed_date": self.completed_date,
             "spawner_task": self.spawner_task,
+            "deadline_datetime": self.deadline_datetime,
+            "created_datetime": self.created_datetime,
         }
 
     @classmethod
@@ -149,4 +165,46 @@ class PlannerTask:
             created_date=data.get("created_date", ""),
             completed_date=data.get("completed_date"),
             spawner_task=data.get("spawner_task"),
+            deadline_datetime=data.get("deadline_datetime"),
+            created_datetime=data.get("created_datetime"),
         )
+
+    def get_deadline_datetime(self) -> Optional[datetime]:
+        """Возвращает момент дедлайна.
+
+        Парсит self.deadline_datetime в формате "%d.%m.%Y %H:%M".
+        Если строка пустая или не парсится — возвращает None.
+        """
+        if not self.deadline_datetime:
+            return None
+        try:
+            return datetime.strptime(self.deadline_datetime, "%d.%m.%Y %H:%M")
+        except (ValueError, TypeError):
+            return None
+
+    def get_created_datetime(self) -> Optional[datetime]:
+        """Возвращает момент создания.
+
+        Если self.created_datetime есть — парсит "%d.%m.%Y %H:%M".
+        Иначе — fallback на начало дня self.created_date ("%d.%m.%Y").
+        """
+        if self.created_datetime:
+            try:
+                return datetime.strptime(self.created_datetime, "%d.%m.%Y %H:%M")
+            except (ValueError, TypeError):
+                pass
+        if self.created_date:
+            try:
+                return datetime.strptime(self.created_date, "%d.%m.%Y")
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    def is_overdue(self) -> bool:
+        """True, если задача дедлайн и текущее время > дедлайна."""
+        if self.priority != TaskPriority.DEADLINE:
+            return False
+        dl = self.get_deadline_datetime()
+        if dl is None:
+            return False
+        return datetime.now() > dl

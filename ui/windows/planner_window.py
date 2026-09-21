@@ -10,11 +10,12 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
-
+from typing import Optional
 from ui.factories.factories import (
     WindowFactory, ButtonFactory, LabelFactory,
-    InputWidgetFactory, LayoutFactory, ListWidgetFactory
-)
+    InputWidgetFactory, LayoutFactory, ListWidgetFactory,
+    DeadlineFieldsWidget,
+    )
 from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus
@@ -29,7 +30,7 @@ class PlannerWindow(_BasePlannerListWindow):
     """
 
     TASK_TYPE_COLUMNS = {
-        "default": ["actions", "title", "priority", "status", "date"],
+        "default": ["actions", "title", "priority", "status", "date", "specifications"],
     }
 
     # Расширяем базовые билдеры колонкой действий.
@@ -50,6 +51,7 @@ class PlannerWindow(_BasePlannerListWindow):
             raise ValueError("planner_service обязателен")
         self.service = planner_service
         self.archive_service = archive_service
+        self._archive_window = None
 
         super().__init__(
             parent, "Планировщик", bg_color=(70, 60, 50, 0.95),
@@ -114,6 +116,7 @@ class PlannerWindow(_BasePlannerListWindow):
                 title=dialog.get_title(),
                 description=dialog.get_description(),
                 priority=priority,
+                deadline_datetime=dialog.get_deadline_data(),
             )
             self._reload_tasks()
 
@@ -123,13 +126,30 @@ class PlannerWindow(_BasePlannerListWindow):
         Архив перекрывает планировщик полностью — cover_parent=True,
         плюс сдвиг на 10 пикселей влево и вверх, чтобы точно закрыть
         рамку PlannerWindow.
+
+        Ссылку на архив сохраняем — чтобы в resizeEvent тянуть её
+        за PlannerWindow.
         """
         from ui.windows.planner_archive_window import PlannerArchiveWindow
-        window = PlannerArchiveWindow(self, archive_service=self.archive_service)
-        window.setWindowModality(Qt.WindowModal)
-        WindowFactory.show_child_window(self, window, cover_parent=True)
-        geo = window.geometry()
-        window.setGeometry(geo.x() - 10, geo.y() - 10, geo.width(), geo.height())
+        self._archive_window = PlannerArchiveWindow(
+            self, archive_service=self.archive_service
+        )
+        self._archive_window.setWindowModality(Qt.WindowModal)
+        WindowFactory.show_child_window(self, self._archive_window, cover_parent=True)
+        self._sync_archive_geometry()
+
+    def _sync_archive_geometry(self):
+        """Синхронизирует геометрию архива с PlannerWindow.
+
+        Роль: архив перекрывает PlannerWindow со сдвигом −10 по X и Y.
+              Вызывается при открытии и при каждом resize PlannerWindow.
+        """
+        if self._archive_window is None or not self._archive_window.isVisible():
+            return
+        geo = self.frameGeometry()
+        self._archive_window.setGeometry(
+            geo.x() - 10, geo.y() - 10, geo.width(), geo.height()
+        )
 
     def _on_task_done(self, task: PlannerTask) -> None:
         """Кнопка ✓ — задача завершается и уходит в архив.
@@ -162,6 +182,17 @@ class PlannerWindow(_BasePlannerListWindow):
                 priority=priority,
             )
             self._reload_tasks()
+
+    def resizeEvent(self, event):
+        """При изменении размера PlannerWindow — тянем за собой архив.
+
+        Роль: MainWindow.resizeEvent меняет размер PlannerWindow,
+              но не знает про открытое окно архива (оно — child
+              PlannerWindow, а не MainWindow). Синхронизируем
+              геометрию архива вручную.
+        """
+        super().resizeEvent(event)
+        self._sync_archive_geometry()
 
     # ---------- Закрытие ----------
 
@@ -244,28 +275,48 @@ class NewTaskDialog(QDialog):
         # NEW: комбобокс приоритета. Дефолт — «Средний» (индекс 1).
         priorities = (
             self.service.get_priorities() if self.service
-            else ["Высокий", "Средний", "Низкий"]
+            else ["Дедлайн", "Высокий", "Средний", "Низкий"]
         )
         self.priority_combo = InputWidgetFactory.create_combo_box(
             self,
             items=priorities,
-            current_index=1,
+            current_index=2,
             bg_color=(85, 60, 42, 0.9),
             border="1px solid #6b4a33",
         )
 
-        # NEW: триггер — при потере фокуса полем «Задача» показать
-        # «Подробное описание».
+        # NEW: combo типа дедлайна — в ряду с приоритетом.
+        # Изначально скрыт, появляется при выборе DEADLINE.
+        self.deadline_type_combo = InputWidgetFactory.create_combo_box(
+            self,
+            items=["До даты включительно", "Срок"],
+            current_index=0,
+            bg_color=(85, 60, 42, 0.9),
+            border="1px solid #6b4a33",
+        )
+        self.deadline_type_combo.setVisible(False)
+
+        # Строка «Приоритет» — контейнер из двух combo.
+        priority_row = QWidget()
+        priority_row_layout = QHBoxLayout(priority_row)
+        priority_row_layout.setContentsMargins(0, 0, 0, 0)
+        priority_row_layout.setSpacing(6)
+        priority_row_layout.addWidget(self.priority_combo, 1)
+        priority_row_layout.addWidget(self.deadline_type_combo, 1)
+
         self.task_edit.textChanged.connect(self._on_title_changed)
 
-        # NEW: форма из двух полей — «Задача» и «Приоритет».
+        # Поля ввода дедлайна — под формой, показываются при DEADLINE.
+        self._deadline_fields = DeadlineFieldsWidget(self)
+        self._deadline_fields.setVisible(False)
+
         label_kwargs = {
             "bg_color": (145, 105, 75, 0.0),
             "text_color": "#dabdab",
             "padding": "4px 8px",
             "border_radius": 3,
             "alignment": Qt.AlignLeft | Qt.AlignVCenter,
-            "fixed_size": (120, 24),  # NEW: фиксированный размер
+            "fixed_size": (120, 24),
         }
         task_label = LabelFactory.create_label(self, "Задача:", **label_kwargs)
         priority_label = LabelFactory.create_label(self, "Приоритет:", **label_kwargs)
@@ -274,23 +325,30 @@ class NewTaskDialog(QDialog):
             self,
             rows=[
                 (task_label, self.task_edit),
-                (priority_label, self.priority_combo),
+                (priority_label, priority_row),
             ],
             spacing=10,
             margins=(10, 10, 10, 10),
         )
         content_layout.addWidget(form)
+        content_layout.addWidget(self._deadline_fields)
 
+        # Триггеры.
+        self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
+        self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
+
+        # Предзаполнение при редактировании (один блок, без дублирования).
         if not self.creator:
             self.task_edit.setText(self.task.title)
             self.full_desc_edit.setPlainText(self.task.description)
-            # Приоритет ищем по display_name — устойчивее, чем по индексу.
-            # Если в будущем поменяется состав TaskPriority — цикл всё равно
-            # найдёт нужное значение.
             for i in range(self.priority_combo.count()):
                 if self.priority_combo.itemText(i) == self.task.priority.display_name:
                     self.priority_combo.setCurrentIndex(i)
                     break
+            # Показать поля дедлайна, если задача дедлайновая.
+            self._on_priority_changed(self.priority_combo.currentText())
+            if self.task.priority == TaskPriority.DEADLINE and self.task.deadline_datetime:
+                self._deadline_fields._load_initial(self.task.deadline_datetime)
 
     def get_title(self) -> str:
         """Возвращает введённое название, очищенное от пробелов."""
@@ -341,3 +399,26 @@ class NewTaskDialog(QDialog):
         """
         # strip() — чтобы одни пробелы не считались «непустым» названием.
         self.full_desc_edit.setReadOnly(not bool(text.strip()))
+
+    def _on_priority_changed(self, text: str) -> None:
+        """Показывает combo типа и поля дедлайна, если выбран DEADLINE."""
+        is_deadline = (text == TaskPriority.DEADLINE.display_name)
+        self.deadline_type_combo.setVisible(is_deadline)
+        self._deadline_fields.setVisible(is_deadline)
+
+    def _on_deadline_type_changed(self, text: str) -> None:
+        """Переключает режим полей ввода в DeadlineFieldsWidget."""
+        mode = "inclusive" if text == "До даты включительно" else "duration"
+        self._deadline_fields.set_mode(mode)
+
+    def get_deadline_data(self) -> Optional[str]:
+        """Возвращает строку дедлайна или None.
+
+        Для не-DEADLINE приоритетов всегда None.
+        """
+        if self.priority_combo.currentText() != TaskPriority.DEADLINE.display_name:
+            return None
+        mode = ("inclusive"
+                if self.deadline_type_combo.currentText() == "До даты включительно"
+                else "duration")
+        return self._deadline_fields.get_deadline_data(mode)

@@ -16,7 +16,7 @@ from ui.factories.factories import (
     WindowFactory, ButtonFactory, LabelFactory, ListWidgetFactory,
     BaseWidgetFactory,
 )
-
+from models.planner_task import TaskPriority
 
 class _BasePlannerListWindow(QMainWindow):
     """Базовое окно со списком задач.
@@ -36,18 +36,18 @@ class _BasePlannerListWindow(QMainWindow):
     ACCENT_SHIFT = 25
     ACCENT_ALPHA = 0.7
 
-    # Цвета приоритетов.
+    # Цвета
     PRIORITY_COLORS = {
+        "Дедлайн": (220, 130, 60, 0.85),
         "Высокий": (180, 70, 70, 0.85),
         "Средний": (180, 150, 70, 0.85),
-        "Низкий":  (100, 150, 100, 0.85),
+        "Низкий": (100, 150, 100, 0.85),
     }
-
-    # Цвета статусов.
     STATUS_COLORS = {
-        "Активная":  (80, 100, 160, 0.85),
+        "Активная": (80, 100, 160, 0.85),
         "Выполнена": (100, 150, 100, 0.85),
-        "Отменена":  (120, 120, 120, 0.85),
+        "Отменена": (120, 120, 120, 0.85),
+        "Просрочено": (200, 70, 70, 0.85),
     }
 
     # Нейтральный цвет для неизвестных значений.
@@ -59,6 +59,7 @@ class _BasePlannerListWindow(QMainWindow):
         "priority": "_build_priority",
         "status": "_build_status",
         "date": "_build_date",
+        "specifications": "_build_specifications",
     }
 
     def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8)):
@@ -250,6 +251,32 @@ class _BasePlannerListWindow(QMainWindow):
             min_size=(100, 0),
             padding="4px 8px",
             border_radius=4,
+        )
+
+    DEADLINE_DATE_BG = (130, 40, 40, 0.85)
+
+    def _build_specifications(self, task):
+        """Колонка спецификаций: для дедлайн-задач — дата дедлайна.
+
+        Вход: task — PlannerTask.
+        Выход: QLabel с датой дедлайна на красном фоне или пустой
+               лейбл для выравнивания.
+        """
+        if task.priority != TaskPriority.DEADLINE:
+            return LabelFactory.create_label(
+                self, text="", bg_color=(0, 0, 0, 0),
+                text_color="#d4d4d4", alignment=Qt.AlignCenter,
+                min_size=(100, 0),
+            )
+        dl = task.get_deadline_datetime()
+        if dl is None:
+            text = "—"
+        else:
+            text = dl.strftime("%d.%m.%Y %H:%M")
+        return LabelFactory.create_label(
+            self, text=text, bg_color=self.DEADLINE_DATE_BG,
+            text_color="#ffffff", alignment=Qt.AlignCenter,
+            min_size=(100, 0), padding="4px 8px", border_radius=4,
         )
 
     # ---------- Обработчики ----------

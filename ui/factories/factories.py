@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QGridLayout, QFormLayout, QStackedLayout,
     QTextEdit, QSpinBox, QDateTimeEdit, QAbstractSpinBox, QDateEdit
 )
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Optional
 
 
 class BaseWidgetFactory:
@@ -294,6 +294,11 @@ class ButtonFactory(BaseWidgetFactory):
         )
         btn.clicked.connect(callback)
         return btn
+
+    @staticmethod
+    def create_deadline_button(parent) -> DeadlineTaskButton:
+        """Создаёт кнопку задачи с дедлайном и прогрессбаром."""
+        return DeadlineTaskButton(parent)
 
     @staticmethod
     def _apply_button_style(btn, bg_color, text_color=None, padding="8px 16px",
@@ -1067,14 +1072,22 @@ class InputWidgetFactory(BaseWidgetFactory):
                         border="1px solid #5a4a5c", border_radius=5,
                         padding="3px", fixed_size=None,
                         object_name=None, cursor_shape=None,
-                        font_size=None, extra_style=""):
+                        font_size=None, extra_style="", show_buttons=True):
         """
         Создаёт стилизованное числовое поле (QSpinBox).
+        Параметр show_buttons:
+            True (по умолчанию) — стрелки вверх/вниз.
+            False — стрелки скрыты, значение вводится только с клавиатуры.
         """
         spin = QSpinBox(parent)
         spin.setRange(min_value, max_value)
         spin.setValue(value)
         spin.setButtonSymbols(QAbstractSpinBox.UpDownArrows)  # <-- добавлено
+        if show_buttons:
+            spin.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
+        else:
+            # NoButtons убирает стрелки полностью — остаётся чистое поле ввода.
+            spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
         if prefix:
             spin.setPrefix(prefix)
         if suffix:
@@ -1523,6 +1536,325 @@ class ListWidgetFactory(BaseWidgetFactory):
         )
 
         return scroll_area, content_widget, content_layout
+class DeadlineTaskButton(QWidget):
+    """Кнопка задачи с дедлайном: полоса слева + название + прогрессбар.
+
+    Назначение:
+        Отдельный вид кнопки-слота для дедлайн-задач в быстром просмотре.
+        Отличается от обычной QPushButton наличием прогрессбара и
+        оранжевой полосой слева.
+
+    Сигналы:
+        clicked() — испускается при клике по любой части виджета.
+
+    Роль в программе:
+        Используется PlannerQuickView вместо QPushButton для задач
+        с priority == DEADLINE.
+    """
+
+    clicked = Signal()
+
+    # Цвета фона и полосы.
+    BG = (78, 78, 83, 0.95)
+    BG_HOVER = (98, 98, 103, 0.95)
+    BG_PRESSED = (60, 60, 65, 0.95)
+    STRIPE_COLOR = (220, 130, 60, 1.0)
+    TEXT_COLOR = "#e0e0e0"
+    PROGRESS_CHUNK_NORMAL = (100, 180, 120, 0.9)
+    PROGRESS_CHUNK_RED = (200, 70, 70, 0.9)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # WA_StyledBackground — чтобы QSS с background-color работал
+        # на QWidget (у чистого QWidget фон по умолчанию не рисуется).
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 4, 8, 4)
+        layout.setSpacing(2)
+
+        # Название задачи.
+        self._title_label = QLabel()
+        self._title_label.setStyleSheet(
+            f"color: {self.TEXT_COLOR}; font-size: 11px; background: transparent;"
+        )
+        # Пропускаем клики через label.
+        self._title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        # Прогрессбар.
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setFixedHeight(4)
+        self._progress_bar.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        layout.addWidget(self._title_label)
+        layout.addWidget(self._progress_bar)
+
+        self._hovered = False
+        self._pressed = False
+        self._apply_bg(self.BG)
+
+    def _apply_bg(self, bg) -> None:
+        """Устанавливает фон и полосу через QSS."""
+        bg_str = BaseWidgetFactory.color_to_str(bg)
+        stripe_str = BaseWidgetFactory.color_to_str(self.STRIPE_COLOR)
+        self.setStyleSheet(f"""
+            DeadlineTaskButton {{
+                background-color: {bg_str};
+                border: none;
+                border-left: 4px solid {stripe_str};
+                border-radius: 4px;
+            }}
+        """)
+
+    def set_task(self, task) -> None:
+        """Устанавливает название и пересчитывает прогресс."""
+        self._title_label.setText(task.title)
+        self.update_progress(task)
+
+    def update_progress(self, task) -> None:
+        """Обновляет прогресс-бар.
+
+        progress = min(100, elapsed / total * 100).
+        total <= 0 → progress = 100.
+        progress >= 90 → красный chunk.
+        """
+        from datetime import datetime
+        created = task.get_created_datetime()
+        deadline = task.get_deadline_datetime()
+        if created is None or deadline is None:
+            self._progress_bar.setValue(0)
+            return
+
+        total = (deadline - created).total_seconds()
+        if total <= 0:
+            progress = 100
+        else:
+            elapsed = (datetime.now() - created).total_seconds()
+            progress = max(0, min(100, int(elapsed / total * 100)))
+
+        self._progress_bar.setValue(progress)
+
+        chunk = (BaseWidgetFactory.color_to_str(self.PROGRESS_CHUNK_RED)
+                 if progress >= 90
+                 else BaseWidgetFactory.color_to_str(self.PROGRESS_CHUNK_NORMAL))
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: rgba(0, 0, 0, 0.3);
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {chunk};
+                border-radius: 2px;
+            }}
+        """)
+
+    # ---------- Обработка мыши ----------
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._pressed = True
+            self._apply_bg(self.BG_PRESSED)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._pressed:
+            self._pressed = False
+            self._apply_bg(self.BG_HOVER if self._hovered else self.BG)
+            # Сигнал только если отпустили внутри виджета.
+            if self.rect().contains(event.position().toPoint()):
+                self.clicked.emit()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        if not self._pressed:
+            self._apply_bg(self.BG_HOVER)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        if not self._pressed:
+            self._apply_bg(self.BG)
+        super().leaveEvent(event)
+
+
+class DeadlineFieldsWidget(QWidget):
+    """Поля ввода дедлайна: инклюзивный блок + блок срока.
+
+    Не содержит combo выбора типа — тип передаётся снаружи через
+    set_mode(). Это позволяет встроить combo в ряд с приоритетом
+    в NewTaskDialog.
+
+    Режимы:
+        "inclusive" — дата + часы + минуты.
+        "duration" — значение + единица (Часы/Дни/Месяцы).
+    """
+
+    def __init__(self, parent=None, initial: Optional[str] = None,
+                 mode: str = "inclusive",
+                 field_bg=(85, 60, 42, 0.9),
+                 field_border="1px solid #6b4a33"):
+        """Конструктор.
+
+        Вход:
+            parent — родительский виджет.
+            initial — строка дедлайна "%d.%m.%Y %H:%M" для предзаполнения.
+            mode — начальный режим: "inclusive" или "duration".
+            field_bg — цвет фона полей ввода. По умолчанию —
+                       коричневый (из NewTaskDialog).
+            field_border — CSS-рамка полей. По умолчанию — коричневая.
+
+        Роль: цвета полей вынесены в параметры, чтобы виджет подходил
+              под фон любого родительского диалога. DeadlineEditDialog
+              передаёт сине-серую палитру.
+        """
+        super().__init__(parent)
+        self._initial = initial
+        self._mode = mode
+        # NEW: цвета полей. Сохраняем до _build_ui — там они используются.
+        self._field_bg = field_bg
+        self._field_border = field_border
+        self._build_ui()
+        if initial:
+            self._load_initial(initial)
+        self.set_mode(mode)
+
+    def _build_ui(self) -> None:
+        """Собирает UI: два взаимозаменяемых блока."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        lbl_kw = {"bg_color": (0, 0, 0, 0), "text_color": "#d4d4d4", "font_size": 11}
+
+        # --- Инклюзивный блок ---
+        self._inclusive = QWidget()
+        inc_l = QHBoxLayout(self._inclusive)
+        inc_l.setContentsMargins(0, 0, 0, 0)
+        inc_l.setSpacing(4)
+
+        self._date_edit = InputWidgetFactory.create_line_edit(
+            self._inclusive,
+            placeholder="ДД.ММ.ГГГГ",
+            bg_color=self._field_bg,
+            border=self._field_border,
+            border_radius=3,
+            padding="3px",
+            max_length=10,
+        )
+        # REPLACE: setFixedWidth вместо fixed_size=(..., 0) —
+        # height=0 делает виджет невидимым.
+        self._date_edit.setFixedWidth(100)
+
+        self._hours_spin = InputWidgetFactory.create_spin_box(
+            self._inclusive, min_value=0, max_value=23, value=0,
+            bg_color=self._field_bg, border=self._field_border,
+            show_buttons=False,
+        )
+        self._hours_spin.setFixedWidth(60)
+
+        self._minutes_spin = InputWidgetFactory.create_spin_box(
+            self._inclusive, min_value=0, max_value=59, value=0,
+            bg_color=self._field_bg, border=self._field_border,
+            show_buttons=False,
+        )
+        self._minutes_spin.setFixedWidth(60)
+
+        inc_l.addWidget(LabelFactory.create_label(self._inclusive, "Дата:", **lbl_kw))
+        inc_l.addWidget(self._date_edit)
+        inc_l.addWidget(LabelFactory.create_label(self._inclusive, "Час:", **lbl_kw))
+        inc_l.addWidget(self._hours_spin)
+        inc_l.addWidget(LabelFactory.create_label(self._inclusive, "Мин:", **lbl_kw))
+        inc_l.addWidget(self._minutes_spin)
+        inc_l.addStretch()
+        layout.addWidget(self._inclusive)
+
+        # --- Блок «Срок» ---
+        self._duration = QWidget()
+        dur_l = QHBoxLayout(self._duration)
+        dur_l.setContentsMargins(0, 0, 0, 0)
+        dur_l.setSpacing(4)
+
+        self._duration_value = InputWidgetFactory.create_spin_box(
+            self._duration, min_value=1, max_value=9999, value=1,
+            bg_color=self._field_bg, border=self._field_border,
+            show_buttons=False,
+        )
+        self._duration_value.setFixedWidth(80)
+
+        self._duration_unit = InputWidgetFactory.create_combo_box(
+            self._duration,
+            items=["Часы", "Дни", "Месяцы"],
+            current_index=1,
+            bg_color=self._field_bg,
+            border=self._field_border,
+        )
+
+        dur_l.addWidget(LabelFactory.create_label(self._duration, "Через:", **lbl_kw))
+        dur_l.addWidget(self._duration_value)
+        dur_l.addWidget(self._duration_unit)
+        dur_l.addStretch()
+        layout.addWidget(self._duration)
+
+    def set_mode(self, mode: str) -> None:
+        """Переключает режим отображения.
+
+        Вход: mode — "inclusive" или "duration".
+        Роль: показывает нужный блок, второй скрывает.
+        """
+        self._mode = mode
+        self._inclusive.setVisible(mode == "inclusive")
+        self._duration.setVisible(mode == "duration")
+
+    def _load_initial(self, deadline_str: str) -> None:
+        """Предзаполняет поля из строки "%d.%m.%Y %H:%M"."""
+        from datetime import datetime
+        try:
+            dt = datetime.strptime(deadline_str, "%d.%m.%Y %H:%M")
+        except (ValueError, TypeError):
+            return
+        self._date_edit.setText(dt.strftime("%d.%m.%Y"))
+        self._hours_spin.setValue(dt.hour)
+        self._minutes_spin.setValue(dt.minute)
+
+    def get_deadline_data(self, mode: Optional[str] = None) -> Optional[str]:
+        """Возвращает строку дедлайна или None, если ввод некорректен.
+
+        Вход: mode — "inclusive" или "duration". Если None — берётся
+              текущий режим виджета.
+        """
+        from datetime import datetime, timedelta
+        actual_mode = mode if mode is not None else self._mode
+
+        if actual_mode == "inclusive":
+            date_str = self._date_edit.text().strip()
+            h = self._hours_spin.value()
+            m = self._minutes_spin.value()
+            try:
+                datetime.strptime(date_str, "%d.%m.%Y")
+            except ValueError:
+                return None
+            return f"{date_str} {h:02d}:{m:02d}"
+
+        val = self._duration_value.value()
+        unit = self._duration_unit.currentText()
+        if unit == "Часы":
+            delta = timedelta(hours=val)
+        elif unit == "Дни":
+            delta = timedelta(days=val)
+        else:
+            delta = timedelta(days=val * 30)
+        target = datetime.now() + delta
+        return target.strftime("%d.%m.%Y %H:%M")
 
 class LayoutFactory:
     """
@@ -1877,7 +2209,6 @@ class WindowFactory:
             return main_layout
         return None
 
-    @staticmethod
     @staticmethod
     def show_child_window(parent, child, modal=True, cover_parent=False):
         """Показывает дочернее окно с геометрией относительно родителя.

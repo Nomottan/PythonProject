@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, BaseWidgetFactory,
 )
-from models.planner_task import PlannerTask, TaskStatus
+from models.planner_task import PlannerTask, TaskStatus, TaskPriority
 
 
 class PlannerTaskMainCommentary(QDialog):
@@ -98,6 +98,51 @@ class PlannerTaskMainCommentary(QDialog):
             font_size=11,
         )
         layout.addWidget(info_lbl)
+
+        if task.priority == TaskPriority.DEADLINE:
+            dl = task.get_deadline_datetime()
+            if dl is not None:
+                deadline_row = QHBoxLayout()
+                deadline_row.setContentsMargins(0, 0, 0, 0)
+                deadline_row.setSpacing(8)
+                deadline_row.addStretch()
+
+                deadline_lbl = LabelFactory.create_label(
+                    self,
+                    text=f"Дата завершения: {dl.strftime('%d.%m.%Y %H:%M')}",
+                    bg_color=(0, 0, 0, 0),
+                    text_color="#ffd9a0",
+                    alignment=Qt.AlignCenter,
+                    font_size=11,
+                    padding="0px",
+                )
+                deadline_row.addWidget(deadline_lbl)
+
+                # Разделитель между двумя частями.
+                separator = LabelFactory.create_label(
+                    self,
+                    text="|",
+                    bg_color=(0, 0, 0, 0),
+                    text_color="#6a7a8a",
+                    alignment=Qt.AlignCenter,
+                    font_size=11,
+                    padding="0px",
+                )
+                deadline_row.addWidget(separator)
+
+                remaining_lbl = LabelFactory.create_label(
+                    self,
+                    text=self._format_remaining(dl),
+                    bg_color=(0, 0, 0, 0),
+                    text_color="#d4d4d4",
+                    alignment=Qt.AlignCenter,
+                    font_size=11,
+                    padding="0px",
+                )
+                deadline_row.addWidget(remaining_lbl)
+
+                deadline_row.addStretch()
+                layout.addLayout(deadline_row)
 
         # --- Описание: два взаимозаменяемых виджета ---
         # Режим просмотра — QLabel.
@@ -205,6 +250,36 @@ class PlannerTaskMainCommentary(QDialog):
         self._desc_edit.setVisible(True)
         self._btn_comment.setEnabled(False)
         self._btn_save.setEnabled(True)
+
+    @staticmethod
+    def _split_delta(delta) -> tuple:
+        """Возвращает (дни, часы, минуты) из timedelta."""
+        total = int(delta.total_seconds())
+        days = total // 86400
+        hours = (total % 86400) // 3600
+        minutes = (total % 3600) // 60
+        return days, hours, minutes
+
+    def _format_remaining(self, deadline) -> str:
+        """Форматирует «Осталось: Xд Yч Zм» или «Просрочено: Xд Yч Zм»."""
+        from datetime import datetime
+        now = datetime.now()
+        delta = deadline - now
+        if delta.total_seconds() >= 0:
+            prefix = "Осталось"
+            d, h, m = self._split_delta(delta)
+        else:
+            prefix = "Просрочено"
+            d, h, m = self._split_delta(-delta)
+
+        parts = []
+        if d > 0:
+            parts.append(f"{d}д")
+        if h > 0:
+            parts.append(f"{h}ч")
+        if m > 0 or not parts:
+            parts.append(f"{m}м")
+        return f"{prefix}: {' '.join(parts)}"
 
     def _on_save(self) -> None:
         """«Сохранить» — сохраняет описание и возвращается в режим просмотра."""

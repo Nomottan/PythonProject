@@ -1,5 +1,5 @@
 from PySide6.QtCore import QObject, Signal
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Optional
 from utils.task_id_generator import TaskIdGenerator
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus
@@ -30,7 +30,8 @@ class PlannerService(QObject):
 
     def create_task(self, title: str, description: str = "",
                     priority: TaskPriority = TaskPriority.MEDIUM,
-                    spawner_task: Optional[int] = None) -> PlannerTask:
+                    spawner_task: Optional[int] = None,
+                    deadline_datetime: Optional[str] = None) -> PlannerTask:
         """Создаёт задачу, генерирует task_id, сохраняет.
 
         Вход:
@@ -44,6 +45,10 @@ class PlannerService(QObject):
         if not title or not title.strip():
             raise ValueError("Название задачи не может быть пустым")
         task_id = TaskIdGenerator.generate(self._storage)
+        now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+        if priority == TaskPriority.DEADLINE and not deadline_datetime:
+            fallback_dt = datetime.now() + timedelta(days=1)
+            deadline_datetime = fallback_dt.strftime("%d.%m.%Y %H:%M")
         task = PlannerTask(
             task_id=task_id,
             title=title.strip(),
@@ -53,9 +58,11 @@ class PlannerService(QObject):
             created_date=date.today().strftime("%d.%m.%Y"),
             completed_date=None,
             spawner_task=spawner_task,
+            # deadline_datetime сохраняем только для DEADLINE.
+            deadline_datetime=deadline_datetime if priority == TaskPriority.DEADLINE else None,
+            created_datetime=now_str,
         )
         self._storage.add(task)
-        # NEW: сообщаем подписчикам.
         self.tasks_changed.emit()
         return task
 
@@ -94,8 +101,30 @@ class PlannerService(QObject):
         self.tasks_changed.emit()
         return True
 
-    def update_task(self, task_id: int, title: str, description: str = "",
-                    priority: TaskPriority = TaskPriority.MEDIUM) -> PlannerTask:
+    def check_overdue(self) -> bool:
+        """Проверяет активные задачи, помечает просроченные дедлайны.
+
+        Выход: True — были изменения; False — нет.
+
+        Роль: вызывается таймером контроллера (60 сек). Сигнал НЕ
+              испускает: вызывающий код сам решает, обновлять ли
+              раскладку слотов (иначе карусели пересоздаются каждую
+              минуту).
+        """
+        changed = False
+        for task in self._storage.get_all():
+            if task.status == TaskStatus.ACTIVE and task.is_overdue():
+                task.status = TaskStatus.OVERDUE
+                changed = True
+        if changed:
+            self._storage.save()
+        return changed
+
+    def update_task(self, task_id: int,
+                    title: Optional[str] = None,
+                    description: Optional[str] = None,
+                    priority: Optional[TaskPriority] = None,
+                    deadline_datetime: Optional[str] = None) -> bool:
         """Обновляет существующую задачу.
 
         Вход:
@@ -124,17 +153,39 @@ class PlannerService(QObject):
                 target = task
                 break
         if target is None:
-            raise ValueError(f"Задача с id={task_id} не найдена")
+            return False
 
-        target.title = title.strip()
-        target.description = description
-        target.priority = priority
+        if title is not None:
+            target.title = title.strip()
+        if description is not None:
+            target.description = description
+
+        if priority is not None:
+            target.priority = priority
+            if priority != TaskPriority.DEADLINE:
+                # Не дедлайн — обнуляем дату.
+                target.deadline_datetime = None
+            elif deadline_datetime:
+                target.deadline_datetime = deadline_datetime
+            elif not target.deadline_datetime:
+                # Переключили на DEADLINE без даты, даты не было — fallback.
+                fallback_dt = datetime.now() + timedelta(days=1)
+                target.deadline_datetime = fallback_dt.strftime("%d.%m.%Y %H:%M")
+        elif deadline_datetime:
+            # Приоритет не меняется, но дату обновили явно.
+            target.deadline_datetime = deadline_datetime
+
         self._storage.save()
-        return target
+        return True
 
     def get_priorities(self) -> list[str]:
         """Возвращает список приоритетов в виде строк для UI."""
-        return [p.display_name for p in TaskPriority]
+        return [
+            TaskPriority.DEADLINE.display_name,
+            TaskPriority.HIGH.display_name,
+            TaskPriority.MEDIUM.display_name,
+            TaskPriority.LOW.display_name,
+        ]
 
     def get_statuses(self) -> list[str]:
         """Возвращает список статусов в виде строк для UI."""

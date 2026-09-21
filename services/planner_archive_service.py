@@ -1,5 +1,5 @@
-from datetime import date
-
+from datetime import date, datetime
+from typing import Optional
 from models.planner_task import PlannerTask, TaskStatus
 from storage.planner_task_storage import PlannerTaskStorage
 from storage.planner_archive_storage import PlannerArchiveStorage
@@ -14,7 +14,8 @@ class PlannerArchiveService:
     """
 
     def __init__(self, archive_storage: PlannerArchiveStorage,
-                 active_storage: PlannerTaskStorage, log_manager=None):
+                 active_storage: PlannerTaskStorage, log_manager=None,
+                 planner_service=None):
         """Конструктор.
 
         Вход:
@@ -28,6 +29,7 @@ class PlannerArchiveService:
         self._archive_storage = archive_storage
         self._active_storage = active_storage
         self._log_manager = log_manager
+        self._planner_service = planner_service
 
     def get_archive_tasks(self) -> list[PlannerTask]:
         """Все задачи из архива, отсортированные по task_id убыв."""
@@ -58,18 +60,16 @@ class PlannerArchiveService:
         """
         return self._archive_storage.remove(task_id)
 
-    def restore_task(self, task_id: int) -> PlannerTask | None:
+    def restore_task(self, task_id: int,
+                     deadline_datetime: Optional[str] = None) -> PlannerTask | None:
         """Восстанавливает задачу из архива.
 
-        Вход: task_id — идентификатор задачи в архиве.
-        Выход: PlannerTask — восстановленная задача или None, если
-               задача с таким id в архиве не найдена.
+        Вход:
+            task_id — идентификатор в архиве.
+            deadline_datetime — новая дата дедлайна (для дедлайн-задач
+                                из DeadlineEditDialog). Может быть None.
 
-        Логика:
-            CANCELLED → возвращает в активные с тем же task_id,
-                        status = ACTIVE, completed_date = None.
-            COMPLETED → создаёт новую задачу в активных с новым task_id
-                        (от сегодня); оригинал остаётся в архиве.
+        Выход: PlannerTask или None.
         """
         # Ищем задачу в архиве.
         target = None
@@ -81,15 +81,17 @@ class PlannerArchiveService:
             return None
 
         if target.status == TaskStatus.CANCELLED:
-            # Возвращаем как есть — тот же task_id, статус ACTIVE.
             target.status = TaskStatus.ACTIVE
             target.completed_date = None
+            if deadline_datetime:
+                target.deadline_datetime = deadline_datetime
             self._archive_storage.remove(task_id)
             self._active_storage.add(target)
+            # NEW: уведомляем подписчиков (мини-планировщик, PlannerWindow).
+            self._emit_tasks_changed()
             return target
 
         if target.status == TaskStatus.COMPLETED:
-            # Создаём новую задачу, оригинал остаётся в архиве.
             new_id = TaskIdGenerator.generate(self._active_storage)
             new_task = PlannerTask(
                 task_id=new_id,
@@ -99,17 +101,32 @@ class PlannerArchiveService:
                 status=TaskStatus.ACTIVE,
                 created_date=date.today().strftime("%d.%m.%Y"),
                 completed_date=None,
-                # NEW: новая задача порождена архивной задачей task_id.
-                # Позволяет при повторном ↺ показать предупреждение.
                 spawner_task=task_id,
+                deadline_datetime=deadline_datetime or target.deadline_datetime,
+                created_datetime=datetime.now().strftime("%d.%m.%Y %H:%M"),
             )
             self._active_storage.add(new_task)
+            # NEW: уведомляем подписчиков.
+            self._emit_tasks_changed()
             return new_task
 
-        # На случай, если в архиве оказалась задача с ACTIVE —
-        # просто вернуть её в активные.
+            # Fallback: ACTIVE-задача в архиве.
         target.status = TaskStatus.ACTIVE
         target.completed_date = None
+        if deadline_datetime:
+            target.deadline_datetime = deadline_datetime
         self._archive_storage.remove(task_id)
         self._active_storage.add(target)
+        # NEW: уведомляем подписчиков.
+        self._emit_tasks_changed()
         return target
+
+    def _emit_tasks_changed(self) -> None:
+        """Испускает tasks_changed у PlannerService, если он передан.
+
+        Роль: единая точка уведомления подписчиков после изменений
+              активного хранилища. Если PlannerService не передан —
+              тихо ничего не делаем (обратная совместимость).
+        """
+        if self._planner_service is not None:
+            self._planner_service.tasks_changed.emit()

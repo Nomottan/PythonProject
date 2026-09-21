@@ -103,27 +103,38 @@ class PlannerQuickViewController(QObject):
     на tasks_changed, крутит карусели, открывает диалог задачи.
     """
 
-    TOTAL_SLOTS = 6
-    # Диапазон случайного интервала карусели, мс.
+    TOTAL_SLOTS = 7
     CAROUSEL_MIN_MS = 15_000
     CAROUSEL_MAX_MS = 45_000
+    PROGRESS_INTERVAL_MS = 60_000  # 60 секунд
+
+    # Цвета полос слева на кнопках-слотах.
+    PRIORITY_COLORS = {
+        TaskPriority.DEADLINE: (110, 65, 30, 1.0),  # оранжевый
+        TaskPriority.HIGH: (75, 50, 45, 0.85),
+        TaskPriority.MEDIUM: (35, 45, 75, 0.85),
+        TaskPriority.LOW: (50, 50, 50, 0.85),  # серый
+    }
+
+    # Порядок обхода приоритетов — от высшего к низшему.
+    PRIORITY_ORDER = (
+        TaskPriority.DEADLINE,
+        TaskPriority.HIGH,
+        TaskPriority.MEDIUM,
+        TaskPriority.LOW,
+    )
 
     def __init__(self, service: PlannerService, view):
-        """Конструктор.
-
-        Вход:
-            service — PlannerService с сигналом tasks_changed.
-            view — PlannerQuickView с сигналом task_clicked.
-        """
         super().__init__()
         self._service = service
         self._view = view
 
-        # Три филлера — по одному на приоритет.
+        # 4 филлера: DEADLINE=1, HIGH=3, MEDIUM=2, LOW=1.
         self._fillers = {
-            TaskPriority.HIGH:   PrioritySlotFiller(TaskPriority.HIGH, 3),
+            TaskPriority.DEADLINE: PrioritySlotFiller(TaskPriority.DEADLINE, 1),
+            TaskPriority.HIGH: PrioritySlotFiller(TaskPriority.HIGH, 3),
             TaskPriority.MEDIUM: PrioritySlotFiller(TaskPriority.MEDIUM, 2),
-            TaskPriority.LOW:    PrioritySlotFiller(TaskPriority.LOW, 1),
+            TaskPriority.LOW: PrioritySlotFiller(TaskPriority.LOW, 1),
         }
 
         # Таймеры каруселей: по одному на приоритет.
@@ -141,6 +152,12 @@ class PlannerQuickViewController(QObject):
         # Подписки.
         self._service.tasks_changed.connect(self.refresh)
         self._view.task_clicked.connect(self._on_task_clicked)
+
+        # Таймер прогрессбаров и проверки просрочек — каждые 60 сек.
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(self.PROGRESS_INTERVAL_MS)
+        self._progress_timer.timeout.connect(self._on_progress_tick)
+        self._progress_timer.start()
 
         # Первая отрисовка.
         self.refresh()
@@ -174,7 +191,7 @@ class PlannerQuickViewController(QObject):
             filler.reset(tasks)
 
         # 5. Фаза 1: базовое заполнение.
-        for p in (TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW):
+        for p in self.PRIORITY_ORDER:
             self._fillers[p].fill()
 
         # 6. Фаза 2: редистрибуция свободных слотов.
@@ -185,6 +202,19 @@ class PlannerQuickViewController(QObject):
 
         # 8. Отдаём в виджет.
         self._view.set_slots(slots)
+
+    def _on_progress_tick(self) -> None:
+        """Раз в 60 сек: проверяет просрочки и обновляет прогрессбары.
+
+        Роль: check_overdue возвращает bool, не испускает tasks_changed
+              (иначе карусели пересоздавались бы каждую минуту).
+              Если что-то изменилось — refresh сам перерисует.
+              Прогрессбары обновляем всегда — время идёт.
+        """
+        if self._service.check_overdue():
+            self.refresh()
+        else:
+            self._view.update_deadline_progress()
 
     # ---------- Внутренние ----------
 
@@ -206,7 +236,7 @@ class PlannerQuickViewController(QObject):
 
             # Ищем высший приоритет с неотображёнными задачами.
             candidate = None
-            for p in (TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW):
+            for p in self.PRIORITY_ORDER:
                 if self._fillers[p].report()["unshown"] > 0:
                     candidate = self._fillers[p]
                     break
@@ -233,14 +263,10 @@ class PlannerQuickViewController(QObject):
         """
         slots: list = []
         # Цвета по приоритету — контроллер передаёт их во view.
-        colors = {
-            TaskPriority.HIGH:   (150, 100, 90, 0.85),
-            TaskPriority.MEDIUM: (70, 90, 150, 0.85),
-            TaskPriority.LOW:    (100, 100, 100, 0.85),
-        }
+        colors = self.PRIORITY_COLORS
         priorities = (TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW)
 
-        for p in priorities:
+        for p in self.PRIORITY_ORDER:
             filler = self._fillers[p]
             shown = filler.get_shown()
             report = filler.report()
@@ -301,12 +327,10 @@ class PlannerQuickViewController(QObject):
         self._carousel_state[priority] = index
 
         slot_index = self._carousel_slot_index[priority]
-        colors = {
-            TaskPriority.HIGH:   (75, 50, 45, 0.85),
-            TaskPriority.MEDIUM: (35, 45, 75, 0.85),
-            TaskPriority.LOW:    (50, 50, 50, 0.85),
-        }
-        self._view.update_slot(slot_index, tasks[index], colors[priority])
+
+        self._view.update_slot(
+            slot_index, tasks[index], self.PRIORITY_COLORS[priority]
+        )
 
         # Перезапуск таймера с новым случайным интервалом.
         timer = self._timers.get(priority)
