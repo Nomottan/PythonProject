@@ -18,6 +18,8 @@ from services.planner_service import PlannerService
 from services.planner_archive_service import PlannerArchiveService
 from storage.planner_task_storage import PlannerTaskStorage
 from storage.planner_archive_storage import PlannerArchiveStorage
+from ui.widgets.planner_quick_view import PlannerQuickView
+from services.plannerviewer_service import PlannerQuickViewController
 
 class MainWindow(QMainWindow):
     # ============================================================
@@ -70,7 +72,11 @@ class MainWindow(QMainWindow):
             self.planner_storage,
             log_manager=self.log_manager,
         )
-
+        self.planner_quick_view = PlannerQuickView(self)
+        self.planner_quick_controller = PlannerQuickViewController(
+            self.planner_service,
+            self.planner_quick_view,
+        )
         # ---- Таймер для обновления кнопки даты/времени ----
         self.timer = QTimer()
         self.timer.timeout.connect(self.on_timer)
@@ -125,6 +131,13 @@ class MainWindow(QMainWindow):
         top_area.addWidget(self.datetime_btn, alignment=Qt.AlignTop)
 
         main_layout.addLayout(top_area)
+
+        main_layout.addStretch(1)
+        quick_row = LayoutFactory.create_row(
+            self, self.planner_quick_view,
+            alignment=Qt.AlignCenter,
+        )
+        main_layout.addWidget(quick_row)
 
         # Центральная колонка с основными кнопками
         center_col = LayoutFactory.create_column(

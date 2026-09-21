@@ -76,6 +76,28 @@ class BaseWidgetFactory:
         return ""
 
     @staticmethod
+    def calc_disabled_color(bg_color):
+        """Рассчитывает цвет для состояния :disabled.
+
+        Вход: bg_color — кортеж (r, g, b) или (r, g, b, a).
+        Выход: CSS-строка rgba или "" для несовместимых типов.
+
+        Логика: avg = (r + g + b) // 3; каждый канал смещается
+        к среднему наполовину. Даёт «выцветший» вид — кнопка выглядит
+        неактивной, но не исчезает.
+        """
+        if isinstance(bg_color, (tuple, list)) and len(bg_color) >= 3:
+            r, g, b = bg_color[:3]
+            avg = (r + g + b) // 3
+            return BaseWidgetFactory.color_to_str((
+                avg + (r - avg) // 5,
+                avg + (g - avg) // 5,
+                avg + (b - avg) // 5,
+                0.8,
+            ))
+        return ""
+
+    @staticmethod
     def calc_text_color(bg_color, forced=None):
         """
         Определяет контрастный цвет текста для заданного фона.
@@ -152,7 +174,7 @@ class ButtonFactory(BaseWidgetFactory):
                       border="none", font_size=None, font_family=None,
                       font_weight=None, extra_style="", checkable=False,
                       checked=False, tooltip=None, min_size=None, max_size=None,
-                      hover_color=None, pressed_color=None):
+                      hover_color=None, pressed_color=None, disabled_color=None):
         btn = QPushButton(text, parent)
         # Устанавливаем общие параметры
         if object_name:
@@ -178,7 +200,7 @@ class ButtonFactory(BaseWidgetFactory):
         ButtonFactory._apply_button_style(
             btn, bg_color, text_color, padding, border_radius, border,
             font_size, font_weight, extra_style, hover_color, pressed_color,
-            alignment, font_family
+            alignment, font_family, disabled_color
         )
         return btn
 
@@ -204,7 +226,7 @@ class ButtonFactory(BaseWidgetFactory):
             font_weight=None,
             extra_style="",
             hover_color=None, tooltip=None, min_size=None, max_size=None,
-            initial_state=None, pressed_color=None,
+            initial_state=None, pressed_color=None, disabled_color=None,
     ):
         from ui.widgets.process_button import ProcessButton, ButtonState
         if initial_state is None:
@@ -242,7 +264,7 @@ class ButtonFactory(BaseWidgetFactory):
         ButtonFactory._apply_button_style(
             btn, bg_color, text_color, padding, border_radius, border,
             font_size, font_weight, extra_style, hover_color, pressed_color,
-            alignment, font_family
+            alignment, font_family, disabled_color
         )
 
     @staticmethod
@@ -277,24 +299,14 @@ class ButtonFactory(BaseWidgetFactory):
     def _apply_button_style(btn, bg_color, text_color=None, padding="8px 16px",
                             border_radius=5, border="none", font_size=None,
                             font_weight=None, extra_style="", hover_color=None,
-                            pressed_color=None, alignment=None, font_family=None):
-        """Применяет стиль к любой кнопке (QPushButton или ProcessButton).
-
-        Вход:
-            btn, bg_color, text_color, padding, border_radius, border,
-            font_size, font_weight, extra_style, hover_color — как раньше.
-            pressed_color — цвет :pressed. Если None, считается calc_pressed_color.
-            alignment — text-align в основном блоке (left/center/right).
-                        Раньше применялся отдельным setStyleSheet и терялся
-                        при последующем вызове setStyleSheet — теперь встроен.
-
-        Роль: единая точка стилизации кнопок. Собирает QSS: основной блок,
-              :hover, :pressed, extra_style.
-        """
+                            pressed_color=None, alignment=None, font_family=None,
+                            disabled_color=None):
         bg_c = BaseWidgetFactory.color_to_str(bg_color)
         text_c = BaseWidgetFactory.calc_text_color(bg_color, text_color)
         hover_c = hover_color if hover_color else BaseWidgetFactory.calc_hover_color(bg_color)
         pressed_c = pressed_color if pressed_color else BaseWidgetFactory.calc_pressed_color(bg_color)
+        disabled_c = (disabled_color if disabled_color
+                      else BaseWidgetFactory.calc_disabled_color(bg_color))
 
         selector = f"QPushButton#{btn.objectName()}" if btn.objectName() else "QPushButton"
 
@@ -332,6 +344,12 @@ class ButtonFactory(BaseWidgetFactory):
                         background-color: {pressed_c};
                     }}
                     """
+        if disabled_c:
+            style += f"""
+                        {selector}:disabled {{
+                            background-color: {disabled_c};
+                        }}
+                        """
 
         if extra_style:
             style += extra_style

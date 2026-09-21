@@ -1,27 +1,24 @@
+from PySide6.QtCore import QObject, Signal
 from datetime import date
+from typing import Optional
 from utils.task_id_generator import TaskIdGenerator
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus
 from storage.planner_task_storage import PlannerTaskStorage
-from typing import Optional
 
 
-class PlannerService:
+
+class PlannerService(QObject):
     """Сервис планировщика задач.
 
     Роль: создаёт задачи, генерирует task_id, читает/пишет через storage.
     Не знает про UI. Задачи отдаёт отсортированными по task_id убыв.
     """
 
+    tasks_changed = Signal()
+
     def __init__(self, storage: PlannerTaskStorage,
                  archive_storage=None, log_manager=None):
-        """Конструктор.
-
-        Вход:
-            storage — PlannerTaskStorage с путём к planner_tasks.json.
-            archive_storage — PlannerArchiveStorage для архива. Если None,
-                              архивация отключена (только удаление).
-            log_manager — LogManager для будущего логирования.
-        """
+        super().__init__()
         self._storage = storage
         self._archive_storage = archive_storage
         self._log_manager = log_manager
@@ -58,6 +55,8 @@ class PlannerService:
             spawner_task=spawner_task,
         )
         self._storage.add(task)
+        # NEW: сообщаем подписчикам.
+        self.tasks_changed.emit()
         return task
 
     def archive_task(self, task_id: int, final_status: TaskStatus) -> bool:
@@ -92,6 +91,7 @@ class PlannerService:
         if self._archive_storage is not None:
             self._archive_storage.add(target)
         self._storage.remove(task_id)
+        self.tasks_changed.emit()
         return True
 
     def update_task(self, task_id: int, title: str, description: str = "",
