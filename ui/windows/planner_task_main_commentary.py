@@ -71,9 +71,12 @@ class PlannerTaskMainCommentary(QDialog):
         layout.setSpacing(15)
 
         # --- Заголовок ---
+        is_instance = task.is_recurring_instance()
+        title_text = (f"Экземпляр: {task.title}" if is_instance
+                      else f"Задача: {task.title}")
         title_lbl = LabelFactory.create_label(
             self,
-            text=f"Задача: {task.title}",
+            text=title_text,
             bg_color=(0, 0, 0, 0),
             text_color="#ffffff",
             alignment=Qt.AlignCenter,
@@ -177,34 +180,57 @@ class PlannerTaskMainCommentary(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self._btn_complete = ButtonFactory.create_button(
-            self, "Выполнено", bg_color=(70, 150, 90, 0.85),
-            padding="6px 14px", border_radius=4,
-        )
-        self._btn_complete.clicked.connect(self._on_complete)
-        btn_layout.addWidget(self._btn_complete)
+        if is_instance:
+            # NEW: для экземпляра — «Выполнить», «Отменить», «Закрыть».
+            self._btn_execute = ButtonFactory.create_button(
+                self, "Выполнить", bg_color=(70, 150, 90, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_execute.clicked.connect(self._on_execute)
+            btn_layout.addWidget(self._btn_execute)
 
-        self._btn_comment = ButtonFactory.create_button(
-            self, "Комментарий", bg_color=(70, 100, 150, 0.85),
-            padding="6px 14px", border_radius=4,
-        )
-        self._btn_comment.clicked.connect(self._on_comment)
-        btn_layout.addWidget(self._btn_comment)
+            self._btn_cancel = ButtonFactory.create_button(
+                self, "Отменить", bg_color=(150, 100, 70, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_cancel.clicked.connect(self._on_cancel)
+            btn_layout.addWidget(self._btn_cancel)
 
-        self._btn_save = ButtonFactory.create_button(
-            self, "Сохранить", bg_color=(70, 150, 90, 0.85),
-            padding="6px 14px", border_radius=4,
-        )
-        self._btn_save.clicked.connect(self._on_save)
-        self._btn_save.setEnabled(False)  # изначально нечего сохранять
-        btn_layout.addWidget(self._btn_save)
+            self._btn_close = ButtonFactory.create_button(
+                self, "Закрыть", bg_color=(120, 70, 70, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_close.clicked.connect(self._on_close)
+            btn_layout.addWidget(self._btn_close)
+        else:
+            self._btn_complete = ButtonFactory.create_button(
+                self, "Выполнено", bg_color=(70, 150, 90, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_complete.clicked.connect(self._on_complete)
+            btn_layout.addWidget(self._btn_complete)
 
-        self._btn_close = ButtonFactory.create_button(
-            self, "Закрыть", bg_color=(120, 70, 70, 0.85),
-            padding="6px 14px", border_radius=4,
-        )
-        self._btn_close.clicked.connect(self._on_close)
-        btn_layout.addWidget(self._btn_close)
+            self._btn_comment = ButtonFactory.create_button(
+                self, "Комментарий", bg_color=(70, 100, 150, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_comment.clicked.connect(self._on_comment)
+            btn_layout.addWidget(self._btn_comment)
+
+            self._btn_save = ButtonFactory.create_button(
+                self, "Сохранить", bg_color=(70, 150, 90, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_save.clicked.connect(self._on_save)
+            self._btn_save.setEnabled(False)
+            btn_layout.addWidget(self._btn_save)
+
+            self._btn_close = ButtonFactory.create_button(
+                self, "Закрыть", bg_color=(120, 70, 70, 0.85),
+                padding="6px 14px", border_radius=4,
+            )
+            self._btn_close.clicked.connect(self._on_close)
+            btn_layout.addWidget(self._btn_close)
 
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
@@ -250,6 +276,16 @@ class PlannerTaskMainCommentary(QDialog):
         self._desc_edit.setVisible(True)
         self._btn_comment.setEnabled(False)
         self._btn_save.setEnabled(True)
+
+    def _on_execute(self) -> None:
+        """«Выполнить» — архивирует экземпляр как COMPLETED."""
+        self._service.archive_task(self._task.task_id, TaskStatus.COMPLETED)
+        self.accept()
+
+    def _on_cancel(self) -> None:
+        """«Отменить» — архивирует экземпляр как CANCELLED."""
+        self._service.archive_task(self._task.task_id, TaskStatus.CANCELLED)
+        self.accept()
 
     @staticmethod
     def _split_delta(delta) -> tuple:

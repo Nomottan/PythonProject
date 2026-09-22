@@ -18,7 +18,7 @@ from ui.factories.factories import (
     )
 from ui.factories.window_factories import ExtendedWindowFactory
 from services.planner_service import PlannerService
-from models.planner_task import PlannerTask, TaskPriority, TaskStatus
+from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from ui.windows.message_dialog import MessageDialog, NotificationDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
 
@@ -80,20 +80,43 @@ class PlannerWindow(_BasePlannerListWindow):
     # ---------- Источник данных ----------
 
     def _get_tasks(self):
-        return self.service.get_tasks()
+        """Возвращает активные задачи без экземпляров регулярных.
+
+        Экземпляры показываются только в мини-планировщике; в основном
+        списке их не должно быть.
+        """
+        return [t for t in self.service.get_tasks() if not t.is_recurring_instance()]
 
     # ---------- Билдер actions ----------
 
     def _build_actions(self, task: PlannerTask) -> QWidget:
-        """Кнопки действий: ✓, ✎, ✕."""
+        """Кнопки действий: для генератора ⏸/▶, иначе ✓.
+
+        Вход: task — PlannerTask.
+        Выход: QWidget с кнопками.
+        Роль: для регулярного генератора вместо ✓ — пауза/возобновление.
+        """
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        layout.addWidget(ButtonFactory.create_complete_button(
-            container, lambda checked=False, t=task: self._on_task_done(t),
-        ))
+        if task.is_generator():
+            # ⏸ если ACTIVE, ▶ если PAUSED.
+            symbol = "⏸" if task.status == TaskStatus.ACTIVE else "▶"
+            pause_btn = ButtonFactory.create_button(
+                container, symbol, bg_color=(150, 130, 70, 0.85),
+                fixed_size=(26, 26), padding="0px", font_size=14,
+            )
+            pause_btn.clicked.connect(
+                lambda checked=False, t=task: self._on_recurring_pause(t)
+            )
+            layout.addWidget(pause_btn)
+        else:
+            layout.addWidget(ButtonFactory.create_complete_button(
+                container, lambda checked=False, t=task: self._on_task_done(t),
+            ))
+
         layout.addWidget(ButtonFactory.create_edit_button(
             container, lambda checked=False, t=task: self._on_edit_task(t),
         ))
@@ -112,11 +135,20 @@ class PlannerWindow(_BasePlannerListWindow):
             priority = self.service.get_priority_by_display_name(
                 dialog.get_priority()
             )
+            # NEW: определение типа задачи по приоритету.
+            task_type = TaskType.REGULAR
+            if priority == TaskPriority.RECURRING:
+                task_type = TaskType.RECURRING
+            elif priority == TaskPriority.DEADLINE:
+                task_type = TaskType.DEADLINE
+
             self.service.create_task(
                 title=dialog.get_title(),
                 description=dialog.get_description(),
                 priority=priority,
                 deadline_datetime=dialog.get_deadline_data(),
+                task_type=task_type,
+                recurrence_data=dialog.get_recurrence_data(),
             )
             self._reload_tasks()
 
@@ -165,6 +197,17 @@ class PlannerWindow(_BasePlannerListWindow):
         status = CANCELLED, completed_date = сегодня.
         """
         self.service.archive_task(task.task_id, TaskStatus.CANCELLED)
+        self._reload_tasks()
+
+    def _on_recurring_pause(self, task: PlannerTask) -> None:
+        """Переключает паузу/возобновление регулярного генератора.
+
+        Вход: task — PlannerTask-генератор.
+        Роль: ACTIVE → PAUSED, PAUSED → ACTIVE.
+        """
+        new_status = (TaskStatus.PAUSED if task.status == TaskStatus.ACTIVE
+                      else TaskStatus.ACTIVE)
+        self.service.update_status(task.task_id, new_status)
         self._reload_tasks()
 
     def _on_edit_task(self, task: PlannerTask) -> None:
@@ -296,6 +339,9 @@ class NewTaskDialog(QDialog):
         )
         self.deadline_type_combo.setVisible(False)
 
+        self._recurrence_fields = ButtonFactory.create_recurrence_fields(self)
+        self._recurrence_fields.setVisible(False)
+
         # Строка «Приоритет» — контейнер из двух combo.
         priority_row = QWidget()
         priority_row_layout = QHBoxLayout(priority_row)
@@ -332,7 +378,7 @@ class NewTaskDialog(QDialog):
         )
         content_layout.addWidget(form)
         content_layout.addWidget(self._deadline_fields)
-
+        content_layout.addWidget(self._recurrence_fields)
         # Триггеры.
         self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
         self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
@@ -402,14 +448,36 @@ class NewTaskDialog(QDialog):
 
     def _on_priority_changed(self, text: str) -> None:
         """Показывает combo типа и поля дедлайна, если выбран DEADLINE."""
-        is_deadline = (text == TaskPriority.DEADLINE.display_name)
-        self.deadline_type_combo.setVisible(is_deadline)
-        self._deadline_fields.setVisible(is_deadline)
+        # combo типа дедлайна — в ряду с приоритетом.
+        self.deadline_type_combo = InputWidgetFactory.create_combo_box(
+            self,
+            items=["До даты включительно", "Срок"],
+            current_index=0,
+            bg_color=(85, 60, 42, 0.9),
+            border="1px solid #6b4a33",
+        )
+        self.deadline_type_combo.setVisible(False)
+
+        # Триггеры.
+        self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
+        self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
+        self.rule_combo.currentTextChanged.connect(self._on_rule_changed)
 
     def _on_deadline_type_changed(self, text: str) -> None:
         """Переключает режим полей ввода в DeadlineFieldsWidget."""
         mode = "inclusive" if text == "До даты включительно" else "duration"
         self._deadline_fields.set_mode(mode)
+
+    def _on_priority_changed(self, text: str) -> None:
+        """Показывает нужные поля в зависимости от приоритета."""
+        is_deadline = (text == TaskPriority.DEADLINE.display_name)
+        is_recurring = (text == TaskPriority.RECURRING.display_name)
+
+        self.deadline_type_combo.setVisible(is_deadline)
+        self._deadline_fields.setVisible(is_deadline)
+
+        # Виджет правила — только для RECURRING.
+        self._recurrence_fields.setVisible(is_recurring)
 
     def get_deadline_data(self) -> Optional[str]:
         """Возвращает строку дедлайна или None.
@@ -422,3 +490,13 @@ class NewTaskDialog(QDialog):
                 if self.deadline_type_combo.currentText() == "До даты включительно"
                 else "duration")
         return self._deadline_fields.get_deadline_data(mode)
+
+    def get_recurrence_data(self) -> Optional[dict]:
+        """Возвращает правило повторения или None.
+
+        Делегирует в PlannerRecurrenceFieldsWidget.
+        Для не-RECURRING приоритетов возвращает None.
+        """
+        if self.priority_combo.currentText() != TaskPriority.RECURRING.display_name:
+            return None
+        return self._recurrence_fields.get_recurrence_data()

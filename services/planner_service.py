@@ -2,7 +2,7 @@ from PySide6.QtCore import QObject, Signal
 from datetime import date, datetime, timedelta
 from typing import Optional
 from utils.task_id_generator import TaskIdGenerator
-from models.planner_task import PlannerTask, TaskPriority, TaskStatus
+from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from storage.planner_task_storage import PlannerTaskStorage
 
 
@@ -31,7 +31,9 @@ class PlannerService(QObject):
     def create_task(self, title: str, description: str = "",
                     priority: TaskPriority = TaskPriority.MEDIUM,
                     spawner_task: Optional[int] = None,
-                    deadline_datetime: Optional[str] = None) -> PlannerTask:
+                    deadline_datetime: Optional[str] = None,
+                    task_type: TaskType = TaskType.REGULAR,
+                    recurrence_data: Optional[dict] = None) -> PlannerTask:
         """Создаёт задачу, генерирует task_id, сохраняет.
 
         Вход:
@@ -46,9 +48,19 @@ class PlannerService(QObject):
             raise ValueError("Название задачи не может быть пустым")
         task_id = TaskIdGenerator.generate(self._storage)
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+        if task_type == TaskType.RECURRING and recurrence_data:
+            rec_type = recurrence_data.get("type")
+            rec_value = recurrence_data.get("value")
+            rec_weekdays = recurrence_data.get("weekdays")
+            rec_monthdays = recurrence_data.get("monthdays")
+            rec_use_last = recurrence_data.get("use_last_day", False)
+        else:
+            rec_type = rec_value = rec_weekdays = rec_monthdays = None
+            rec_use_last = False
         if priority == TaskPriority.DEADLINE and not deadline_datetime:
             fallback_dt = datetime.now() + timedelta(days=1)
             deadline_datetime = fallback_dt.strftime("%d.%m.%Y %H:%M")
+        next_date = date.today().strftime("%d.%m.%Y") if task_type == TaskType.RECURRING else None
         task = PlannerTask(
             task_id=task_id,
             title=title.strip(),
@@ -58,9 +70,15 @@ class PlannerService(QObject):
             created_date=date.today().strftime("%d.%m.%Y"),
             completed_date=None,
             spawner_task=spawner_task,
-            # deadline_datetime сохраняем только для DEADLINE.
             deadline_datetime=deadline_datetime if priority == TaskPriority.DEADLINE else None,
             created_datetime=now_str,
+            task_type=task_type,
+            recurrence_type=rec_type,
+            recurrence_value=rec_value,
+            recurrence_weekdays=rec_weekdays,
+            recurrence_monthdays=rec_monthdays,
+            recurrence_use_last_day=rec_use_last,
+            next_generation_date=next_date,
         )
         self._storage.add(task)
         self.tasks_changed.emit()
@@ -119,6 +137,56 @@ class PlannerService(QObject):
         if changed:
             self._storage.save()
         return changed
+
+    def update_status(self, task_id: int, new_status: TaskStatus) -> bool:
+        """Меняет статус задачи и сохраняет.
+
+        Вход: task_id — идентификатор; new_status — новый статус.
+        Выход: True — задача найдена и обновлена; False — не найдена.
+        """
+        for task in self._storage.get_all():
+            if task.task_id == task_id:
+                task.status = new_status
+                self._storage.save()
+                self.tasks_changed.emit()
+                return True
+        return False
+
+    def get_recurring_tasks(self) -> list[PlannerTask]:
+        """Возвращает все активные генераторы регулярных задач."""
+        return [t for t in self._storage.get_all() if t.is_generator()]
+
+    def get_active_instances(self, parent_id: int) -> list[PlannerTask]:
+        """Активные экземпляры конкретного генератора.
+
+        Вход: parent_id — task_id генератора.
+        Выход: список PlannerTask с spawner_task == parent_id
+               и статусом ACTIVE или WAITING.
+        """
+        return [
+            t for t in self._storage.get_all()
+            if t.spawner_task == parent_id
+               and t.status in (TaskStatus.ACTIVE, TaskStatus.WAITING)
+               and t.is_recurring_instance()
+        ]
+
+    def archive_stale_instances(self) -> int:
+        """Архивирует активные экземпляры, не завершённые в день генерации.
+
+        Выход: количество заархивированных экземпляров.
+        Роль: вызывается при запуске приложения — «вчерашние» экземпляры
+              автоматически уходят в архив как CANCELLED.
+        """
+        today = date.today().strftime("%d.%m.%Y")
+        count = 0
+        for task in self._storage.get_all():
+            if not task.is_recurring_instance():
+                continue
+            if (task.created_date != today
+                    and task.status in (TaskStatus.ACTIVE, TaskStatus.WAITING)):
+                self.archive_task(task.task_id, TaskStatus.CANCELLED)
+                count += 1
+        return count
 
     def update_task(self, task_id: int,
                     title: Optional[str] = None,
@@ -179,8 +247,9 @@ class PlannerService(QObject):
         return True
 
     def get_priorities(self) -> list[str]:
-        """Возвращает список приоритетов в виде строк для UI."""
+        """Возвращает приоритеты в порядке убывания важности."""
         return [
+            TaskPriority.RECURRING.display_name,
             TaskPriority.DEADLINE.display_name,
             TaskPriority.HIGH.display_name,
             TaskPriority.MEDIUM.display_name,

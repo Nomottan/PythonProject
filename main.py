@@ -16,6 +16,7 @@ from utils.log_system import LogManager
 from services.kiz_validator import KizValidator
 from services.planner_service import PlannerService
 from services.planner_archive_service import PlannerArchiveService
+from services.planner_recurrence_service import PlannerRecurrenceService
 from storage.planner_task_storage import PlannerTaskStorage
 from storage.planner_archive_storage import PlannerArchiveStorage
 from ui.widgets.planner_quick_view import PlannerQuickView
@@ -76,6 +77,23 @@ class MainWindow(QMainWindow):
             # в MainWindow обновится автоматически.
             planner_service=self.planner_service,
         )
+        # NEW: сервис генерации экземпляров регулярных задач.
+        self.planner_recurrence_service = PlannerRecurrenceService(
+            self.planner_service,
+            log_manager=self.log_manager,
+        )
+        # Генерация при запуске.
+        self.planner_recurrence_service.generate_due_instances()
+        # Архивируем «вчерашние» незавершённые экземпляры.
+        self.planner_service.archive_stale_instances()
+
+        # NEW: таймер генерации — раз в 30 минут.
+        self.recurrence_timer = QTimer(self)
+        self.recurrence_timer.setInterval(5)  #(30 * 60 * 1000)
+        self.recurrence_timer.timeout.connect(
+            self.planner_recurrence_service.generate_due_instances
+        )
+        self.recurrence_timer.start()
         self.planner_quick_view = PlannerQuickView(self)
         self.planner_quick_controller = PlannerQuickViewController(
             self.planner_service,

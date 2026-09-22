@@ -20,22 +20,46 @@ class TaskStatus(Enum):
     COMPLETED = "Выполнена"
     CANCELLED = "Отменена"
     OVERDUE = "Просрочено"
+    PAUSED = "Пауза"
+    WAITING = "Ожидание"
 
     @property
     def display_name(self) -> str:
         """Человекочитаемое имя для отображения в UI."""
         return self.value
 
+class TaskType(Enum):
+    """Тип задачи.
+
+    REGULAR — обычная задача, созданная вручную.
+    DEADLINE — задача с дедлайном.
+    RECURRING — генератор экземпляров (регулярная).
+    INSTANCE — экземпляр, порождённый генератором.
+    """
+    REGULAR = "regular"
+    DEADLINE = "deadline"
+    RECURRING = "recurring"
+    INSTANCE = "instance"
+
+    @property
+    def display_name(self) -> str:
+        return {
+            "regular": "Обычная",
+            "deadline": "Дедлайн",
+            "recurring": "Регулярная",
+            "instance": "Экземпляр",
+        }[self.value]
 
 class TaskPriority(Enum):
     """Приоритет задачи.
 
-    1 — самый важный, 3 — наименее важный. Значения — числа, пишутся в JSON.
+    1 — самый низкий, 5 — регулярная. Значения — числа, пишутся в JSON.
     """
     LOW = 1
     MEDIUM = 2
     HIGH = 3
     DEADLINE = 4
+    RECURRING = 5
 
     @property
     def display_name(self) -> str:
@@ -44,6 +68,7 @@ class TaskPriority(Enum):
             2: "Средний",
             3: "Высокий",
             4: "Дедлайн",
+            5: "Регулярная",
         }[self.value]
 
 class PlannerTask:
@@ -69,6 +94,16 @@ class PlannerTask:
                       "%d.%m.%Y %H:%M". None для не-дедлайн задач.
         created_datetime: Optional[str] — точный момент создания в формате
                       "%d.%m.%Y %H:%M". None для старых записей.
+        task_type: TaskType — тип задачи. По умолчанию REGULAR.
+        recurrence_type: Optional[str] — правило повторения: "every_n_days",
+                      "weekdays", "monthdays". None для не-регулярных.
+        recurrence_value: Optional[int] — N для every_n_days.
+        recurrence_weekdays: Optional[list] — номера дней недели (0=пн..6=вс).
+        recurrence_monthdays: Optional[list] — числа месяца (1–31).
+        recurrence_use_last_day: bool — если число не существует в месяце,
+                      использовать последний день месяца.
+        next_generation_date: Optional[str] — дата следующей генерации
+                      экземпляра ("%d.%m.%Y"). None для не-генераторов.
     """
 
     def __init__(self, task_id: int, title: str,
@@ -79,7 +114,14 @@ class PlannerTask:
                  completed_date: Optional[str] = None,
                  spawner_task: Optional[int] = None,
                  deadline_datetime: Optional[str] = None,
-                 created_datetime: Optional[str] = None):
+                 created_datetime: Optional[str] = None,
+                 task_type: TaskType = TaskType.REGULAR,
+                 recurrence_type: Optional[str] = None,
+                 recurrence_value: Optional[int] = None,
+                 recurrence_weekdays: Optional[list] = None,
+                 recurrence_monthdays: Optional[list] = None,
+                 recurrence_use_last_day: bool = False,
+                 next_generation_date: Optional[str] = None):
         """Конструктор.
 
         Вход:
@@ -105,6 +147,13 @@ class PlannerTask:
         self.spawner_task = spawner_task
         self.deadline_datetime = deadline_datetime
         self.created_datetime = created_datetime
+        self.task_type = task_type
+        self.recurrence_type = recurrence_type
+        self.recurrence_value = recurrence_value
+        self.recurrence_weekdays = recurrence_weekdays
+        self.recurrence_monthdays = recurrence_monthdays
+        self.recurrence_use_last_day = recurrence_use_last_day
+        self.next_generation_date = next_generation_date
 
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
@@ -125,6 +174,13 @@ class PlannerTask:
             "spawner_task": self.spawner_task,
             "deadline_datetime": self.deadline_datetime,
             "created_datetime": self.created_datetime,
+            "task_type": self.task_type.value,
+            "recurrence_type": self.recurrence_type,
+            "recurrence_value": self.recurrence_value,
+            "recurrence_weekdays": self.recurrence_weekdays,
+            "recurrence_monthdays": self.recurrence_monthdays,
+            "recurrence_use_last_day": self.recurrence_use_last_day,
+            "next_generation_date": self.next_generation_date,
         }
 
     @classmethod
@@ -149,13 +205,18 @@ class PlannerTask:
         except (ValueError, KeyError):
             priority = TaskPriority.LOW
 
-        # REPLACE: status — при неизвестном значении подставляем CANCELLED.
         try:
             status = TaskStatus(data["status"])
         except (ValueError, KeyError):
             status = TaskStatus.CANCELLED
 
-        # task_id и title обязательны — KeyError уйдёт наверх.
+            # NEW: task_type — при неизвестном значении подставляем REGULAR.
+        try:
+            task_type = TaskType(data.get("task_type", "regular"))
+        except (ValueError, KeyError):
+            task_type = TaskType.REGULAR
+
+            # task_id и title обязательны — KeyError уйдёт наверх.
         return cls(
             task_id=data["task_id"],
             title=data["title"],
@@ -167,6 +228,13 @@ class PlannerTask:
             spawner_task=data.get("spawner_task"),
             deadline_datetime=data.get("deadline_datetime"),
             created_datetime=data.get("created_datetime"),
+            task_type=task_type,
+            recurrence_type=data.get("recurrence_type"),
+            recurrence_value=data.get("recurrence_value"),
+            recurrence_weekdays=data.get("recurrence_weekdays"),
+            recurrence_monthdays=data.get("recurrence_monthdays"),
+            recurrence_use_last_day=data.get("recurrence_use_last_day", False),
+            next_generation_date=data.get("next_generation_date"),
         )
 
     def get_deadline_datetime(self) -> Optional[datetime]:
@@ -208,3 +276,11 @@ class PlannerTask:
         if dl is None:
             return False
         return datetime.now() > dl
+
+    def is_generator(self) -> bool:
+        """True, если задача — генератор экземпляров (регулярная)."""
+        return self.task_type == TaskType.RECURRING
+
+    def is_recurring_instance(self) -> bool:
+        """True, если задача — экземпляр, порождённый генератором."""
+        return self.task_type == TaskType.INSTANCE

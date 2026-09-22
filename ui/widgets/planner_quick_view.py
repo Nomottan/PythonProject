@@ -12,16 +12,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from ui.factories.factories import (
-    ButtonFactory, BaseWidgetFactory, DeadlineTaskButton,
+    ButtonFactory, BaseWidgetFactory, DeadlineTaskButton,  InstanceTaskButton,
 )
 from models.planner_task import TaskPriority
 
 
 class PlannerQuickView(QWidget):
-    """Виджет с 7 кнопками задач.
+    """Виджет с 8 кнопками задач.
 
     Назначение:
-        Показать до 7 активных задач. Слоты распределяет
+        Показать до 8 активных задач. Слоты распределяет
         PlannerQuickViewController; виджет только отображает.
 
     Сигналы:
@@ -31,7 +31,7 @@ class PlannerQuickView(QWidget):
 
     task_clicked = Signal(object)
 
-    SLOT_COUNT = 7
+    SLOT_COUNT = 8
 
     # Стили обычной кнопки (не-дедлайн).
     SLOT_BG = (78, 78, 83, 0.95)
@@ -152,9 +152,16 @@ class PlannerQuickView(QWidget):
     # ---------- Внутренние ----------
 
     def _create_widget(self, task, color, index: int):
-        """Создаёт виджет слота: DeadlineTaskButton или QPushButton."""
+        """Создаёт виджет слота: DeadlineTaskButton, InstanceTaskButton
+        или QPushButton."""
         if task.priority == TaskPriority.DEADLINE:
             widget = ButtonFactory.create_deadline_button(self)
+            widget.set_task(task)
+            widget.clicked.connect(lambda idx=index: self._on_widget_clicked(idx))
+            return widget
+
+        if task.is_recurring_instance():
+            widget = InstanceTaskButton(self)
             widget.set_task(task)
             widget.clicked.connect(lambda idx=index: self._on_widget_clicked(idx))
             return widget

@@ -255,32 +255,6 @@ class _BasePlannerListWindow(QMainWindow):
 
     DEADLINE_DATE_BG = (130, 40, 40, 0.85)
 
-    def _build_specifications(self, task):
-        """Колонка спецификаций: для дедлайн-задач — дата дедлайна.
-
-        Вход: task — PlannerTask.
-        Выход: QLabel с датой дедлайна на красном фоне или пустой
-               лейбл для выравнивания.
-        """
-        if task.priority != TaskPriority.DEADLINE:
-            return LabelFactory.create_label(
-                self, text="", bg_color=(0, 0, 0, 0),
-                text_color="#d4d4d4", alignment=Qt.AlignCenter,
-                min_size=(100, 0),
-            )
-        dl = task.get_deadline_datetime()
-        if dl is None:
-            text = "—"
-        else:
-            text = dl.strftime("%d.%m.%Y %H:%M")
-        return LabelFactory.create_label(
-            self, text=text, bg_color=self.DEADLINE_DATE_BG,
-            text_color="#ffffff", alignment=Qt.AlignCenter,
-            min_size=(100, 0), padding="4px 8px", border_radius=4,
-        )
-
-    # ---------- Обработчики ----------
-
     def _on_title_clicked(self, task):
         """Клик по названию — уведомление с описанием.
 
@@ -295,6 +269,41 @@ class _BasePlannerListWindow(QMainWindow):
             text,
             bg_color=self.bg_color,
             title_text=task.title,
+        )
+
+    # ---------- Обработчики ----------
+
+    def _build_specifications(self, task):
+        """Колонка спецификаций.
+
+        DEADLINE — дата дедлайна на красном фоне.
+        RECURRING (генератор) — next_generation_date на голубом фоне.
+        Остальные — пустой прозрачный лейбл для выравнивания.
+        """
+        # Генератор регулярной задачи — дата следующей генерации.
+        if task.is_generator():
+            next_date = task.next_generation_date or "—"
+            return LabelFactory.create_label(
+                self, text=next_date, bg_color=(80, 160, 220, 0.85),
+                text_color="#ffffff", alignment=Qt.AlignCenter,
+                min_size=(100, 0), padding="4px 8px", border_radius=4,
+            )
+
+        # Дедлайн — дата дедлайна на красном фоне.
+        if task.priority == TaskPriority.DEADLINE:
+            dl = task.get_deadline_datetime()
+            text = dl.strftime("%d.%m.%Y %H:%M") if dl else "—"
+            return LabelFactory.create_label(
+                self, text=text, bg_color=self.DEADLINE_DATE_BG,
+                text_color="#ffffff", alignment=Qt.AlignCenter,
+                min_size=(100, 0), padding="4px 8px", border_radius=4,
+            )
+
+        # Остальные — пустой лейбл для выравнивания колонок.
+        return LabelFactory.create_label(
+            self, text="", bg_color=(0, 0, 0, 0),
+            text_color="#d4d4d4", alignment=Qt.AlignCenter,
+            min_size=(100, 0),
         )
 
     # ---------- Очистка / закрытие ----------

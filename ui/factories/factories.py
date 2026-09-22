@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QSpinBox, QDateTimeEdit, QAbstractSpinBox, QDateEdit
 )
 from typing import Callable, Tuple, Optional
-
+from models.planner_task import TaskPriority
 
 class BaseWidgetFactory:
     """Базовый класс для фабрик виджетов. Предоставляет общие методы стилизации и настройки."""
@@ -205,67 +205,18 @@ class ButtonFactory(BaseWidgetFactory):
         return btn
 
     @staticmethod
-    def create_process_button(
-            parent,
-            step_id: str,
-            text: str,
-            condition_checker: Callable[[], Tuple[bool, str]],
-            action: Callable,
-            logger: ILogger,
-            bg_color,
-            text_color=None,
-            padding="8px 16px",
-            fixed_size=None,
-            alignment=None,
-            object_name=None,
-            cursor_shape=None,
-            border_radius=5,
-            border="none",
-            font_size=None,
-            font_family=None,
-            font_weight=None,
-            extra_style="",
-            hover_color=None, tooltip=None, min_size=None, max_size=None,
-            initial_state=None, pressed_color=None, disabled_color=None,
-    ):
-        from ui.widgets.process_button import ProcessButton, ButtonState
-        if initial_state is None:
-            initial_state = ButtonState.GRAY
-        """
-        Создаёт ProcessButton с заданным стилем.
-        """
-        # Создаём кнопку с передачей bg_color
-        btn = ProcessButton(
-            step_id=step_id,
-            text=text,
-            condition_checker=condition_checker,
-            action=action,
-            logger=logger,
-            bg_color=bg_color,
-            parent=parent,
-            initial_state=initial_state,
-        )
-        # Общие настройки (object_name, tooltip, размеры и т.д.)
-        if object_name:
-            btn.setObjectName(object_name)
-        if cursor_shape:
-            btn.setCursor(cursor_shape)
-        if tooltip:
-            btn.setToolTip(tooltip)
-        if min_size:
-            btn.setMinimumSize(*min_size)
-        if max_size:
-            btn.setMaximumSize(*max_size)
-        if fixed_size:
-            btn.setFixedSize(*fixed_size)
-        # REPLACE: alignment передаём в _apply_button_style — как в create_button.
+    def create_task_slot_button(parent, task, priority_color) -> QWidget:
+        """Возвращает подходящий виджет-слот для задачи.
 
-        # Применяем базовый стиль через общий метод
-        ButtonFactory._apply_button_style(
-            btn, bg_color, text_color, padding, border_radius, border,
-            font_size, font_weight, extra_style, hover_color, pressed_color,
-            alignment, font_family, disabled_color
-        )
+        Вход: parent — родитель; task — PlannerTask; priority_color — цвет полосы.
+        Выход: DeadlineTaskButton, InstanceTaskButton или QPushButton.
+        """
+        if task.priority == TaskPriority.DEADLINE:
+            return DeadlineTaskButton(parent)
+        if task.is_recurring_instance():
+            return InstanceTaskButton(parent)
+        btn = QPushButton(parent)
+        return btn
 
     @staticmethod
     def create_datetime_button(parent, callback):
@@ -518,6 +469,28 @@ class ButtonFactory(BaseWidgetFactory):
         )
         btn.clicked.connect(callback)
         return btn
+
+    @staticmethod
+    def create_recurrence_fields(parent, initial_data=None):
+        """Создаёт виджет полей правила повторения.
+
+        Вход: parent — родитель; initial_data — dict для предзаполнения.
+        Выход: PlannerRecurrenceFieldsWidget.
+        """
+        from ui.widgets.planner_recurrence_fields_widget import (
+            PlannerRecurrenceFieldsWidget,
+        )
+        return PlannerRecurrenceFieldsWidget(parent, initial_data)
+
+    @staticmethod
+    def create_day_picker(parent, selected=None):
+        """Создаёт диалог выбора чисел месяца.
+
+        Вход: parent — родитель; selected — список предвыбранных чисел.
+        Выход: PlannerDayPickerDialog.
+        """
+        from ui.windows.planner_day_picker_dialog import PlannerDayPickerDialog
+        return PlannerDayPickerDialog(parent, selected)
 
 class StatusLabel(QLabel):
     """
@@ -1685,6 +1658,91 @@ class DeadlineTaskButton(QWidget):
         if not self._pressed:
             self._apply_bg(self.BG)
         super().leaveEvent(event)
+
+class InstanceTaskButton(QWidget):
+    """Кнопка экземпляра регулярной задачи: голубая полоса слева + название.
+
+    Назначение:
+        Отдельный вид кнопки-слота для экземпляров, порождённых
+        генератором. Отличается от обычной QPushButton цветом полосы.
+
+    Сигналы:
+        clicked() — испускается при клике по любой части виджета.
+    """
+
+    clicked = Signal()
+
+    BG = (78, 78, 83, 0.95)
+    BG_HOVER = (98, 98, 103, 0.95)
+    BG_PRESSED = (60, 60, 65, 0.95)
+    STRIPE_COLOR = (80, 160, 220, 1.0)  # голубая
+    TEXT_COLOR = "#e0e0e0"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 4, 8, 4)
+        layout.setSpacing(2)
+
+        self._title_label = QLabel()
+        self._title_label.setStyleSheet(
+            f"color: {self.TEXT_COLOR}; font-size: 11px; background: transparent;"
+        )
+        self._title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self._title_label)
+
+        self._hovered = False
+        self._pressed = False
+        self._apply_bg(self.BG)
+
+    def _apply_bg(self, bg) -> None:
+        bg_str = BaseWidgetFactory.color_to_str(bg)
+        stripe_str = BaseWidgetFactory.color_to_str(self.STRIPE_COLOR)
+        self.setStyleSheet(f"""
+            InstanceTaskButton {{
+                background-color: {bg_str};
+                border: none;
+                border-left: 4px solid {stripe_str};
+                border-radius: 4px;
+            }}
+        """)
+
+    def set_task(self, task) -> None:
+        self._title_label.setText(task.title)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._pressed = True
+            self._apply_bg(self.BG_PRESSED)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._pressed:
+            self._pressed = False
+            self._apply_bg(self.BG_HOVER if self._hovered else self.BG)
+            if self.rect().contains(event.position().toPoint()):
+                self.clicked.emit()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        if not self._pressed:
+            self._apply_bg(self.BG_HOVER)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        if not self._pressed:
+            self._apply_bg(self.BG)
+        super().leaveEvent(event)
+
 
 
 class DeadlineFieldsWidget(QWidget):

@@ -52,6 +52,30 @@ class PlannerArchiveService:
             if t.spawner_task == parent_id
         ]
 
+    def delete_old_instances(self, days: int = 30) -> int:
+        """Удаляет экземпляры старше N дней из архива.
+
+        Вход: days — порог в днях.
+        Выход: количество удалённых.
+        Роль: вызывается при каждом __init__ архива — автоочистка.
+        """
+        today = date.today()
+        removed = 0
+        for task in self._archive_storage.get_all():
+            if not task.is_recurring_instance():
+                continue
+            ref_date_str = task.completed_date or task.created_date
+            if not ref_date_str:
+                continue
+            try:
+                ref_date = datetime.strptime(ref_date_str, "%d.%m.%Y").date()
+            except ValueError:
+                continue
+            if (today - ref_date).days > days:
+                self._archive_storage.remove(task.task_id)
+                removed += 1
+        return removed
+
     def delete_forever(self, task_id: int) -> bool:
         """Удаляет задачу из архива навсегда.
 
@@ -61,7 +85,8 @@ class PlannerArchiveService:
         return self._archive_storage.remove(task_id)
 
     def restore_task(self, task_id: int,
-                     deadline_datetime: Optional[str] = None) -> PlannerTask | None:
+                     deadline_datetime: Optional[str] = None,
+                     recurrence_data: Optional[dict] = None) -> PlannerTask | None:
         """Восстанавливает задачу из архива.
 
         Вход:
@@ -85,9 +110,11 @@ class PlannerArchiveService:
             target.completed_date = None
             if deadline_datetime:
                 target.deadline_datetime = deadline_datetime
+            # NEW: обновляем правило повторения, если пришло.
+            if recurrence_data:
+                self._apply_recurrence(target, recurrence_data)
             self._archive_storage.remove(task_id)
             self._active_storage.add(target)
-            # NEW: уведомляем подписчиков (мини-планировщик, PlannerWindow).
             self._emit_tasks_changed()
             return target
 
@@ -104,9 +131,19 @@ class PlannerArchiveService:
                 spawner_task=task_id,
                 deadline_datetime=deadline_datetime or target.deadline_datetime,
                 created_datetime=datetime.now().strftime("%d.%m.%Y %H:%M"),
+                # NEW: переносим поля регулярности.
+                task_type=target.task_type,
+                recurrence_type=target.recurrence_type,
+                recurrence_value=target.recurrence_value,
+                recurrence_weekdays=target.recurrence_weekdays,
+                recurrence_monthdays=target.recurrence_monthdays,
+                recurrence_use_last_day=target.recurrence_use_last_day,
+                next_generation_date=date.today().strftime("%d.%m.%Y"),
             )
+            # NEW: если пришло новое правило — применяем.
+            if recurrence_data:
+                self._apply_recurrence(new_task, recurrence_data)
             self._active_storage.add(new_task)
-            # NEW: уведомляем подписчиков.
             self._emit_tasks_changed()
             return new_task
 
@@ -115,11 +152,24 @@ class PlannerArchiveService:
         target.completed_date = None
         if deadline_datetime:
             target.deadline_datetime = deadline_datetime
+        if recurrence_data:
+            self._apply_recurrence(target, recurrence_data)
         self._archive_storage.remove(task_id)
         self._active_storage.add(target)
-        # NEW: уведомляем подписчиков.
         self._emit_tasks_changed()
         return target
+
+    def _apply_recurrence(self, task: PlannerTask, recurrence_data: dict) -> None:
+        """Применяет правило повторения к задаче.
+
+        Вход: task — PlannerTask; recurrence_data — dict с ключами
+              type, value, weekdays, monthdays, use_last_day.
+        """
+        task.recurrence_type = recurrence_data.get("type")
+        task.recurrence_value = recurrence_data.get("value")
+        task.recurrence_weekdays = recurrence_data.get("weekdays")
+        task.recurrence_monthdays = recurrence_data.get("monthdays")
+        task.recurrence_use_last_day = recurrence_data.get("use_last_day", False)
 
     def _emit_tasks_changed(self) -> None:
         """Испускает tasks_changed у PlannerService, если он передан.

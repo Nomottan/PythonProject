@@ -103,21 +103,23 @@ class PlannerQuickViewController(QObject):
     на tasks_changed, крутит карусели, открывает диалог задачи.
     """
 
-    TOTAL_SLOTS = 7
+    TOTAL_SLOTS = 8
     CAROUSEL_MIN_MS = 15_000
     CAROUSEL_MAX_MS = 45_000
     PROGRESS_INTERVAL_MS = 60_000  # 60 секунд
 
     # Цвета полос слева на кнопках-слотах.
     PRIORITY_COLORS = {
-        TaskPriority.DEADLINE: (110, 65, 30, 1.0),  # оранжевый
-        TaskPriority.HIGH: (75, 50, 45, 0.85),
-        TaskPriority.MEDIUM: (35, 45, 75, 0.85),
-        TaskPriority.LOW: (50, 50, 50, 0.85),  # серый
+        TaskPriority.RECURRING: (80, 160, 220, 1.0),
+        TaskPriority.DEADLINE: (150, 95, 55, 1.0),  # оранжевый
+        TaskPriority.HIGH: (100, 70, 50, 0.85),
+        TaskPriority.MEDIUM: (60, 80, 100, 0.85),
+        TaskPriority.LOW: (60, 100, 80, 0.85),  # серый
     }
 
     # Порядок обхода приоритетов — от высшего к низшему.
     PRIORITY_ORDER = (
+        TaskPriority.RECURRING,
         TaskPriority.DEADLINE,
         TaskPriority.HIGH,
         TaskPriority.MEDIUM,
@@ -131,6 +133,7 @@ class PlannerQuickViewController(QObject):
 
         # 4 филлера: DEADLINE=1, HIGH=3, MEDIUM=2, LOW=1.
         self._fillers = {
+            TaskPriority.RECURRING: PrioritySlotFiller(TaskPriority.RECURRING, 1),
             TaskPriority.DEADLINE: PrioritySlotFiller(TaskPriority.DEADLINE, 1),
             TaskPriority.HIGH: PrioritySlotFiller(TaskPriority.HIGH, 3),
             TaskPriority.MEDIUM: PrioritySlotFiller(TaskPriority.MEDIUM, 2),
@@ -179,7 +182,7 @@ class PlannerQuickViewController(QObject):
         self._carousel_slot_index.clear()
 
         # 2. Берём активные задачи.
-        tasks = self._service.get_tasks()
+        tasks = [t for t in self._service.get_tasks() if not t.is_generator()]
 
         # 3. Пустой список — специальный режим.
         if not tasks:

@@ -61,8 +61,11 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
             raise ValueError("archive_service обязателен")
         self.service = archive_service
         super().__init__(parent, "Архив", bg_color=self.ARCHIVE_BG_COLOR)
+        #очистка от старых экземпляров
+        self.service.delete_old_instances(days=30)
         # Первая загрузка задач архива.
         self._reload_tasks()
+
     # ---------- Источник данных ----------
 
     def _get_tasks(self):
@@ -71,23 +74,26 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
     # ---------- Билдер actions ----------
 
     def _build_actions(self, task: PlannerTask) -> QWidget:
-        """Кнопки: ↺ (восстановить), ✕ (удалить навсегда)."""
+        """Кнопки: ↺ (восстановить), ✕ (удалить навсегда).
+
+        У экземпляров регулярных задач кнопки ↺ нет — восстановить
+        экземпляр нельзя.
+        """
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Кнопка восстановления.
-        restore_btn = ButtonFactory.create_button(
-            container, "↺", bg_color=(100, 130, 150),
-            fixed_size=(26, 26), padding="0px", font_size=14,
-        )
-        restore_btn.clicked.connect(
-            lambda checked=False, t=task: self._on_restore_task(t)
-        )
-        layout.addWidget(restore_btn)
+        if not task.is_recurring_instance():
+            restore_btn = ButtonFactory.create_button(
+                container, "↺", bg_color=(100, 130, 150),
+                fixed_size=(26, 26), padding="0px", font_size=14,
+            )
+            restore_btn.clicked.connect(
+                lambda checked=False, t=task: self._on_restore_task(t)
+            )
+            layout.addWidget(restore_btn)
 
-        # Кнопка удаления навсегда.
         delete_btn = ButtonFactory.create_delete_button(
             container,
             lambda checked=False, t=task: self._on_delete_forever(t),
@@ -121,15 +127,28 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
                 if reply != QDialog.Accepted:
                     return
 
-        # 2. Для дедлайн-задач — диалог редактирования дедлайна.
+        # 2. Диалоги редактирования при восстановлении.
         deadline_datetime = None
+        recurrence_data = None
         if task.priority == TaskPriority.DEADLINE:
             dialog = DeadlineEditDialog(self, task)
             if dialog.exec() != QDialog.Accepted:
                 return
             deadline_datetime = dialog.get_deadline_data()
+        elif task.is_generator():
+            from ui.windows.planner_recurrence_edit_dialog import (
+                PlannerRecurrenceEditDialog,
+            )
+            dialog = PlannerRecurrenceEditDialog(self, task)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            recurrence_data = dialog.get_recurrence_data()
 
-        self.service.restore_task(task.task_id, deadline_datetime=deadline_datetime)
+        self.service.restore_task(
+            task.task_id,
+            deadline_datetime=deadline_datetime,
+            recurrence_data=recurrence_data,
+        )
         self._reload_tasks()
 
     def _on_delete_forever(self, task: PlannerTask) -> None:
