@@ -9,10 +9,10 @@
 
 import random
 from typing import Optional
-
+from datetime import date
 from PySide6.QtCore import QObject, QTimer
 
-from models.planner_task import PlannerTask, TaskPriority
+from models.planner_task import PlannerTask, TaskPriority, TaskStatus
 from services.planner_service import PlannerService
 
 
@@ -103,13 +103,14 @@ class PlannerQuickViewController(QObject):
     на tasks_changed, крутит карусели, открывает диалог задачи.
     """
 
-    TOTAL_SLOTS = 8
+    TOTAL_SLOTS = 9
     CAROUSEL_MIN_MS = 15_000
     CAROUSEL_MAX_MS = 45_000
     PROGRESS_INTERVAL_MS = 60_000  # 60 секунд
 
     # Цвета полос слева на кнопках-слотах.
     PRIORITY_COLORS = {
+        TaskPriority.EVENT: (240, 240, 40, 1.0),
         TaskPriority.RECURRING: (80, 160, 220, 1.0),
         TaskPriority.DEADLINE: (150, 95, 55, 1.0),  # оранжевый
         TaskPriority.HIGH: (100, 70, 50, 0.85),
@@ -119,6 +120,7 @@ class PlannerQuickViewController(QObject):
 
     # Порядок обхода приоритетов — от высшего к низшему.
     PRIORITY_ORDER = (
+        TaskPriority.EVENT,
         TaskPriority.RECURRING,
         TaskPriority.DEADLINE,
         TaskPriority.HIGH,
@@ -133,6 +135,7 @@ class PlannerQuickViewController(QObject):
 
         # 4 филлера: DEADLINE=1, HIGH=3, MEDIUM=2, LOW=1.
         self._fillers = {
+            TaskPriority.EVENT: PrioritySlotFiller(TaskPriority.EVENT, 1),
             TaskPriority.RECURRING: PrioritySlotFiller(TaskPriority.RECURRING, 1),
             TaskPriority.DEADLINE: PrioritySlotFiller(TaskPriority.DEADLINE, 1),
             TaskPriority.HIGH: PrioritySlotFiller(TaskPriority.HIGH, 3),
@@ -182,7 +185,16 @@ class PlannerQuickViewController(QObject):
         self._carousel_slot_index.clear()
 
         # 2. Берём активные задачи.
-        tasks = [t for t in self._service.get_tasks() if not t.is_generator()]
+        today_str = date.today().strftime("%d.%m.%Y")
+        tasks = [
+            t for t in self._service.get_tasks()
+            if not t.is_generator()
+               and (
+                       not t.is_event()
+                       or (t.status == TaskStatus.ACTIVE and t.event_date == today_str)
+               )
+        ]
+
 
         # 3. Пустой список — специальный режим.
         if not tasks:

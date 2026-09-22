@@ -84,7 +84,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        if not task.is_recurring_instance():
+        if not task.is_recurring_instance() and not task.is_event():
             restore_btn = ButtonFactory.create_button(
                 container, "↺", bg_color=(100, 130, 150),
                 fixed_size=(26, 26), padding="0px", font_size=14,

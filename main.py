@@ -82,22 +82,22 @@ class MainWindow(QMainWindow):
             self.planner_service,
             log_manager=self.log_manager,
         )
-        # NEW: сначала архивируем «вчерашние» незавершённые экземпляры,
-        # чтобы генерация увидела актуальное состояние storage.
-        # Если сделать наоборот: generate_due_instances может решить,
-        # что у генератора нет живого экземпляра, создать новый,
-        # а затем archive_stale_instances заархивирует вчерашний —
-        # получится два экземпляра вместо одного.
+        # NEW: порядок важен.
+        # 1. Архивируем «вчерашние» экземпляры — генерация увидит
+        #    актуальное состояние storage.
+        # 2. Архивируем прошедшие события — они не должны участвовать
+        #    в активации.
+        # 3. Активируем сегодняшние события — они появятся в мини-планировщике.
+        # 4. Генерируем экземпляры регулярных задач.
         self.planner_service.archive_stale_instances()
-        # Генерация при запуске.
+        self.planner_service.expire_past_events()
+        self.planner_service.activate_due_events()
         self.planner_recurrence_service.generate_due_instances()
 
         # NEW: таймер генерации — раз в 30 минут.
         self.recurrence_timer = QTimer(self)
         self.recurrence_timer.setInterval(1*30*1000)  #(30 * 60 * 1000)
-        self.recurrence_timer.timeout.connect(
-            self.planner_recurrence_service.generate_due_instances
-        )
+        self.recurrence_timer.timeout.connect(self._on_recurrence_timer)
         self.recurrence_timer.start()
         self.planner_quick_view = PlannerQuickView(self)
         self.planner_quick_controller = PlannerQuickViewController(
@@ -283,6 +283,24 @@ class MainWindow(QMainWindow):
     def on_timer(self):
         self.datetime_btn.setText(DateTimeUtils.get_current_datetime_text())
 
+    def _on_recurrence_timer(self):
+        """Обработчик таймера: события + генерация экземпляров.
+
+        Роль: раз в 30 секунд приводит систему в актуальное состояние:
+              1. expire_past_events — прошедшие события → архив (EXPIRED).
+              2. activate_due_events — сегодняшние события → ACTIVE,
+                 чтобы они появились в мини-планировщике в тот же день.
+              3. generate_due_instances — генерация экземпляров
+                 регулярных задач.
+
+        Порядок важен и совпадает с порядком в __init__: сначала
+        архивируем «вчерашнее», потом активируем «сегодняшнее»,
+        потом генерируем новое. Иначе на границе дня возможна гонка:
+        генерация создаст экземпляр, а expire тут же его заархивирует.
+        """
+        self.planner_service.expire_past_events()
+        self.planner_service.activate_due_events()
+        self.planner_recurrence_service.generate_due_instances()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

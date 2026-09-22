@@ -22,6 +22,7 @@ class TaskStatus(Enum):
     OVERDUE = "Просрочено"
     PAUSED = "Пауза"
     WAITING = "Ожидание"
+    EXPIRED = "Истекло"
 
     @property
     def display_name(self) -> str:
@@ -40,6 +41,7 @@ class TaskType(Enum):
     DEADLINE = "deadline"
     RECURRING = "recurring"
     INSTANCE = "instance"
+    EVENT = "event"
 
     @property
     def display_name(self) -> str:
@@ -48,6 +50,7 @@ class TaskType(Enum):
             "deadline": "Дедлайн",
             "recurring": "Регулярная",
             "instance": "Экземпляр",
+            "event": "Событие",
         }[self.value]
 
 class TaskPriority(Enum):
@@ -60,6 +63,7 @@ class TaskPriority(Enum):
     HIGH = 3
     DEADLINE = 4
     RECURRING = 5
+    EVENT = 6
 
     @property
     def display_name(self) -> str:
@@ -69,6 +73,7 @@ class TaskPriority(Enum):
             3: "Высокий",
             4: "Дедлайн",
             5: "Регулярная",
+            6: "Событие",
         }[self.value]
 
 class PlannerTask:
@@ -121,7 +126,8 @@ class PlannerTask:
                  recurrence_weekdays: Optional[list] = None,
                  recurrence_monthdays: Optional[list] = None,
                  recurrence_use_last_day: bool = False,
-                 next_generation_date: Optional[str] = None):
+                 next_generation_date: Optional[str] = None,
+                 event_date: Optional[str] = None):
         """Конструктор.
 
         Вход:
@@ -154,6 +160,7 @@ class PlannerTask:
         self.recurrence_monthdays = recurrence_monthdays
         self.recurrence_use_last_day = recurrence_use_last_day
         self.next_generation_date = next_generation_date
+        self.event_date = event_date
 
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
@@ -181,6 +188,7 @@ class PlannerTask:
             "recurrence_monthdays": self.recurrence_monthdays,
             "recurrence_use_last_day": self.recurrence_use_last_day,
             "next_generation_date": self.next_generation_date,
+            "event_date": self.event_date,
         }
 
     @classmethod
@@ -235,6 +243,7 @@ class PlannerTask:
             recurrence_monthdays=data.get("recurrence_monthdays"),
             recurrence_use_last_day=data.get("recurrence_use_last_day", False),
             next_generation_date=data.get("next_generation_date"),
+            event_date=data.get("event_date"),
         )
 
     def get_deadline_datetime(self) -> Optional[datetime]:
@@ -284,3 +293,14 @@ class PlannerTask:
     def is_recurring_instance(self) -> bool:
         """True, если задача — экземпляр, порождённый генератором."""
         return self.task_type == TaskType.INSTANCE
+
+    def is_event(self) -> bool:
+        """True, если задача — событие.
+
+        Выход: bool.
+        Роль: быстрая проверка типа для UI и сервисов. События
+              отличаются от обычных задач поведением: создаются
+              в WAITING, активируются в день события, архивируются
+              на следующий день.
+        """
+        return self.task_type == TaskType.EVENT

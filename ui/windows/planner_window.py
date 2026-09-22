@@ -21,6 +21,7 @@ from services.planner_service import PlannerService
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from ui.windows.message_dialog import MessageDialog, NotificationDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
+from datetime import datetime
 
 class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
@@ -137,11 +138,14 @@ class PlannerWindow(_BasePlannerListWindow):
                 dialog.get_priority()
             )
             # NEW: определение типа задачи по приоритету.
-            task_type = TaskType.REGULAR
             if priority == TaskPriority.RECURRING:
                 task_type = TaskType.RECURRING
             elif priority == TaskPriority.DEADLINE:
                 task_type = TaskType.DEADLINE
+            elif priority == TaskPriority.EVENT:  # NEW
+                task_type = TaskType.EVENT
+            else:
+                task_type = TaskType.REGULAR
 
             self.service.create_task(
                 title=dialog.get_title(),
@@ -150,6 +154,7 @@ class PlannerWindow(_BasePlannerListWindow):
                 deadline_datetime=dialog.get_deadline_data(),
                 task_type=task_type,
                 recurrence_data=dialog.get_recurrence_data(),
+                event_date=dialog.get_event_data(),  # NEW
             )
             self._reload_tasks()
 
@@ -396,7 +401,32 @@ class NewTaskDialog(QDialog):
         # Триггеры.
         self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
         self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
+        self._event_date_row = QWidget()
+        event_row_layout = QHBoxLayout(self._event_date_row)
+        event_row_layout.setContentsMargins(0, 0, 0, 0)
+        event_row_layout.setSpacing(6)
 
+        event_label = LabelFactory.create_label(
+            self._event_date_row, "Дата события:",
+            bg_color=(145, 105, 75, 0.0), text_color="#dabdab",
+            padding="4px 8px", border_radius=3,
+            alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            fixed_size=(120, 24),
+        )
+        self._event_date_edit = InputWidgetFactory.create_line_edit(
+            self._event_date_row,
+            bg_color=(85, 60, 42, 0.9),
+            text_color="#d4d4d4",
+            border="1px solid #6b4a33",
+            border_radius=3,
+            padding="3px",
+        )
+        # Маска ввода ДД.ММ.ГГГГ — пользователь не введёт лишнего.
+        self._event_date_edit.setInputMask("99.99.9999")
+        event_row_layout.addWidget(event_label)
+        event_row_layout.addWidget(self._event_date_edit, 1)
+        self._event_date_row.setVisible(False)
+        content_layout.addWidget(self._event_date_row)
         # Предзаполнение при редактировании (один блок, без дублирования).
         if not self.creator:
             self.task_edit.setText(self.task.title)
@@ -444,7 +474,28 @@ class NewTaskDialog(QDialog):
                 # и в _on_new_task ветка создания задачи не сработает.
                 self.reject()
             return
+        if self.priority_combo.currentText() == TaskPriority.EVENT.display_name:
+            date_str = self._event_date_edit.text().strip()
+            try:
+                datetime.strptime(date_str, "%d.%m.%Y")
+            except ValueError:
+                MessageDialog.warning(
+                    self,
+                    "Введите корректную дату события в формате ДД.ММ.ГГГГ.",
+                    bg_color=self.bg_color,
+                )
+                return
         super().accept()
+
+    def get_event_data(self) -> Optional[str]:
+        """Возвращает дату события или None.
+
+        Выход: строка "%d.%m.%Y" для EVENT, иначе None.
+        Роль: используется _on_new_task при создании задачи.
+        """
+        if self.priority_combo.currentText() != TaskPriority.EVENT.display_name:
+            return None
+        return self._event_date_edit.text().strip()
 
     def _on_title_changed(self, text: str) -> None:
         """Разрешает редактирование описания, только если название непустое.
@@ -470,14 +521,17 @@ class NewTaskDialog(QDialog):
         """Показывает нужные поля в зависимости от приоритета."""
         is_deadline = (text == TaskPriority.DEADLINE.display_name)
         is_recurring = (text == TaskPriority.RECURRING.display_name)
+        is_event = (text == TaskPriority.EVENT.display_name)        # NEW
 
         self.deadline_type_combo.setVisible(is_deadline)
         self._deadline_fields.setVisible(is_deadline)
 
-        # Combo «Правило» — в ряду с приоритетом, показываем отдельно.
         self._recurrence_fields.rule_combo.setVisible(is_recurring)
-        # Поля правила — под формой.
         self._recurrence_fields.setVisible(is_recurring)
+
+        self._event_date_row.setVisible(is_event)
+        if not is_event:
+            self._event_date_edit.clear()
 
     def get_deadline_data(self) -> Optional[str]:
         """Возвращает строку дедлайна или None.

@@ -34,7 +34,8 @@ class PlannerService(QObject):
                     spawner_task: Optional[int] = None,
                     deadline_datetime: Optional[str] = None,
                     task_type: TaskType = TaskType.REGULAR,
-                    recurrence_data: Optional[dict] = None) -> PlannerTask:
+                    recurrence_data: Optional[dict] = None,
+                    event_date: Optional[str] = None) -> PlannerTask:
         """Создаёт задачу, генерирует task_id, сохраняет.
 
         Вход:
@@ -47,6 +48,8 @@ class PlannerService(QObject):
         """
         if not title or not title.strip():
             raise ValueError("Название задачи не может быть пустым")
+        if task_type == TaskType.EVENT and not event_date:
+            raise ValueError("Для события обязательна дата события")
         task_id = TaskIdGenerator.generate(self._storage)
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
         if task_type == TaskType.RECURRING and recurrence_data:
@@ -61,13 +64,20 @@ class PlannerService(QObject):
         if priority == TaskPriority.DEADLINE and not deadline_datetime:
             fallback_dt = datetime.now() + timedelta(days=1)
             deadline_datetime = fallback_dt.strftime("%d.%m.%Y %H:%M")
+        if task_type == TaskType.EVENT:
+            status = TaskStatus.WAITING
+            event_date_val = event_date
+        else:
+            status = TaskStatus.ACTIVE
+            event_date_val = None
         next_date = date.today().strftime("%d.%m.%Y") if task_type == TaskType.RECURRING else None
+
         task = PlannerTask(
             task_id=task_id,
             title=title.strip(),
             description=description,
             priority=priority,
-            status=TaskStatus.ACTIVE,
+            status=status,  # REPLACE: было ACTIVE
             created_date=date.today().strftime("%d.%m.%Y"),
             completed_date=None,
             spawner_task=spawner_task,
@@ -80,6 +90,7 @@ class PlannerService(QObject):
             recurrence_monthdays=rec_monthdays,
             recurrence_use_last_day=rec_use_last,
             next_generation_date=next_date,
+            event_date=event_date_val,  # NEW
         )
         self._storage.add(task)
         self.tasks_changed.emit()
@@ -293,6 +304,7 @@ class PlannerService(QObject):
     def get_priorities(self) -> list[str]:
         """Возвращает приоритеты в порядке убывания важности."""
         return [
+            TaskPriority.EVENT.display_name,
             TaskPriority.RECURRING.display_name,
             TaskPriority.DEADLINE.display_name,
             TaskPriority.HIGH.display_name,
@@ -323,3 +335,49 @@ class PlannerService(QObject):
             if s.display_name == name:
                 return s
         return TaskStatus.ACTIVE
+
+    def activate_due_events(self) -> int:
+        """Активирует события, дата которых наступила сегодня.
+
+        Выход: количество активированных событий.
+
+        Роль: вызывается при запуске приложения и по таймеру.
+              Событие в статусе WAITING с event_date == сегодня
+              переводится в ACTIVE — оно появится в мини-планировщике.
+              Эмит tasks_changed один раз в конце, если были изменения.
+        """
+        today = date.today().strftime("%d.%m.%Y")
+        count = 0
+        for task in self._storage.get_all():
+            if task.is_event() and task.status == TaskStatus.WAITING:
+                if task.event_date == today:
+                    task.status = TaskStatus.ACTIVE
+                    count += 1
+        if count:
+            self._storage.save()
+            self.tasks_changed.emit()
+        return count
+
+    def expire_past_events(self) -> int:
+        """Архивирует события, дата которых прошла.
+
+        Выход: количество архивированных событий.
+
+        Роль: вызывается при запуске приложения и по таймеру.
+              Событие в статусе ACTIVE или WAITING с event_date < сегодня
+              уходит в архив как EXPIRED. Использует существующий
+              archive_task — он сам эмитит tasks_changed.
+              Событие в статусе PAUSED не трогаем: пользователь
+              явно остановил его.
+
+        Важно: список копируем через list(...), потому что
+              archive_task удаляет задачи из storage во время итерации.
+        """
+        today = date.today().strftime("%d.%m.%Y")
+        count = 0
+        for task in list(self._storage.get_all()):
+            if task.is_event() and task.status in (TaskStatus.ACTIVE, TaskStatus.WAITING):
+                if task.event_date and task.event_date < today:
+                    self.archive_task(task.task_id, TaskStatus.EXPIRED)
+                    count += 1
+        return count

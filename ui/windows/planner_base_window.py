@@ -36,18 +36,23 @@ class _BasePlannerListWindow(QMainWindow):
     ACCENT_SHIFT = 25
     ACCENT_ALPHA = 0.7
 
-    # Цвета
     PRIORITY_COLORS = {
+        "Событие": (240, 240, 40, 0.85),  # NEW
+        "Регулярная": (80, 160, 220, 0.85),  # NEW: было пропущено в старом словаре
         "Дедлайн": (220, 130, 60, 0.85),
         "Высокий": (180, 70, 70, 0.85),
         "Средний": (180, 150, 70, 0.85),
         "Низкий": (100, 150, 100, 0.85),
     }
+
     STATUS_COLORS = {
         "Активная": (80, 100, 160, 0.85),
         "Выполнена": (100, 150, 100, 0.85),
         "Отменена": (120, 120, 120, 0.85),
         "Просрочено": (200, 70, 70, 0.85),
+        "Истекло": (200, 70, 70, 0.85),  # NEW
+        "Пауза": (150, 130, 70, 0.85),  # NEW: если ещё не добавил
+        "Ожидание": (100, 100, 150, 0.85),  # NEW: если ещё не добавил
     }
 
     # Нейтральный цвет для неизвестных значений.
@@ -298,7 +303,16 @@ class _BasePlannerListWindow(QMainWindow):
                 text_color="#ffffff", alignment=Qt.AlignCenter,
                 min_size=(100, 0), padding="4px 8px", border_radius=4,
             )
-
+        if task.is_event():
+            return LabelFactory.create_label(
+                self, text=task.event_date or "—",
+                bg_color=(60, 160, 80, 0.85),
+                text_color="#ffffff",
+                alignment=Qt.AlignCenter,
+                min_size=(100, 0),
+                padding="4px 8px",
+                border_radius=4,
+            )
         # Остальные — пустой лейбл для выравнивания колонок.
         return LabelFactory.create_label(
             self, text="", bg_color=(0, 0, 0, 0),

@@ -210,11 +210,16 @@ class ButtonFactory(BaseWidgetFactory):
 
         Вход: parent — родитель; task — PlannerTask; priority_color — цвет полосы.
         Выход: DeadlineTaskButton, InstanceTaskButton или QPushButton.
+
+        Роль: EVENT и INSTANCE используют InstanceTaskButton с разными
+              цветами полосы: жёлтый для события, голубой для экземпляра.
         """
         if task.priority == TaskPriority.DEADLINE:
             return DeadlineTaskButton(parent)
+        if task.is_event():  # NEW
+            return InstanceTaskButton(parent, stripe_color=(240, 240, 40, 1.0))
         if task.is_recurring_instance():
-            return InstanceTaskButton(parent)
+            return InstanceTaskButton(parent, stripe_color=(80, 160, 220, 1.0))
         btn = QPushButton(parent)
         return btn
 
@@ -1688,11 +1693,11 @@ class InstanceTaskButton(QWidget):
     STRIPE_COLOR = (80, 160, 220, 1.0)  # голубая
     TEXT_COLOR = "#e0e0e0"
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, stripe_color=(80, 160, 220, 1.0)):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
-
+        self._stripe_color = stripe_color
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 4, 8, 4)
         layout.setSpacing(2)
