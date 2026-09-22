@@ -338,17 +338,19 @@ class NewTaskDialog(QDialog):
             border="1px solid #6b4a33",
         )
         self.deadline_type_combo.setVisible(False)
-
         self._recurrence_fields = ButtonFactory.create_recurrence_fields(self)
         self._recurrence_fields.setVisible(False)
+        # Combo «Правило» — из виджета, встраиваем в ряд с приоритетом.
+        self._recurrence_fields.rule_combo.setVisible(False)
 
-        # Строка «Приоритет» — контейнер из двух combo.
+        # Строка «Приоритет» — контейнер из трёх combo.
         priority_row = QWidget()
         priority_row_layout = QHBoxLayout(priority_row)
         priority_row_layout.setContentsMargins(0, 0, 0, 0)
         priority_row_layout.setSpacing(6)
         priority_row_layout.addWidget(self.priority_combo, 1)
         priority_row_layout.addWidget(self.deadline_type_combo, 1)
+        priority_row_layout.addWidget(self._recurrence_fields.rule_combo, 1)
 
         self.task_edit.textChanged.connect(self._on_title_changed)
 
@@ -446,22 +448,6 @@ class NewTaskDialog(QDialog):
         # strip() — чтобы одни пробелы не считались «непустым» названием.
         self.full_desc_edit.setReadOnly(not bool(text.strip()))
 
-    def _on_priority_changed(self, text: str) -> None:
-        """Показывает combo типа и поля дедлайна, если выбран DEADLINE."""
-        # combo типа дедлайна — в ряду с приоритетом.
-        self.deadline_type_combo = InputWidgetFactory.create_combo_box(
-            self,
-            items=["До даты включительно", "Срок"],
-            current_index=0,
-            bg_color=(85, 60, 42, 0.9),
-            border="1px solid #6b4a33",
-        )
-        self.deadline_type_combo.setVisible(False)
-
-        # Триггеры.
-        self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
-        self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
-        self.rule_combo.currentTextChanged.connect(self._on_rule_changed)
 
     def _on_deadline_type_changed(self, text: str) -> None:
         """Переключает режим полей ввода в DeadlineFieldsWidget."""
@@ -476,7 +462,9 @@ class NewTaskDialog(QDialog):
         self.deadline_type_combo.setVisible(is_deadline)
         self._deadline_fields.setVisible(is_deadline)
 
-        # Виджет правила — только для RECURRING.
+        # Combo «Правило» — в ряду с приоритетом, показываем отдельно.
+        self._recurrence_fields.rule_combo.setVisible(is_recurring)
+        # Поля правила — под формой.
         self._recurrence_fields.setVisible(is_recurring)
 
     def get_deadline_data(self) -> Optional[str]:

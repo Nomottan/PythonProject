@@ -471,16 +471,26 @@ class ButtonFactory(BaseWidgetFactory):
         return btn
 
     @staticmethod
-    def create_recurrence_fields(parent, initial_data=None):
+    def create_recurrence_fields(parent, initial_data=None,
+                                 field_bg=None, field_border=None,
+                                 button_border=None):
         """Создаёт виджет полей правила повторения.
 
-        Вход: parent — родитель; initial_data — dict для предзаполнения.
-        Выход: PlannerRecurrenceFieldsWidget.
+        Вход:
+            parent — родитель.
+            initial_data — dict для предзаполнения.
+            field_bg, field_border — цвета полей. None — дефолтные коричневые.
+            button_border — рамка кнопки «Выбрать числа».
         """
         from ui.widgets.planner_recurrence_fields_widget import (
             PlannerRecurrenceFieldsWidget,
         )
-        return PlannerRecurrenceFieldsWidget(parent, initial_data)
+        return PlannerRecurrenceFieldsWidget(
+            parent, initial_data,
+            field_bg=field_bg,
+            field_border=field_border,
+            button_border=button_border,
+        )
 
     @staticmethod
     def create_day_picker(parent, selected=None):

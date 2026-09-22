@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
 
         # NEW: таймер генерации — раз в 30 минут.
         self.recurrence_timer = QTimer(self)
-        self.recurrence_timer.setInterval(5)  #(30 * 60 * 1000)
+        self.recurrence_timer.setInterval(5*60)  #(30 * 60 * 1000)
         self.recurrence_timer.timeout.connect(
             self.planner_recurrence_service.generate_due_instances
         )

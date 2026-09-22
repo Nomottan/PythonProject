@@ -25,27 +25,42 @@ class PlannerRecurrenceFieldsWidget(QWidget):
     Роль в программе:
         Переиспользуемый виджет для двух окон. Внутри — три
         взаимозаменяемых блока; какой показан, зависит от rule_combo.
-        Кнопка «Выбрать числа» открывает PlannerDayPickerDialog,
-        который сам решает вопрос про 29/30/31.
+        Кнопка «Выбрать числа» открывает PlannerDayPickerDialog.
     """
 
     data_changed = Signal()
 
-    # Цвета полей — те же, что у DeadlineFieldsWidget.
-    FIELD_BG = (85, 60, 42, 0.9)
-    FIELD_BORDER = "1px solid #6b4a33"
+    # Дефолтные цвета полей (для NewTaskDialog).
+    DEFAULT_FIELD_BG = (85, 60, 42, 0.9)
+    DEFAULT_FIELD_BORDER = "1px solid #6b4a33"
+    DEFAULT_BUTTON_BORDER = "1px solid #a08060"
 
-    def __init__(self, parent=None, initial_data: Optional[dict] = None):
+    def __init__(self, parent=None, initial_data: Optional[dict] = None,
+                 field_bg: Optional[tuple] = None,
+                 field_border: Optional[str] = None,
+                 button_border: Optional[str] = None):
         """Конструктор.
 
         Вход:
             parent — родительский виджет.
             initial_data — dict правила повторения для предзаполнения.
-                           Ключи: type, value, weekdays, monthdays, use_last_day.
+            field_bg — цвет фона полей. По умолчанию — коричневый.
+            field_border — CSS-рамка полей. По умолчанию — коричневая.
+            button_border — CSS-рамка кнопки «Выбрать числа».
+                            По умолчанию — светлая тёплая.
+
+        Роль: цвета вынесены в параметры, чтобы EditDialog мог
+              передать сине-серую палитру.
         """
         super().__init__(parent)
         self._selected_monthdays: list = []
         self._use_last_day: bool = False
+
+        # Сохраняем цвета до _build_ui.
+        self._field_bg = field_bg or self.DEFAULT_FIELD_BG
+        self._field_border = field_border or self.DEFAULT_FIELD_BORDER
+        self._button_border = button_border or self.DEFAULT_BUTTON_BORDER
+
         self._build_ui()
         if initial_data:
             self.set_data(initial_data)
@@ -53,13 +68,8 @@ class PlannerRecurrenceFieldsWidget(QWidget):
     # ---------- Публичный API ----------
 
     def get_recurrence_data(self) -> Optional[dict]:
-        """Возвращает правило повторения.
-
-        Выход: dict с ключами type/value/weekdays/monthdays/use_last_day
-               или None, если правило невалидно (например, ни одного
-               дня недели не отмечено).
-        """
-        rule = self._rule_combo.currentText()
+        """Возвращает правило повторения или None, если невалидно."""
+        rule = self.rule_combo.currentText()
         if rule == "Каждые N дней":
             return {"type": "every_n_days", "value": self._days_spin.value()}
         if rule == "Дни недели":
@@ -80,22 +90,18 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         return None
 
     def set_data(self, data: dict) -> None:
-        """Предзаполняет виджет из dict правила повторения.
-
-        Вход: data — dict с ключами type/value/weekdays/monthdays/use_last_day.
-        Роль: используется в PlannerRecurrenceEditDialog при открытии.
-        """
+        """Предзаполняет виджет из dict правила повторения."""
         rec_type = data.get("type")
         if rec_type == "every_n_days":
-            self._rule_combo.setCurrentText("Каждые N дней")
+            self.rule_combo.setCurrentText("Каждые N дней")
             self._days_spin.setValue(data.get("value") or 1)
         elif rec_type == "weekdays":
-            self._rule_combo.setCurrentText("Дни недели")
+            self.rule_combo.setCurrentText("Дни недели")
             weekdays = data.get("weekdays") or []
             for i, cb in enumerate(self._weekday_boxes):
                 cb.setChecked(i in weekdays)
         elif rec_type == "monthdays":
-            self._rule_combo.setCurrentText("Определённые числа")
+            self.rule_combo.setCurrentText("Определённые числа")
             self._selected_monthdays = list(data.get("monthdays") or [])
             self._use_last_day = bool(data.get("use_last_day", False))
             self._monthdays_label.setText(self._format_days_preview())
@@ -103,20 +109,23 @@ class PlannerRecurrenceFieldsWidget(QWidget):
     # ---------- Сборка ----------
 
     def _build_ui(self) -> None:
-        """Собирает UI: combo правила + три взаимозаменяемых блока."""
+        """Собирает UI: три взаимозаменяемых блока.
+
+        Combo «Правило» создаётся, но НЕ добавляется в свой layout —
+        это делает вызывающий код.
+        """
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Combo «Правило».
-        self._rule_combo = InputWidgetFactory.create_combo_box(
+        # Combo «Правило» — публичный атрибут, добавляется снаружи.
+        self.rule_combo = InputWidgetFactory.create_combo_box(
             self,
             items=["Каждые N дней", "Дни недели", "Определённые числа"],
             current_index=0,
-            bg_color=self.FIELD_BG,
-            border=self.FIELD_BORDER,
+            bg_color=self._field_bg,
+            border=self._field_border,
         )
-        layout.addWidget(self._rule_combo)
 
         # «Каждые N дней».
         self._days_widget = QWidget()
@@ -125,7 +134,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         days_l.setSpacing(4)
         self._days_spin = InputWidgetFactory.create_spin_box(
             self._days_widget, min_value=1, max_value=9999, value=1,
-            bg_color=self.FIELD_BG, border=self.FIELD_BORDER,
+            bg_color=self._field_bg, border=self._field_border,
             show_buttons=False,
         )
         days_l.addWidget(self._label("Каждые"))
@@ -134,20 +143,32 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         days_l.addStretch()
         layout.addWidget(self._days_widget)
 
-        # «Дни недели».
+        # «Дни недели»: каждая ячейка — [label][checkbox].
         self._weekdays_widget = QWidget()
         wd_l = QHBoxLayout(self._weekdays_widget)
         wd_l.setContentsMargins(0, 0, 0, 0)
-        wd_l.setSpacing(4)
+        wd_l.setSpacing(6)
         self._weekday_boxes = []
         for day_name in ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]:
-            cb = InputWidgetFactory.create_checkbox(
-                self._weekdays_widget, day_name, checked=False,
+            cell = QWidget()
+            cell_l = QHBoxLayout(cell)
+            cell_l.setContentsMargins(0, 0, 0, 0)
+            cell_l.setSpacing(2)
+            # Сначала label с днём — потом чекбокс без текста.
+            day_lbl = LabelFactory.create_label(
+                cell, day_name,
                 bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                font_size=11, padding="0px",
+            )
+            cell_l.addWidget(day_lbl)
+            cb = InputWidgetFactory.create_checkbox(
+                cell, "", checked=False,
+                bg_color=(0, 0, 0, 0),
             )
             cb.stateChanged.connect(lambda _: self.data_changed.emit())
+            cell_l.addWidget(cb)
             self._weekday_boxes.append(cb)
-            wd_l.addWidget(cb)
+            wd_l.addWidget(cell)
         wd_l.addStretch()
         layout.addWidget(self._weekdays_widget)
 
@@ -156,12 +177,24 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         md_l = QHBoxLayout(self._monthdays_widget)
         md_l.setContentsMargins(0, 0, 0, 0)
         md_l.setSpacing(4)
+
+        # Кнопка «Выбрать числа»: темнее фона полей + светлая окантовка.
+        # Осветляем рамку от цвета полей.
+        button_bg = (
+            max(0, self._field_bg[0] - 15),
+            max(0, self._field_bg[1] - 15),
+            max(0, self._field_bg[2] - 15),
+            self._field_bg[3],
+        )
         self._select_days_btn = ButtonFactory.create_button(
             self._monthdays_widget, "Выбрать числа",
-            bg_color=(80, 100, 130), padding="6px 12px",
+            bg_color=button_bg,
+            border=self._button_border,
+            padding="6px 12px",
         )
         self._select_days_btn.clicked.connect(self._on_select_monthdays)
         md_l.addWidget(self._select_days_btn)
+
         self._monthdays_label = LabelFactory.create_label(
             self._monthdays_widget, "",
             bg_color=(0, 0, 0, 0), text_color="#d4d4d4", font_size=11,
@@ -171,10 +204,10 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         layout.addWidget(self._monthdays_widget)
 
         # Триггеры.
-        self._rule_combo.currentTextChanged.connect(self._on_rule_changed)
+        self.rule_combo.currentTextChanged.connect(self._on_rule_changed)
         self._days_spin.valueChanged.connect(lambda _: self.data_changed.emit())
 
-        self._on_rule_changed(self._rule_combo.currentText())
+        self._on_rule_changed(self.rule_combo.currentText())
 
     def _label(self, text: str):
         """Быстрый хелпер для лейблов полей."""
@@ -197,8 +230,15 @@ class PlannerRecurrenceFieldsWidget(QWidget):
 
         Вопрос про 29/30/31 задаётся внутри самого диалога — здесь
         только сохраняем результат.
+
+        Передаём self.window() — top-level окно (NewTaskDialog или
+        PlannerRecurrenceEditDialog). Иначе ExtendedWindowFactory
+        центрирует диалог относительно виджета внутри формы, и он
+        может оказаться за пределами экрана.
         """
-        dialog = ButtonFactory.create_day_picker(self, self._selected_monthdays)
+        dialog = ButtonFactory.create_day_picker(
+            self.window(), self._selected_monthdays
+        )
         if dialog.exec():
             self._selected_monthdays = dialog.get_selected()
             self._use_last_day = dialog.get_use_last_day()
