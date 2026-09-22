@@ -2,70 +2,132 @@
 Сервис генерации экземпляров регулярных задач.
 """
 
-import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from services.planner_service import PlannerService
+from utils.recurrence_utils import RecurrenceCalculator
 
 
 class PlannerRecurrenceService:
     """Сервис генерации экземпляров регулярных задач.
 
-    Роль: создаёт экземпляры для генераторов, у которых наступила
-          next_generation_date. Вызывается при запуске приложения
-          и по таймеру (30 минут).
+    Роль: поддерживает жизненный цикл генераторов.
+        ACTIVE  — есть живой экземпляр (создан, не завершён).
+        WAITING — живого экземпляра нет, ждём next_generation_date.
+        PAUSED  — пользователь остановил генерацию вручную.
+
+        Вызывается при запуске приложения и по таймеру.
     """
 
     def __init__(self, planner_service: PlannerService, log_manager=None):
         self._service = planner_service
         self._log_manager = log_manager
 
+    # ---------- Основной цикл ----------
+
     def generate_due_instances(self) -> int:
         """Создаёт экземпляры для всех due-генераторов.
 
         Выход: количество созданных экземпляров.
+
+        Алгоритм (для каждого генератора):
+            1. PAUSED — пропустить: пользователь остановил вручную.
+            2. Есть живой экземпляр → генератор должен быть ACTIVE.
+               Если он почему-то WAITING — синхронизируем.
+            3. Нет живого экземпляра → генератор должен быть WAITING.
+               Если он почему-то ACTIVE — синхронизируем.
+            4. next_generation_date пустое → вычислить от today с
+               include_today=True и сохранить; экземпляр не создаём —
+               пусть следующий тик сам «догонит».
+            5. next_generation_date <= today → создать экземпляр,
+               пересчитать дату строго после today, генератор → ACTIVE.
+            6. Один экземпляр на генератор за тик.
         """
         today = date.today()
         count = 0
+
         for gen in self._service.get_recurring_tasks():
-            # Пропускаем на паузе.
+            # 1. Пауза — не трогаем до явного возобновления.
             if gen.status == TaskStatus.PAUSED:
                 continue
 
-            # Если уже есть активный экземпляр — генератор в WAITING.
+            # 2. Есть живой экземпляр?
             active = self._service.get_active_instances(gen.task_id)
             if active:
-                if gen.status == TaskStatus.ACTIVE:
-                    self._service.update_status(gen.task_id, TaskStatus.WAITING)
+                # Экземпляр есть → генератор обязан быть ACTIVE.
+                if gen.status != TaskStatus.ACTIVE:
+                    self._service.update_status(
+                        gen.task_id, TaskStatus.ACTIVE
+                    )
                 continue
 
-            # Проверяем next_generation_date.
-            if gen.next_generation_date:
-                try:
-                    next_date = datetime.strptime(
-                        gen.next_generation_date, "%d.%m.%Y"
-                    ).date()
-                except ValueError:
-                    continue
-                if next_date > today:
-                    continue
+            # 3. Живого экземпляра нет → генератор обязан быть WAITING.
+            if gen.status != TaskStatus.WAITING:
+                self._service.update_status(
+                    gen.task_id, TaskStatus.WAITING
+                )
 
-            # Создаём экземпляр.
+            # 4. Нет даты — вычислим и сохраним, экземпляр не создаём.
+            if not gen.next_generation_date:
+                new_date = RecurrenceCalculator.compute_next_date(
+                    gen, today, include_today=True
+                )
+                gen.next_generation_date = (
+                    new_date.strftime("%d.%m.%Y") if new_date else None
+                )
+                # Пишем напрямую в storage: update_status эмитит сигнал,
+                # а нам сейчас сигнал не нужен — только сохранить поле.
+                self._service._storage.save()
+                continue
+
+            # 5. Проверяем дату.
+            try:
+                next_date = datetime.strptime(
+                    gen.next_generation_date, "%d.%m.%Y"
+                ).date()
+            except ValueError:
+                # Битый формат — пропускаем генератор до ручной правки.
+                continue
+
+            if next_date > today:
+                # Ещё рано — ждём следующего тика.
+                continue
+
+            # 6. Дата наступила — создаём экземпляр.
             self._create_instance(gen)
             count += 1
 
-            # Обновляем next_generation_date.
-            self._update_next_date(gen, today)
+            # Пересчитываем следующую дату строго после today.
+            # include_today=False: экземпляр уже создан сегодня,
+            # второй на ту же дату не нужен.
+            new_date = RecurrenceCalculator.compute_next_date(
+                gen, today, include_today=False
+            )
+            gen.next_generation_date = (
+                new_date.strftime("%d.%m.%Y") if new_date else None
+            )
 
-            # Если генератор был WAITING — возвращаем в ACTIVE.
-            if gen.status == TaskStatus.WAITING:
-                self._service.update_status(gen.task_id, TaskStatus.ACTIVE)
+            # Генератор → ACTIVE: у него теперь есть живой экземпляр.
+            # update_status сохранит storage и эмитит tasks_changed.
+            self._service.update_status(
+                gen.task_id, TaskStatus.ACTIVE
+            )
+
         return count
 
+    # ---------- Вспомогательные ----------
+
     def _create_instance(self, generator: PlannerTask) -> PlannerTask:
-        """Создаёт экземпляр с priority=RECURRING, task_type=INSTANCE."""
+        """Создаёт экземпляр с priority=RECURRING, task_type=INSTANCE.
+
+        Вход: generator — генератор.
+        Выход: созданный PlannerTask-экземпляр.
+
+        Роль: инкапсулирует параметры экземпляра — все места создания
+              идут через этот метод, чтобы не разъехались поля.
+        """
         return self._service.create_task(
             title=generator.title,
             description=generator.description,
@@ -75,62 +137,35 @@ class PlannerRecurrenceService:
         )
 
     def _update_next_date(self, generator: PlannerTask, today: date) -> None:
-        """Вычисляет и сохраняет новую next_generation_date."""
-        new_date = self.compute_next_date(generator, today)
+        """Вычисляет и сохраняет новую next_generation_date.
+
+        Вход: generator — генератор; today — опорная дата.
+        Выход: нет.
+        Роль: вспомогательный метод для случаев, когда нужно пересчитать
+              дату без создания экземпляра. В новом алгоритме
+              generate_due_instances делает это явно, но метод оставлен
+              для обратной совместимости и внешних вызовов.
+        """
+        new_date = RecurrenceCalculator.compute_next_date(
+            generator, today, include_today=False
+        )
         generator.next_generation_date = (
             new_date.strftime("%d.%m.%Y") if new_date else None
         )
         self._service._storage.save()
 
-    def compute_next_date(self, task: PlannerTask,
-                          from_date: date) -> Optional[date]:
-        """Вычисляет следующую дату генерации.
+    def compute_next_date(self, task: PlannerTask, from_date: date,
+                          include_today: bool = False) -> Optional[date]:
+        """Делегирует в RecurrenceCalculator.
 
-        Логика:
-            every_n_days — from_date + N дней.
-            weekdays — следующий подходящий день недели.
-            monthdays — следующее число месяца.
+        Вход: task — генератор; from_date — опорная дата;
+              include_today — включать ли from_date.
+        Выход: date или None.
+
+        Роль: сохранён как публичный метод сервиса для обратной
+              совместимости. Внутри — просто вызов утилиты, чтобы
+              не дублировать логику.
         """
-        if not task.is_generator():
-            return None
-
-        rec_type = task.recurrence_type
-
-        if rec_type == "every_n_days":
-            n = task.recurrence_value or 1
-            return from_date + timedelta(days=n)
-
-        if rec_type == "weekdays":
-            weekdays = task.recurrence_weekdays or []
-            if not weekdays:
-                return None
-            for offset in range(1, 8):
-                d = from_date + timedelta(days=offset)
-                if d.weekday() in weekdays:
-                    return d
-            return None
-
-        if rec_type == "monthdays":
-            monthdays = sorted(task.recurrence_monthdays or [])
-            if not monthdays:
-                return None
-            y, m = from_date.year, from_date.month
-            for _ in range(24):
-                for day in monthdays:
-                    try:
-                        candidate = date(y, m, day)
-                    except ValueError:
-                        if task.recurrence_use_last_day:
-                            last_day = calendar.monthrange(y, m)[1]
-                            candidate = date(y, m, last_day)
-                        else:
-                            continue
-                    if candidate > from_date:
-                        return candidate
-                m += 1
-                if m > 12:
-                    m = 1
-                    y += 1
-            return None
-
-        return None
+        return RecurrenceCalculator.compute_next_date(
+            task, from_date, include_today
+        )

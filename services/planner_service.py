@@ -4,6 +4,7 @@ from typing import Optional
 from utils.task_id_generator import TaskIdGenerator
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from storage.planner_task_storage import PlannerTaskStorage
+from utils.recurrence_utils import RecurrenceCalculator
 
 
 
@@ -116,6 +117,21 @@ class PlannerService(QObject):
         if self._archive_storage is not None:
             self._archive_storage.add(target)
         self._storage.remove(task_id)
+
+        # NEW: если архивировали экземпляр — переводим его генератора
+        # в WAITING. Делаем это строго после удаления экземпляра из
+        # storage, иначе генератор «увидел» бы ещё живой экземпляр.
+        # Если генератор в PAUSED — не трогаем: пользователь явно
+        # остановил его, и наша архивация не должна снимать паузу.
+        if target.is_recurring_instance() and target.spawner_task is not None:
+            for gen in self._storage.get_all():
+                if (gen.task_id == target.spawner_task
+                        and gen.is_generator()):
+                    if gen.status == TaskStatus.ACTIVE:
+                        gen.status = TaskStatus.WAITING
+                        self._storage.save()
+                    break
+
         self.tasks_changed.emit()
         return True
 
@@ -143,10 +159,32 @@ class PlannerService(QObject):
 
         Вход: task_id — идентификатор; new_status — новый статус.
         Выход: True — задача найдена и обновлена; False — не найдена.
+
+        Роль: единая точка смены статуса. При переходе
+              PAUSED → WAITING у генератора пересчитывается
+              next_generation_date с «догоном» пропущенных дат —
+              пользователь мог стоять на паузе долго.
+
+        Порядок действий: пересчёт → сохранение → эмит.
+        Один эмит на всю операцию — подписчики (мини-планировщик,
+        окно планировщика) не мигнут лишний раз.
         """
         for task in self._storage.get_all():
             if task.task_id == task_id:
+                old_status = task.status
                 task.status = new_status
+
+                # NEW: выход из паузы — «догон» пропущенных дат.
+                if (old_status == TaskStatus.PAUSED
+                        and new_status == TaskStatus.WAITING
+                        and task.is_generator()):
+                    catch_up = RecurrenceCalculator.catch_up_date(
+                        task, date.today()
+                    )
+                    task.next_generation_date = (
+                        catch_up.strftime("%d.%m.%Y") if catch_up else None
+                    )
+
                 self._storage.save()
                 self.tasks_changed.emit()
                 return True
@@ -161,12 +199,18 @@ class PlannerService(QObject):
 
         Вход: parent_id — task_id генератора.
         Выход: список PlannerTask с spawner_task == parent_id
-               и статусом ACTIVE или WAITING.
+               и статусом ACTIVE.
+
+        Роль: по списку сервис генерации определяет, есть ли у
+              генератора живой экземпляр. Экземпляры в статусе
+              WAITING не бывают — этот статус только у генераторов.
+              Фильтр только по ACTIVE — согласно спецификации
+              жизненного цикла.
         """
         return [
             t for t in self._storage.get_all()
             if t.spawner_task == parent_id
-               and t.status in (TaskStatus.ACTIVE, TaskStatus.WAITING)
+               and t.status == TaskStatus.ACTIVE
                and t.is_recurring_instance()
         ]
 

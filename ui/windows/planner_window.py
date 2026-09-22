@@ -102,8 +102,9 @@ class PlannerWindow(_BasePlannerListWindow):
         layout.setSpacing(4)
 
         if task.is_generator():
-            # ⏸ если ACTIVE, ▶ если PAUSED.
-            symbol = "⏸" if task.status == TaskStatus.ACTIVE else "▶"
+            # ⏸ для ACTIVE и WAITING (генератор работает),
+            # ▶ только для PAUSED (пользователь может возобновить).
+            symbol = "▶" if task.status == TaskStatus.PAUSED else "⏸"
             pause_btn = ButtonFactory.create_button(
                 container, symbol, bg_color=(150, 130, 70, 0.85),
                 fixed_size=(26, 26), padding="0px", font_size=14,
@@ -203,10 +204,21 @@ class PlannerWindow(_BasePlannerListWindow):
         """Переключает паузу/возобновление регулярного генератора.
 
         Вход: task — PlannerTask-генератор.
-        Роль: ACTIVE → PAUSED, PAUSED → ACTIVE.
+
+        Роль:
+            - Из ACTIVE или WAITING → PAUSED (пользователь остановил).
+            - Из PAUSED → WAITING (возобновление). При этом
+              PlannerService.update_status сам пересчитает
+              next_generation_date с «догоном» пропущенных дат.
+
+        В ACTIVE генератор вернётся автоматически, когда
+        PlannerRecurrenceService при следующем тике увидит у него
+        живой экземпляр. Явно этого делать не нужно.
         """
-        new_status = (TaskStatus.PAUSED if task.status == TaskStatus.ACTIVE
-                      else TaskStatus.ACTIVE)
+        if task.status == TaskStatus.PAUSED:
+            new_status = TaskStatus.WAITING
+        else:
+            new_status = TaskStatus.PAUSED
         self.service.update_status(task.task_id, new_status)
         self._reload_tasks()
 

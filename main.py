@@ -82,14 +82,19 @@ class MainWindow(QMainWindow):
             self.planner_service,
             log_manager=self.log_manager,
         )
+        # NEW: сначала архивируем «вчерашние» незавершённые экземпляры,
+        # чтобы генерация увидела актуальное состояние storage.
+        # Если сделать наоборот: generate_due_instances может решить,
+        # что у генератора нет живого экземпляра, создать новый,
+        # а затем archive_stale_instances заархивирует вчерашний —
+        # получится два экземпляра вместо одного.
+        self.planner_service.archive_stale_instances()
         # Генерация при запуске.
         self.planner_recurrence_service.generate_due_instances()
-        # Архивируем «вчерашние» незавершённые экземпляры.
-        self.planner_service.archive_stale_instances()
 
         # NEW: таймер генерации — раз в 30 минут.
         self.recurrence_timer = QTimer(self)
-        self.recurrence_timer.setInterval(5*60)  #(30 * 60 * 1000)
+        self.recurrence_timer.setInterval(1*30*1000)  #(30 * 60 * 1000)
         self.recurrence_timer.timeout.connect(
             self.planner_recurrence_service.generate_due_instances
         )
