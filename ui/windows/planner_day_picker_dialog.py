@@ -1,20 +1,18 @@
 """
 Диалог выбора чисел месяца для правила «Определённые числа».
 
-Сетка 7×5 с плитками 36×36, превью выбранных чисел.
-Вопрос про 29/30/31 задаётся внутри _on_ok.
+Обёртка над PlannerDayPickerWidget: сетка 7×5 с плитками 36×36,
+превью выбранных чисел. Вопрос про 29/30/31 задаётся в _validate.
 """
 
-from PySide6.QtWidgets import (
-    QDialog, QWidget, QGridLayout, QHBoxLayout,
-)
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog
 
-from ui.factories.factories import ButtonFactory, LabelFactory
-from ui.factories.window_factories import ExtendedWindowFactory
+from ui.widgets.planner_day_picker_widget import PlannerDayPickerWidget
+from ui.base.base_edit_dialog import BaseEditDialog
 from ui.windows.message_dialog import MessageDialog
 
-class PlannerDayPickerDialog(QDialog):
+
+class PlannerDayPickerDialog(BaseEditDialog):
     """Диалог выбора чисел месяца.
 
     Назначение:
@@ -23,106 +21,67 @@ class PlannerDayPickerDialog(QDialog):
         выбранного числа нет.
 
     Роль в программе:
-        Открывается из PlannerRecurrenceFieldsWidget.
+        Открывается из PlannerRecurrenceFieldsWidget. Содержимое —
+        PlannerDayPickerWidget; логика «последнего дня» — здесь.
     """
 
     def __init__(self, parent=None, selected=None):
         """Конструктор.
 
-        Вход: parent — родитель; selected — список предвыбранных чисел.
+        Вход:
+            parent — родитель.
+            selected — список предвыбранных чисел.
+
+        Роль: сохраняет предвыбранные числа, настраивает каркас
+              через BaseEditDialog. Виджет создаётся в _build_content.
         """
-        super().__init__(parent)
-        self._selected = list(selected or [])
+        # Сохраняем до super(): нужно для _build_content.
+        self._initial_selected = list(selected or [])
+        # Виджет создаётся в _build_content.
+        self._widget = None
+        # Флаг «использовать последний день» — заполняется в _validate.
         self._use_last_day = False
 
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=self,
+        super().__init__(
             parent=parent,
             title="Выберите числа месяца",
             bg_color=(70, 80, 90, 0.95),
             close_button=False,
             ok_cancel=True,
-            ok_callback=self._on_ok,
-            cancel_callback=self.reject,
             draggable=True,
-            return_content_layout=True,
-            default_width=420,
-            default_height=400,
+            close_on_click_outside=False,
+            modal=True,
+            center=True,
+            width=420,
+            height=400,
         )
 
-        content_layout.addWidget(LabelFactory.create_header_label(
-            self, "Выберите числа месяца"
-        ))
+    # ---------- Наполнение ----------
 
-        grid_widget = QWidget()
-        grid_layout = QGridLayout(grid_widget)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setSpacing(4)
+    def _build_content(self, layout) -> None:
+        """Добавляет PlannerDayPickerWidget в layout.
 
-        self._day_buttons = {}
-        for day in range(1, 32):
-            row = (day - 1) // 7
-            col = (day - 1) % 7
-            btn = ButtonFactory.create_button(
-                grid_widget, str(day), bg_color=(50, 60, 70, 0.95),
-                fixed_size=(36, 36), padding="0px", font_size=12,
-            )
-            btn.clicked.connect(
-                lambda checked=False, d=day: self._on_day_clicked(d)
-            )
-            grid_layout.addWidget(btn, row, col)
-            self._day_buttons[day] = btn
-        content_layout.addWidget(grid_widget)
-
-        self._preview_label = LabelFactory.create_label(
-            self, "", bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
-            alignment=Qt.AlignCenter, font_size=11, word_wrap=True,
+        Вход: layout — QVBoxLayout из BaseEditDialog.
+        Роль: создаёт виджет с предвыбранными числами, кладёт в layout.
+        """
+        self._widget = PlannerDayPickerWidget(
+            self, selected=self._initial_selected,
         )
-        content_layout.addWidget(self._preview_label)
+        layout.addWidget(self._widget)
 
-        self._refresh_grid()
+    # ---------- Валидация ----------
 
-    def _on_day_clicked(self, day: int) -> None:
-        """Переключает выбранность числа."""
-        if day in self._selected:
-            self._selected.remove(day)
-        else:
-            self._selected.append(day)
-        self._refresh_grid()
+    def _validate(self) -> bool:
+        """Спрашивает про 29/30/31, если они выбраны.
 
-    def _refresh_grid(self) -> None:
-        """Обновляет подсветку кнопок и превью."""
-        for day, btn in self._day_buttons.items():
-            if day in self._selected:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(80, 160, 220, 1.0);
-                        color: #ffffff;
-                        border: none;
-                        border-radius: 4px;
-                        font-size: 12px;
-                    }
-                """)
-            else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(50, 60, 70, 0.95);
-                        color: #d4d4d4;
-                        border: 1px solid #3a4556;
-                        border-radius: 4px;
-                        font-size: 12px;
-                    }
-                    QPushButton:hover {
-                        background-color: rgba(70, 80, 90, 0.95);
-                    }
-                """)
-        text = (", ".join(str(d) for d in sorted(self._selected))
-                if self._selected else "—")
-        self._preview_label.setText(f"Выбрано: {text}")
-
-    def _on_ok(self) -> None:
-        """При «ОК» — вопрос про 29/30/31."""
-        if any(d in (29, 30, 31) for d in self._selected):
+        Выход: всегда True — вопрос не блокирует закрытие.
+        Роль: если в выбранных есть 29, 30 или 31 — спрашивает
+              пользователя, использовать ли последний день месяца
+              в тех месяцах, где такого числа нет. Результат
+              сохраняется в self._use_last_day.
+        """
+        selected = self._widget.get_selected()
+        if any(d in (29, 30, 31) for d in selected):
             reply = MessageDialog.question(
                 self,
                 "В некоторых месяцах недостаточно дней. "
@@ -131,11 +90,13 @@ class PlannerDayPickerDialog(QDialog):
                 bg_color=(70, 80, 90),
             )
             self._use_last_day = (reply == QDialog.Accepted)
-        self.accept()
+        return True
+
+    # ---------- Публичный API ----------
 
     def get_selected(self) -> list:
         """Возвращает отсортированный список выбранных чисел."""
-        return sorted(self._selected)
+        return self._widget.get_selected()
 
     def get_use_last_day(self) -> bool:
         """Возвращает флаг «использовать последний день»."""

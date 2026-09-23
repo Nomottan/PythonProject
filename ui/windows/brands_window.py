@@ -25,11 +25,13 @@ from ui.factories.factories import (
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
 from ui.windows.message_dialog import NotificationDialog, MessageDialog
+# NEW: базовый диалог редактирования.
+from ui.base.base_edit_dialog import BaseEditDialog
 from models.models import Seller, Brand
 
 
 class BrandsWindow(QMainWindow):
-    """Окно со сеткой брендов.
+    """Окно с сеткой брендов.
 
     Назначение:
         Показать список брендов в виде сетки кнопок 4 в ряд.
@@ -52,7 +54,7 @@ class BrandsWindow(QMainWindow):
         self.main_window = parent
         self.bg_color = (30, 30, 30, 0.9)
 
-        # REPLACE: читаем бренды и продавцов через SellersBrandsService.
+        # Читаем бренды и продавцов через сервис.
         # Восстанавливаем связи Brand.sellers ↔ Seller.brands, чтобы
         # BrandEditDialog мог показывать связанные сущности.
         self.brands = parent.sellers_brands_service.get_brands_objects()
@@ -102,11 +104,10 @@ class BrandsWindow(QMainWindow):
     def _refresh_grid(self) -> None:
         """Перерисовывает сетку брендов.
 
-        Роль: очищает grid_layout и заново раскладывает кнопки
+        Роль: очищает grid_layout и заново раскладывает кнопки,
               отсортированные по имени. Вызывается при старте и после
               закрытия BrandEditDialog — чтобы отразить переименования.
         """
-        # Очистка.
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
@@ -140,7 +141,7 @@ class BrandsWindow(QMainWindow):
         Вход: brand — Brand, который редактируем.
         Роль: подтягивает связанных продавцов через сервис,
               открывает BrandEditDialog. После его закрытия —
-              перерисовывает сетку (имя могло измениться).
+              перерисовывает сетку.
         """
         brand.sellers.clear()
         brands_dict = {b.name: b for b in self.brands}
@@ -164,8 +165,7 @@ class BrandsWindow(QMainWindow):
         """Создаёт новый бренд и сразу открывает его редактор.
 
         Роль: добавляет Brand("Новый бренд") в self.brands, открывает
-              BrandEditDialog для заполнения. Пользователь может
-              переименовать или удалить бренд сразу.
+              BrandEditDialog для заполнения.
         """
         new_brand = Brand("Новый бренд")
         self.brands.append(new_brand)
@@ -197,11 +197,16 @@ class BrandsWindow(QMainWindow):
               (крестиком или кликом вне). Сериализует self.brands и
               пишет через SellersBrandsService.
         """
-        self.main_window.sellers_brands_service.set_brands_objects(self.brands)
-        self.close()
+        try:
+            self.main_window.sellers_brands_service.set_brands_objects(self.brands)
+        except Exception as e:
+            import sys
+            sys.stderr.write(f"[BrandsWindow] Ошибка сохранения: {e}\n")
+        finally:
+            self.close()
 
 
-class BrandEditDialog(QMainWindow):
+class BrandEditDialog(BaseEditDialog):
     """Диалог редактирования одного бренда.
 
     Назначение:
@@ -211,9 +216,15 @@ class BrandEditDialog(QMainWindow):
 
     Роль в программе:
         Открывается из BrandsWindow по клику на бренд или при
-        добавлении нового. Закрывается без кнопок «ОК»/«Отмена» —
-        изменения применяются по мере редактирования, финальное
-        сохранение — при закрытии.
+        добавлении нового. Наследник BaseEditDialog. ok_cancel=False —
+        вместо ОК/Отмена свои кнопки «Готово» и «Удалить бренд»
+        в _build_content.
+
+    Изменения относительно прежней версии:
+        Раньше был QMainWindow, сохранение жило в closeEvent.
+        Теперь QDialog: closeEvent не вызывается при Esc, поэтому
+        логика вынесена в _apply_changes() и вызывается и из
+        closeEvent, и из reject.
     """
 
     def __init__(self, parent=None, brand: Brand = None,
@@ -227,35 +238,42 @@ class BrandEditDialog(QMainWindow):
             main_window — MainWindow, чтобы сохранять изменения через
                           sellers_brands_service.
         """
-        super().__init__(parent)
         self.brand = brand
         self.sellers = sellers if sellers is not None else []
         self.main_window = main_window
-        self.bg_color = (40, 30, 50, 0.95)
-        # NEW: флаг «бренд удалён» — чтобы closeEvent не трогал уже
-        # удалённый объект (имя/ключи).
         self._deleted = False
-
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=self,
+        self.bg_color = (40, 30, 50, 0.95)
+        super().__init__(
             parent=parent,
             title=f"Редактирование бренда: {brand.name}",
             bg_color=self.bg_color,
             close_button=False,
+            ok_cancel=False,
             draggable=True,
             close_on_click_outside=True,
             modal=True,
             center=True,
-            return_content_layout=True,
-            default_width=550,
-            default_height=500,
+            on_close=self._apply_changes,
+            width=550,
+            height=500,
         )
 
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+    # ---------- Наполнение ----------
+
+    def _build_content(self, layout) -> None:
+        """Строит UI: имя, ключи, продавцы, кнопки.
+
+        Вход: layout — QVBoxLayout из BaseEditDialog.
+        Роль: заголовок «Ключи», список ключей, заголовок «Продавцы»,
+              список продавцов с кнопкой добавления, нижние кнопки
+              «Готово» и «Удалить бренд».
+        """
         # --- Поле имени ---
         self.name_edit = InputWidgetFactory.create_default_line_edit(
-            self, text=brand.name,
+            self, text=self.brand.name,
         )
-        content_layout.addWidget(self.name_edit)
+        layout.addWidget(self.name_edit)
 
         # --- Две колонки: ключи и продавцы ---
         cols_layout = QHBoxLayout()
@@ -270,7 +288,7 @@ class BrandEditDialog(QMainWindow):
             self, "Ключи:", alignment=Qt.AlignLeft,
         ))
         self.keys_list = EditableListWidget(
-            self, initial_items=brand.keys, add_text="+ добавить ключ",
+            self, initial_items=self.brand.keys, add_text="+ добавить ключ",
         )
         left_layout.addWidget(self.keys_list)
         cols_layout.addWidget(left_widget)
@@ -292,6 +310,7 @@ class BrandEditDialog(QMainWindow):
             widget_resizable=True, bg_color=self.bg_color,
         )
         right_layout.addWidget(scroll)
+
         add_seller_btn = ButtonFactory.create_button(
             self, "+ добавить продавца", (100, 80, 120, 0.7),
             padding="6px 12px",
@@ -300,11 +319,14 @@ class BrandEditDialog(QMainWindow):
         right_layout.addWidget(add_seller_btn)
         cols_layout.addWidget(right_widget)
 
-        content_layout.addLayout(cols_layout)
+        layout.addLayout(cols_layout)
 
-        # --- Нижние кнопки: «Готово» и «Удалить бренд» ---
+        # --- Нижние кнопки ---
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
+
+        # REPLACE: «Готово» вызывает self.close() — closeEvent применит
+        # изменения через _apply_changes.
         ok_btn = ButtonFactory.create_button(
             self, "Готово", (70, 120, 90, 0.8), fixed_size=(400, 30),
         )
@@ -316,7 +338,7 @@ class BrandEditDialog(QMainWindow):
         )
         delete_btn.clicked.connect(self._delete_brand)
         bottom_layout.addWidget(delete_btn)
-        content_layout.addLayout(bottom_layout)
+        layout.addLayout(bottom_layout)
 
         self._populate_sellers()
 
@@ -325,16 +347,14 @@ class BrandEditDialog(QMainWindow):
     def _populate_sellers(self) -> None:
         """Заполняет правую колонку связанными продавцами.
 
-        Роль: очищает layout, дедуплицирует brand.sellers по имени
-              (защита от повторного добавления), отрисовывает строки.
+        Роль: очищает layout, дедуплицирует brand.sellers по имени,
+              отрисовывает строки.
         """
         while self.sellers_layout.count():
             item = self.sellers_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        # Дедупликация по имени — на случай, если один seller
-        # попал в brand.sellers дважды.
         seen = set()
         unique = []
         for s in self.brand.sellers:
@@ -389,7 +409,6 @@ class BrandEditDialog(QMainWindow):
               бренда ещё нет. Показывает QInputDialog.getItem.
               При выборе — добавляет связь и строку.
         """
-        # Продавцы, у которых этого бренда ещё нет.
         available = [s for s in self.sellers if self.brand not in s.brands]
         if not available:
             NotificationDialog.notify(
@@ -414,8 +433,7 @@ class BrandEditDialog(QMainWindow):
         """Сохраняет список продавцов с обновлёнными связями.
 
         Роль: после add_seller / remove_seller модель Seller
-              изменилась (поле brands). Записываем через
-              sellers_brands_service — иначе изменения потеряются.
+              изменилась. Записываем через sellers_brands_service.
         """
         if self.main_window:
             self.main_window.sellers_brands_service.set_sellers_objects(
@@ -429,15 +447,16 @@ class BrandEditDialog(QMainWindow):
 
         Роль:
             1. Спрашивает подтверждение через MessageDialog.
-            2. Отвязывает бренд от всех связанных продавцов —
-               сохраняет sellers через сервис.
-            3. Убирает бренд из self.brands родителя (BrandsWindow).
-            4. Сохраняет бренды через сервис.
-            5. Перерисовывает сетку родителя и закрывает диалог.
+            2. Отвязывает бренд от всех связанных продавцов.
+            3. Сохраняет продавцов через сервис.
+            4. Убирает бренд из self.brands родителя (BrandsWindow).
+            5. Сохраняет бренды через сервис.
+            6. Помечает _deleted=True — closeEvent больше не тронет
+               удалённый объект.
 
-        Флаг self._deleted нужен, чтобы closeEvent не пытался
-        прочитать self.brand.name и self.keys_list — после удаления
-        это уже неактуально.
+        Флаг self._deleted нужен, потому что после удаления self.brand
+        формально ещё существует, но применять к нему изменения
+        (имя, ключи) бессмысленно.
         """
         reply = MessageDialog.question(
             self,
@@ -450,7 +469,6 @@ class BrandEditDialog(QMainWindow):
             return
 
         # 1. Отвязываем бренд от всех продавцов.
-        #    remove_seller сам обновляет обе стороны двусторонней связи.
         for seller in list(self.brand.sellers):
             self.brand.remove_seller(seller)
 
@@ -472,35 +490,21 @@ class BrandEditDialog(QMainWindow):
                     parent.brands,
                 )
 
-        # 5. Помечаем диалог как «удалён» — closeEvent больше не
-        #    должен трогать объект brand.
+        # 5. Помечаем и закрываемся.
         self._deleted = True
         self.close()
 
-    # ---------- Сбор и закрытие ----------
+    # ---------- Применение изменений ----------
 
-    def _collect_keys(self) -> None:
-        """Переносит ключи из EditableListWidget в модель Brand.
+    def _apply_changes(self) -> None:
+        """Переносит имя и ключи из полей в модель Brand.
 
-        Роль: вызывается перед закрытием — чтобы изменения ключей
-              не потерялись.
+        Роль: единая точка применения правок. Вызывается из closeEvent
+              и reject. Если бренд удалён — пропускаем (объект уже
+              неактуален).
         """
+        if self._deleted:
+            return
+        self.brand.name = self.name_edit.text().strip()
         self.brand.keys = self.keys_list.get_items()
 
-    def closeEvent(self, event) -> None:
-        """Применяет правки и закрывает диалог.
-
-        Вход: event — событие закрытия.
-        Роль: если бренд уже удалён — просто закрываемся. Иначе
-              сохраняем введённое имя и ключи в модель. Сохранение
-              в config.json произойдёт при закрытии BrandsWindow
-              (через save_and_close) — здесь модель уже обновлена.
-        """
-        # Если бренд удалён — не трогаем уже отвязанный объект.
-        if self._deleted:
-            super().closeEvent(event)
-            return
-
-        self.brand.name = self.name_edit.text().strip()
-        self._collect_keys()
-        super().closeEvent(event)

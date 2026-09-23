@@ -249,6 +249,14 @@ class MainWindow(QMainWindow):
             self.sellers_window.refresh_ui()
 
     def open_brands_window(self):
+        if self.brands_window is None or not self.brands_window.isVisible():
+            self.brands_window = BrandsWindow(self)
+            WindowFactory.show_child_window(self, self.brands_window)
+        else:
+            self.brands_window.raise_()
+            self.brands_window.activateWindow()
+
+    def open_compare_window(self):
         if self.compare_window is None or not self.compare_window.isVisible():
             self.compare_window = CompareWindow(
                 self, mappings_storage=self.compare_mappings_storage,
@@ -257,14 +265,6 @@ class MainWindow(QMainWindow):
         else:
             self.brands_window.raise_()
             self.brands_window.activateWindow()
-
-    def open_compare_window(self):
-        if self.compare_window is None or not self.compare_window.isVisible():
-            self.compare_window = CompareWindow(self)
-            WindowFactory.show_child_window(self, self.compare_window)
-        else:
-            self.compare_window.raise_()
-            self.compare_window.activateWindow()
 
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
