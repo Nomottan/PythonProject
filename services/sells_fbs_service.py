@@ -8,8 +8,9 @@ from utils.file_helper import FileHelper
 from utils.price_utils import PriceUtils
 from utils.kiz_utils import KizUtils
 from utils.sales_file_generator import SalesFileGenerator
+from utils.fbs_buferprices import FbsBufferPrices
 from services.kiz_validator import ValidationResult, KizValidator
-import json, random
+import random
 
 class PreparationService:
     """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
@@ -315,13 +316,11 @@ class ExportKizService:
                 except Exception as e:
                     ctx.log(f"Ошибка обработки файла {mp_path.name}: {e}")
                     continue
-        prices_json_path = ctx.processing_dir / "prices_from_mp.json"
         try:
-            with open(prices_json_path, "w", encoding="utf-8") as f:
-                json.dump(prices_by_seller, f, ensure_ascii=False, indent=2)
-            ctx.log(f"  Цены сохранены в {prices_json_path.name}")
+            FbsBufferPrices(ctx.processing_dir).save(prices_by_seller)
+            ctx.log(f"  Цены сохранены в {FbsBufferPrices.FILENAME}")
         except (IOError, OSError) as e:
-            ctx.log(f"  ⚠️ Не удалось сохранить {prices_json_path.name}: {e}")
+            ctx.log(f"  ⚠️ Не удалось сохранить {FbsBufferPrices.FILENAME}: {e}")
         # ------------------------------------------------------------
         # 3. Сохранение текстовых файлов — ВНЕ батча.
         # .txt-файлы не связаны с used_kiz.json, поэтому их запись
@@ -506,26 +505,23 @@ class FinalizePricesService:
         self.kiz_validator = kiz_validator
 
     def _load_prices_from_json(self, ctx) -> dict:
-        """Читает prices_from_mp.json из рабочей папки.
+        """Читает цены из буфера FbsBufferPrices.
 
-        Вход: ctx — TaskContext с work_folder.
+        Вход: ctx — TaskContext с processing_dir.
         Выход: dict {seller_name: {storage_kiz: price}} или {} если
                файл не найден / битый.
 
-        Роль: переносчик цен между ExportKizService.export и
-              FinalizePricesService.finalize. Единая точка обработки
-              ошибок чтения.
+        Роль: тонкая обёртка над FbsBufferPrices.load() — добавляет
+              только логирование в ctx. Ошибки чтения FbsBufferPrices
+              глотает и возвращает {}; мы сообщаем об этом в лог.
         """
-        path = ctx.processing_dir / "prices_from_mp.json"
-        if not path.is_file():
-            ctx.log("  ⚠️ prices_from_mp.json не найден – цены не будут применены")
-            return {}
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError, OSError) as e:
-            ctx.log(f"  ⚠️ Ошибка чтения prices_from_mp.json: {e}")
-            return {}
+        data = FbsBufferPrices(ctx.processing_dir).load()
+        if not data:
+            ctx.log(
+                f"  ⚠️ {FbsBufferPrices.FILENAME} не найден или пуст – "
+                f"цены не будут применены"
+            )
+        return data
 
     def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
         if saved_prices is None:

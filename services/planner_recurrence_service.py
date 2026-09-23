@@ -7,7 +7,7 @@ from typing import Optional
 
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from services.planner_service import PlannerService
-from utils.recurrence_utils import RecurrenceCalculator
+from utils.planner_utils import RecurrenceCalculator
 
 
 class PlannerRecurrenceService:

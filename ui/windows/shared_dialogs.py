@@ -99,11 +99,21 @@ class AveragePriceInputDialog(QDialog):
 class PricesEditWindow(QDialog):
     """Окно для просмотра и редактирования сохранённых цен продавцов."""
 
-    def __init__(self, parent, config):
+    def __init__(self, parent, sellers_brands_service, main_config):
+        """Конструктор.
+
+        Вход:
+            parent — родитель.
+            sellers_brands_service — SellersBrandsService: список продавцов.
+            main_config — MainConfig: ключ "seller_prices".
+
+        Роль: разделили два домена — модели продавцов и общие настройки.
+        """
         super().__init__(parent)
-        self.config = config
-        self.sellers = config.get_sellers_objects()
-        self.saved_prices = config.get("seller_prices", {})
+        self._sellers_brands = sellers_brands_service
+        self._main_config = main_config
+        self.sellers = sellers_brands_service.get_sellers_objects()
+        self.saved_prices = main_config.get("seller_prices", {})
         self.bg_color = (40, 30, 50, 0.95)
 
         content_layout = ExtendedWindowFactory.setup_window(
@@ -136,7 +146,7 @@ class PricesEditWindow(QDialog):
 
             name_label = LabelFactory.create_label(
                 self, seller.name,
-                bg_color=(0,0,0,0),
+                bg_color=(0, 0, 0, 0),
                 text_color="#d4d4d4",
                 alignment=Qt.AlignLeft | Qt.AlignVCenter
             )
@@ -161,5 +171,5 @@ class PricesEditWindow(QDialog):
             text = edit.text().strip()
             if text and ValidationNumb.is_number(text):
                 updated_prices[seller_name] = ValidationNumb.to_int(text)
-        self.config.set("seller_prices", updated_prices)
+        self._main_config.set("seller_prices", updated_prices)
         self.close()

@@ -20,7 +20,7 @@ class ChzMPWindow(QMainWindow):
         super().__init__(parent)
 
         # Переменные состояния
-        self.target_dir = parent.config.get("target_dir", None)
+        self.target_dir = parent.main_config.get("target_dir", None)
         self.fbs_files = []
         self.mp_files = []
         self.fbs_signatures = []
@@ -198,7 +198,7 @@ class ChzMPWindow(QMainWindow):
     # ============================================================
     def _on_target_dir_changed(self, new_path):
         self.target_dir = new_path
-        self.parent().config.set("target_dir", new_path)
+        self.parent().main_config.set("target_dir", new_path)
         self.status_display.clear()
         self.status_display.append("Целевая папка обновлена.")
         self.btn_export_kiz.setEnabled(False)
@@ -207,12 +207,12 @@ class ChzMPWindow(QMainWindow):
         self.btn_finalize_prices.setEnabled(False)
 
     def select_fbs_files(self):
-        start = self.parent().config.get("last_fbs_dir", None)
+        start = self.parent().main_config.get("last_fbs_dir", None)
         files = FileDialogFactory.open_files_dialog(self, "Выберите файлы ЧЗ МП", start)
         if not files:
             return
         first_file = Path(files[0])
-        self.parent().config.set("last_fbs_dir", str(first_file.parent))
+        self.parent().main_config.set("last_fbs_dir", str(first_file.parent))
 
         for f in files:
             try:
@@ -238,11 +238,11 @@ class ChzMPWindow(QMainWindow):
             self.list_fbs.addItem(Path(f).name)
 
     def select_report_files(self):
-        start = self.parent().config.get("last_mp_dir", None)
+        start = self.parent().main_config.get("last_mp_dir", None)
         files = FileDialogFactory.open_files_dialog(self, "Выберите файлы отчётов МП", start)
         if files:
             first_file = Path(files[0])
-            self.parent().config.set("last_mp_dir", str(first_file.parent))
+            self.parent().main_config.set("last_mp_dir", str(first_file.parent))
             self.mp_files = files
             self.list_reports.clear()
             for f in files:
@@ -281,7 +281,7 @@ class ChzMPWindow(QMainWindow):
             self.status_display.append("Как насчёт добавить хоть один отчётик?")
             return
 
-        sellers = self.parent().config.get_sellers_objects()
+        sellers = self.parent().sellers_brands_service.get_sellers_objects()
         self.status_display.clear()
         self.status_display.append("Идёт подготовка...")
 
@@ -319,7 +319,7 @@ class ChzMPWindow(QMainWindow):
             self.status_display.append("Сначала выберите целевую папку")
             return
 
-        sellers = self.parent().config.get_sellers_objects()
+        sellers = self.parent().sellers_brands_service.get_sellers_objects()
         self.status_display.clear()
         self.status_display.append("Выгрузка КИЗов для обработки...")
 
@@ -355,7 +355,7 @@ class ChzMPWindow(QMainWindow):
             self.status_display.append("Сначала выберите целевую папку")
             return
 
-        sellers = self.parent().config.get_sellers_objects()
+        sellers = self.parent().sellers_brands_service.get_sellers_objects()
         self.status_display.clear()
         self.status_display.append("Фильтрация предитоговых файлов...")
 
@@ -391,7 +391,7 @@ class ChzMPWindow(QMainWindow):
             self.status_display.append("Сначала выберите целевую папку")
             return
 
-        sellers = self.parent().config.get_sellers_objects()
+        sellers = self.parent().sellers_brands_service.get_sellers_objects()
         self.status_display.clear()
         self.status_display.append("Формирование файлов продаж...")
 
@@ -427,8 +427,8 @@ class ChzMPWindow(QMainWindow):
             self.status_display.append("Сначала выберите целевую папку")
             return
 
-        sellers = self.parent().config.get_sellers_objects()
-        saved_prices = self.parent().config.get("seller_prices", {})
+        sellers = self.parent().sellers_brands_service.get_sellers_objects()
+        saved_prices = self.parent().main_config.get("seller_prices", {})
         self.status_display.clear()
         self.status_display.append("Внесение цен и финализация...")
 
@@ -464,8 +464,11 @@ class ChzMPWindow(QMainWindow):
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
-        config = self.parent().config
-        window = PricesEditWindow(self, config)
+        window = PricesEditWindow(
+            self,
+            sellers_brands_service=self.parent().sellers_brands_service,
+            main_config=self.parent().main_config,
+        )
         window.exec()
 
     def on_accumulate_sales(self):

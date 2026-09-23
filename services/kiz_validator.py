@@ -2,7 +2,7 @@ from enum import Enum
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-from utils.kiz_storage import KizStorage
+from storage.fbs_kiz_storage import KizStorage
 
 class ValidationResult(Enum):
     """Результат валидации КИЗа для продажи.

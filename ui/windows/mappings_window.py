@@ -13,11 +13,19 @@ from ui.windows.message_dialog import MessageDialog
 class BrandMappingsWindow(QDialog):
     """Окно просмотра и редактирования сохранённых сопоставлений (бренды)."""
 
-    def __init__(self, parent, service, config, mappings=None):
+    def __init__(self, parent, service, sellers_brands_service, mappings=None):
+        """Конструктор.
+
+        Вход:
+            parent — CompareWindow.
+            service — CompareService.
+            sellers_brands_service — SellersBrandsService для чтения брендов.
+            mappings — dict сопоставлений. Если None — грузим из service.
+        """
         super().__init__(parent)
         self.parent_window = parent
         self.service = service
-        self.config = config
+        self.sellers_brands_service = sellers_brands_service
         self.mappings = mappings if mappings is not None else self.service.load_mappings()
         self.brands_list = self._get_brands_from_config()
         self.bg_color = (40, 30, 100, 0.95)
@@ -66,7 +74,8 @@ class BrandMappingsWindow(QDialog):
         self._populate_list()
 
     def _get_brands_from_config(self):
-        return self.config.get_brands_objects()
+        return self.sellers_brands_service.get_brands_objects()
+
 
     def _populate_list(self):
         """Перестраивает список брендов на основе текущих данных."""

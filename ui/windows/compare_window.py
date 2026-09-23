@@ -8,6 +8,7 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, ListWidgetFactory,
     LayoutFactory, WindowFactory, FileDialogFactory
 )
+from ui.windows.mappings_window import BrandMappingsWindow
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.path_selector import PathSelector
 from pathlib import Path
@@ -16,26 +17,35 @@ from services.compare_service import CompareService
 class CompareWindow(QMainWindow):
     """Окно сравнения листа поставки с фактическими поставками."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, mappings_storage=None):
+        """Конструктор.
+
+        Вход:
+            parent — MainWindow.
+            mappings_storage — CompareMappingsStorage. Передаётся из
+                               MainWindow, чтобы CompareService не
+                               создавал своё хранилище через PathManager.
+        """
         super().__init__(parent)
         self.main_window = parent
 
         # Переменные состояния
-        self.target_dir = parent.config.get("target_dir", None)
+        self.target_dir = parent.main_config.get("target_dir", None)
         self.supply_file = None          # путь к файлу листа поставки
         self.supply_files = []           # список путей к файлам поставок
 
-        # Сервис сравнения (передаём лог-функцию и множество брендов)
-        brands = parent.config.get_brands_objects()
+        brands = parent.sellers_brands_service.get_brands_objects()
         brands_set = set()
         for b in brands:
             brands_set.add(b.name.lower())
             for key in b.keys:
                 brands_set.add(key.lower())
 
+        # передаём хранилище сопоставлений.
         self.service = CompareService(
             log_callback=self.log,
-            brands_set=brands_set
+            brands_set=brands_set,
+            mappings_storage=mappings_storage,
         )
 
         # Настройка окна через WindowFactory
@@ -228,7 +238,7 @@ class CompareWindow(QMainWindow):
 
     def _on_target_dir_changed(self, new_path):
         self.target_dir = new_path
-        self.parent().config.set("target_dir", new_path)
+        self.parent().main_config.set("target_dir", new_path)
         self.log("Целевая папка обновлена: " + new_path)
 
     def log(self, msg):
@@ -239,7 +249,8 @@ class CompareWindow(QMainWindow):
     # ============================================================
 
     def select_supply_file(self):
-        start_dir = self.parent().config.get("last_compare_supply_dir", None) or self.target_dir or str(Path.home())
+        start_dir = self.parent().main_config.get("last_compare_supply_dir", None) or self.target_dir or str(
+            Path.home())
         file_path = FileDialogFactory.open_file_dialog(
             self, "Выберите Excel-файл листа поставки",
             default_dir=start_dir,
@@ -248,11 +259,12 @@ class CompareWindow(QMainWindow):
         if file_path:
             self.supply_file = file_path
             self.file_label.setText(Path(file_path).name)
-            self.parent().config.set("last_compare_supply_dir", str(Path(file_path).parent))
+            self.parent().main_config.set("last_compare_supply_dir", str(Path(file_path).parent))
             self.log(f"Выбран файл поставки: {Path(file_path).name}")
 
     def select_supply_files(self):
-        start_dir = self.parent().config.get("last_compare_supplies_dir", None) or self.target_dir or str(Path.home())
+        start_dir = self.parent().main_config.get("last_compare_supplies_dir", None) or self.target_dir or str(
+            Path.home())
         files = FileDialogFactory.open_files_dialog(
             self, "Выберите файлы с поставками",
             default_dir=start_dir,
@@ -265,8 +277,8 @@ class CompareWindow(QMainWindow):
                     self.list_supply.addItem(Path(f).name)
             if files:
                 first_file = Path(files[0])
-                self.parent().config.set("last_compare_supplies_dir", str(first_file.parent))
-            self.log(f"Добавлено {len(files)} файлов поставок. Всего: {len(self.supply_files)}")
+                self.parent().main_config.set("last_compare_supplies_dir", str(first_file.parent))
+        self.log(f"Добавлено {len(files)} файлов поставок. Всего: {len(self.supply_files)}")
 
     # ============================================================
     # ОБРАБОТЧИКИ КНОПОК ДЕЙСТВИЙ
@@ -387,11 +399,10 @@ class CompareWindow(QMainWindow):
 
     def _open_mappings_window(self):
         """Открывает окно редактирования сохранённых сопоставлений."""
-        from ui.windows.mappings_window import BrandMappingsWindow
         window = BrandMappingsWindow(
             parent=self,
             service=self.service,
-            config=self.main_window.config
+            sellers_brands_service=self.main_window.sellers_brands_service,
         )
         window.exec()
 

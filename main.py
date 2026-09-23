@@ -2,25 +2,29 @@ import sys
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
                                QVBoxLayout, QHBoxLayout)
 from PySide6.QtCore import QTimer, Qt
-
 from ui.windows import (
     ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
     StringListDialog, PlannerWindow
 )
-from config_manager import ConfigManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
+from ui.widgets.planner_quick_view import PlannerQuickView
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
-from utils.kiz_storage import KizStorage
 from utils.log_system import LogManager
 from services.kiz_validator import KizValidator
 from services.planner_service import PlannerService
 from services.planner_archive_service import PlannerArchiveService
 from services.planner_recurrence_service import PlannerRecurrenceService
-from storage.planner_task_storage import PlannerTaskStorage
-from storage.planner_archive_storage import PlannerArchiveStorage
-from ui.widgets.planner_quick_view import PlannerQuickView
 from services.plannerviewer_service import PlannerQuickViewController
+from services.sellers_brands_service import SellersBrandsService
+from storage import (
+    KizStorage,
+    MainConfig,
+    CompareMappingsStorage,
+    PlannerTaskStorage,
+    PlannerArchiveStorage,
+)
+
 
 class MainWindow(QMainWindow):
     # ============================================================
@@ -38,9 +42,22 @@ class MainWindow(QMainWindow):
             }
         """)
 
+        # --- Пути и логирование ---
         self.paths = PathManager()
         self.log_manager = LogManager()
-        self.config = ConfigManager(self.paths)
+
+        # --- Конфиг + сервис продавцов/брендов (REPLACE ConfigManager) ---
+        # MainConfig — хранилище config.json, SellersBrandsService —
+        # высокоуровневые операции над Seller/Brand.
+        self.main_config = MainConfig(self.paths, self.log_manager)
+        self.sellers_brands_service = SellersBrandsService(self.main_config)
+
+        # --- Хранилище сопоставлений (для CompareWindow) ---
+        self.compare_mappings_storage = CompareMappingsStorage(
+            self.paths, self.log_manager,
+        )
+
+        # --- Теги активности дочерних окон ---
         self.active_child = None
         self.chz_mp_window = None
         self.sellers_window = None
@@ -48,33 +65,35 @@ class MainWindow(QMainWindow):
         self.returns_window = None
         self.compare_window = None
         self.planner_window = None
+
+        # --- KizStorage (used_kiz.json) ---
         self.kiz_storage = KizStorage(
             self.paths.get_data_file("used_kiz.json"),
             log_manager=self.log_manager,
         )
-        kiz_validator = KizValidator(self.kiz_storage)
-        self.kiz_validator = kiz_validator
+        self.kiz_validator = KizValidator(self.kiz_storage)
+
+        # --- Planner storages ---
         self.planner_storage = PlannerTaskStorage(
             self.paths.get_data_file("planner_tasks.json"),
             log_manager=self.log_manager,
         )
-        # NEW: storage и сервис архива задач.
+        # --- Archive storages ---
         self.planner_archive_storage = PlannerArchiveStorage(
             self.paths.get_data_file("planner_archive.json"),
             log_manager=self.log_manager,
         )
+        # --- Вызов сервиса планировщика ---
         self.planner_service = PlannerService(
             self.planner_storage,
             archive_storage=self.planner_archive_storage,
             log_manager=self.log_manager,
         )
+        # --- Вызов сервиса архива планировщика ---
         self.planner_archive_service = PlannerArchiveService(
             self.planner_archive_storage,
             self.planner_storage,
             log_manager=self.log_manager,
-            # NEW: передаём PlannerService, чтобы archive мог эмитить
-            # tasks_changed после restore_task — мини-планировщик
-            # в MainWindow обновится автоматически.
             planner_service=self.planner_service,
         )
         # NEW: сервис генерации экземпляров регулярных задач.
@@ -82,7 +101,8 @@ class MainWindow(QMainWindow):
             self.planner_service,
             log_manager=self.log_manager,
         )
-        # NEW: порядок важен.
+
+        # --- Стартовый порядок обслуживания планировщика---
         # 1. Архивируем «вчерашние» экземпляры — генерация увидит
         #    актуальное состояние storage.
         # 2. Архивируем прошедшие события — они не должны участвовать
@@ -94,17 +114,20 @@ class MainWindow(QMainWindow):
         self.planner_service.activate_due_events()
         self.planner_recurrence_service.generate_due_instances()
 
-        # NEW: таймер генерации — раз в 30 минут.
+        # --- Таймер регулярных задач и событий: раз в 30 секунд ---
         self.recurrence_timer = QTimer(self)
-        self.recurrence_timer.setInterval(1*30*1000)  #(30 * 60 * 1000)
+        self.recurrence_timer.setInterval(1 * 30 * 1000)
         self.recurrence_timer.timeout.connect(self._on_recurrence_timer)
         self.recurrence_timer.start()
+
+        # --- Мини-планировщик ---
         self.planner_quick_view = PlannerQuickView(self)
         self.planner_quick_controller = PlannerQuickViewController(
             self.planner_service,
             self.planner_quick_view,
         )
-        # ---- Таймер для обновления кнопки даты/времени ----
+
+        # --- Таймер кнопки даты/времени ---
         self.timer = QTimer()
         self.timer.timeout.connect(self.on_timer)
         self.timer.start(100)
@@ -186,7 +209,7 @@ class MainWindow(QMainWindow):
     # 4. МЕТОДЫ УПРАВЛЕНИЯ СОСТОЯНИЕМ
     # ============================================================
     def update_buttons_state(self):
-        sellers = self.config.get_sellers_objects()
+        sellers = self.sellers_brands_service.get_sellers_objects()
         has_sellers = len(sellers) > 0
         self.btn_chz_mp.setEnabled(has_sellers)
         if not has_sellers:
@@ -226,12 +249,22 @@ class MainWindow(QMainWindow):
             self.sellers_window.refresh_ui()
 
     def open_brands_window(self):
-        if self.brands_window is None or not self.brands_window.isVisible():
-            self.brands_window = BrandsWindow(self)
-            WindowFactory.show_child_window(self, self.brands_window)
+        if self.compare_window is None or not self.compare_window.isVisible():
+            self.compare_window = CompareWindow(
+                self, mappings_storage=self.compare_mappings_storage,
+            )
+            WindowFactory.show_child_window(self, self.compare_window)
         else:
             self.brands_window.raise_()
             self.brands_window.activateWindow()
+
+    def open_compare_window(self):
+        if self.compare_window is None or not self.compare_window.isVisible():
+            self.compare_window = CompareWindow(self)
+            WindowFactory.show_child_window(self, self.compare_window)
+        else:
+            self.compare_window.raise_()
+            self.compare_window.activateWindow()
 
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
@@ -252,14 +285,6 @@ class MainWindow(QMainWindow):
         else:
             self.planner_window.raise_()
             self.planner_window.activateWindow()
-
-    def open_compare_window(self):
-        if self.compare_window is None or not self.compare_window.isVisible():
-            self.compare_window = CompareWindow(self)
-            WindowFactory.show_child_window(self, self.compare_window)
-        else:
-            self.compare_window.raise_()
-            self.compare_window.activateWindow()
 
     def resizeEvent(self, event):
         for child in (self.chz_mp_window, self.sellers_window,

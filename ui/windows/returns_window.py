@@ -21,7 +21,7 @@ class ReturnsWindow(QMainWindow):
         super().__init__(parent)
         # NEW: сохраняем log_manager — пригодится в Фазе 3 (сервисы Return).
         self.log_manager = log_manager
-        self.target_dir = parent.config.get("target_dir", None)
+        self.target_dir = parent.main_config.get("target_dir", None)
         self.source_file = None
 
         main_layout = WindowFactory.setup_child_window(
@@ -135,7 +135,7 @@ class ReturnsWindow(QMainWindow):
     # ---------- МЕТОДЫ ----------
     def _on_target_dir_changed(self, new_path):
         self.target_dir = new_path
-        self.parent().config.set("target_dir", new_path)
+        self.parent().main_config.set("target_dir", new_path)
         self.status_label.setText("Целевая папка обновлена.")
 
     def _ui_log(self, message: str, level: str = "INFO") -> None:
@@ -143,7 +143,7 @@ class ReturnsWindow(QMainWindow):
         self.status_label.status_update.emit(message)
 
     def select_source_file(self):
-        start_dir = self.parent().config.get("last_returns_dir", None) or self.target_dir or str(Path.home())
+        start_dir = self.parent().main_config.get("last_returns_dir", None) or self.target_dir or str(Path.home())
         file_path = FileDialogFactory.open_file_dialog(
             self, "Выберите Excel-файл с возвратами",
             default_dir=start_dir,
@@ -152,7 +152,7 @@ class ReturnsWindow(QMainWindow):
         if file_path:
             self.source_file = file_path
             self.file_label.setText(Path(file_path).name)
-            self.parent().config.set("last_returns_dir", str(Path(file_path).parent))
+            self.parent().main_config.set("last_returns_dir", str(Path(file_path).parent))
             self.status_label.setText("Файл выбран. Нажмите «Подготовка».")
 
     def on_prepare(self):
@@ -163,7 +163,7 @@ class ReturnsWindow(QMainWindow):
             self.status_label.setText("Сначала выберите целевую папку.")
             return
 
-        sellers = self.parent().config.get_sellers_with_brands()
+        sellers = self.parent().sellers_brands_service.get_sellers_with_brands()
         self.status_label.setText("Идёт подготовка...")
 
         service = ReturnsPreparationService(self.log_manager)
@@ -210,7 +210,7 @@ class ReturnsWindow(QMainWindow):
             self.status_label.setText("Сначала выберите целевую папку.")
             return
 
-        sellers = self.parent().config.get_sellers_with_brands()
+        sellers = self.parent().sellers_brands_service.get_sellers_with_brands()
         self.status_label.setText("Подготовка передач КИЗов...")
         service = KizTransferService(self.log_manager)
 

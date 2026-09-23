@@ -6,15 +6,15 @@ from ui.factories.factories import (
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 from models.models import Seller, Brand
+from services.sellers_brands_service import SellersBrandsService
 
 class SellersWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = parent
-
-        brands = parent.config.get_brands_objects()
+        brands = parent.sellers_brands_service.get_brands_objects()
         brands_dict = {b.name: b for b in brands}
-        self.sellers = parent.config.get_sellers_objects(brands_dict)
+        self.sellers = parent.sellers_brands_service.get_sellers_objects(brands_dict)
         self.bg_color=(10, 40, 50, 0.9)
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
@@ -133,7 +133,7 @@ class SellersWindow(QMainWindow):
         dialog.show()
 
     def _edit_brands(self, seller):
-        brands = self.main_window.config.get_brands_objects()
+        brands = self.main_window.sellers_brands_service.get_brands_objects()
         dialog = BrandChecklistDialog(self, seller, brands)
         dialog.show()
 
@@ -155,7 +155,7 @@ class SellersWindow(QMainWindow):
         )
 
     def save_and_close(self):
-        self.main_window.config.set_sellers_objects(self.sellers)
+        self.main_window.sellers_brands_service.set_sellers_objects(self.sellers)
         self.main_window.update_buttons_state()
         self.close()
 

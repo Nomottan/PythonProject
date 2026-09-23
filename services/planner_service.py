@@ -1,10 +1,9 @@
 from PySide6.QtCore import QObject, Signal
 from datetime import date, datetime, timedelta
 from typing import Optional
-from utils.task_id_generator import TaskIdGenerator
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from storage.planner_task_storage import PlannerTaskStorage
-from utils.recurrence_utils import RecurrenceCalculator
+from utils.planner_utils import RecurrenceCalculator, TaskIdGenerator
 
 
 

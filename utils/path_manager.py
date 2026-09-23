@@ -40,7 +40,7 @@ class PathManager:
 
     @property
     def mappings_file(self) -> Path:
-        """Путь к файлу маппингов mappings.json (находится внутри Data)."""
+        """Путь к файлу маппингов mappings.json (находится внутри data)."""
         return self._data_dir / "mappings.json"
 
     # ---------- Универсальный метод для получения любого файла внутри Data ----------

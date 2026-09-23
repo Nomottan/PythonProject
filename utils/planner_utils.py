@@ -1,13 +1,95 @@
 """
-Утилиты для работы с правилами повторения регулярных задач.
+Утилиты планировщика: поиск, генерация id, расчёт дат.
 
-Содержит класс RecurrenceCalculator — чистый вычислитель дат.
-Не знает про storage и UI; оперирует только полями PlannerTask.
+Модуль собирает три вещи, которые раньше жили отдельно:
+    TaskFinder          — поиск задачи по id в списке.
+    TaskIdGenerator     — генерация уникального task_id.
+    RecurrenceCalculator — расчёт дат генерации экземпляров.
+
+Зачем объединять:
+    Все три — утилиты планировщика, используются вместе в
+    PlannerService и PlannerRecurrenceService. Разнеся их по
+    разным файлам, мы плодим циклические импорты и неудобные
+    пути. Один модуль — одна точка входа.
+
+Использование:
+    from utils.planner_utils import (
+        TaskFinder, TaskIdGenerator, RecurrenceCalculator,
+    )
 """
 
 import calendar
 from datetime import date, datetime, timedelta
 from typing import Optional
+
+
+class TaskFinder:
+    """Поиск задач по идентификатору.
+
+    Роль: единая точка поиска. Используется сервисами планировщика
+          вместо ручных циклов for.
+    """
+
+    @staticmethod
+    def find_by_id(tasks: list, task_id: int):
+        """Возвращает задачу с указанным task_id или None.
+
+        Вход:
+            tasks — список PlannerTask.
+            task_id — идентификатор для поиска.
+
+        Выход: PlannerTask или None.
+        Роль: линейный поиск. Списки в планировщике маленькие
+              (десятки записей), оптимизация не нужна.
+        """
+        for task in tasks:
+            if task.task_id == task_id:
+                return task
+        return None
+
+
+class TaskIdGenerator:
+    """Генератор уникальных task_id.
+
+    Формат: YYYYMMDDNNN, где YYYYMMDD — сегодняшняя дата,
+            NNN — порядковый номер в пределах дня (001, 002, …).
+
+    Роль: id должен быть уникальным в пределах хранилища. Дневной
+          счётчик удобен для сортировки (новые сверху) и читаем
+          глазами.
+    """
+
+    @staticmethod
+    def generate(storage) -> int:
+        """Генерирует новый task_id на основе текущего хранилища.
+
+        Вход: storage — PlannerTaskStorage с методом get_all().
+        Выход: int — новый уникальный идентификатор.
+
+        Роль: берём сегодняшнюю дату как префикс, считаем сколько
+              задач с этим префиксом уже есть, добавляем 1.
+              Если в хранилище появятся задачи из будущего
+              (например, руками), они не помешают — мы считаем
+              только свои.
+        """
+        today_prefix = datetime.now().strftime("%Y%m%d")
+        existing = storage.get_all()
+
+        # Считаем максимальный счётчик среди задач с сегодняшним
+        # префиксом. Формат: YYYYMMDDNNN → 8 цифр префикс, 3 суффикс.
+        max_suffix = 0
+        for task in existing:
+            task_id_str = str(task.task_id)
+            if len(task_id_str) == 11 and task_id_str.startswith(today_prefix):
+                try:
+                    suffix = int(task_id_str[8:])
+                    if suffix > max_suffix:
+                        max_suffix = suffix
+                except ValueError:
+                    continue
+
+        new_suffix = max_suffix + 1
+        return int(f"{today_prefix}{new_suffix:03d}")
 
 
 class RecurrenceCalculator:

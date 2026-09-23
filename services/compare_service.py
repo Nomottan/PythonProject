@@ -1,12 +1,11 @@
-import re
+import re, openpyxl
 from pathlib import Path
 from datetime import date
-import openpyxl
-import json
-from utils.text_utils import TextUtils
 from typing import List, Tuple, Optional, Set, Dict, Any
+from utils.text_utils import TextUtils
 from utils.excel_helper import ExcelHelper
 from models.models import SupplyItem, Candidate
+from storage.compare_mappings_storage import CompareMappingsStorage
 
 class DataLoader:
     """Загрузка данных из подготовленных Excel-файлов."""
@@ -664,10 +663,30 @@ class ReportGenerator:
                 self.log(f"Список лишних в поставках сохранён: {unused_path.name}")
 
 class CompareService:
-    def __init__(self, log_callback=None, brands_set: Set[str] = None):
+    def __init__(self, log_callback=None, brands_set: Set[str] = None,
+                 mappings_storage: CompareMappingsStorage = None):   # NEW
+        """Конструктор.
+
+        Вход:
+            log_callback — колбэк для логов.
+            brands_set — набор ключей брендов для разбора названий.
+            mappings_storage — хранилище mappings.json. Если None —
+                               создаётся через PathManager (fallback
+                               для обратной совместимости, пока main.py
+                               не пересобран).
+
+        Роль: инициализирует сервисы сверки и (при необходимости)
+              создаёт хранилище сопоставлений.
+        """
         self.log_callback = log_callback or print
         self.brands_set = brands_set or set()
         self.brands_from_config = []
+        # NEW: хранилище сопоставлений. По умолчанию — своё,
+        # через PathManager; main.py в будущем передаст готовое.
+        if mappings_storage is None:
+            from utils.path_manager import PathManager
+            mappings_storage = CompareMappingsStorage(PathManager())
+        self._mappings_storage = mappings_storage
         self.data_loader = DataLoader(brands_set=self.brands_set, log_callback=self.log_callback)
         self.stage1 = Stage1(log_callback=self.log_callback)
         self.report_generator = ReportGenerator(log_callback=self.log_callback)
@@ -684,11 +703,6 @@ class CompareService:
 
     def log(self, msg: str) -> None:
         self.log_callback(msg)
-
-    def _get_mappings_path(self) -> Path:
-        """Возвращает путь к файлу mappings.json в папке приложения."""
-        # Предполагаем, что compare_service.py находится в корневой папке проекта
-        return Path(__file__).parent.parent / "data" / "mappings.json"
 
     def _normalize_brand_names(self, mappings, brands_from_config):
         if not self.brands_from_config:
@@ -715,54 +729,24 @@ class CompareService:
                 normalized[canonical] = articles.copy()
         return normalized
 
-    def _convert_legacy_mappings(self, data):
-        """
-        Конвертирует старый формат маппингов (список) в новый (словарь брендов).
-        """
-        if isinstance(data, list):
-            converted = {}
-            for entry in data:
-                brand = entry.get("brand", "")
-                article = entry.get("article", "")
-                shk = entry.get("shk", "")
-                supply_name = entry.get("supply_name", "")
-                candidate_name = entry.get("candidate_name", "")
-                if brand not in converted:
-                    converted[brand] = {}
-                converted[brand][article] = {
-                    "shk": shk,
-                    "supply_name": supply_name,
-                    "candidate_name": candidate_name
-                }
-            return converted
-        return data
-
-
     def load_mappings(self) -> Dict[str, Dict[str, Dict]]:
-        mappings_path = self._get_mappings_path()
-        if not mappings_path.exists():
+        """Загружает сохранённые сопоставления.
+
+        Выход: dict {brand: {article: {...}}}.
+
+        Роль: делегирует в CompareMappingsStorage. Миграция старого
+              формата (список → словарь) уже выполнена в _on_load
+              хранилища при инициализации. Здесь остаётся только
+              нормализация имён брендов по brands_from_config —
+              это бизнес-логика сравнения, не часть хранения.
+        """
+        data = self._mappings_storage.get_all()
+        if not data:
             return {}
-        try:
-            with open(mappings_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                # Проверяем формат и конвертируем при необходимости
-                for brand, articles in data.items():
-                    if not isinstance(articles, dict):
-                        data = self._convert_legacy_mappings(data)
-                        break
-                # Нормализуем имена брендов, если есть brands_from_config
-                if hasattr(self, 'brands_from_config') and self.brands_from_config:
-                    if self.brands_from_config:
-                        data = self._normalize_brand_names(data, self.brands_from_config)
-                return data
-            else:
-                data = self._convert_legacy_mappings(data)
-                if self.brands_from_config:
-                    data = self._normalize_brand_names(data, self.brands_from_config)
-                return data
-        except (json.JSONDecodeError, IOError):
-            return {}
+        # Нормализуем имена брендов, если есть brands_from_config.
+        if self.brands_from_config:
+            data = self._normalize_brand_names(data, self.brands_from_config)
+        return data
 
     def _collect_mappings(self) -> dict:
         """
@@ -793,9 +777,14 @@ class CompareService:
         return mappings
 
     def save_mappings(self, mappings=None) -> None:
-        """
-        Сохраняет сопоставления в файл. Если mappings не переданы, собирает из текущих данных.
-        Файл полностью перезаписывается переданным словарём.
+        """Сохраняет сопоставления.
+
+        Вход: mappings — dict {brand: {article: {...}}}. Если None,
+              собирается из текущих данных сервиса.
+
+        Роль: делегирует запись в CompareMappingsStorage. Нормализация
+              имён брендов делается здесь — storage про бренды ничего
+              не знает. Файл полностью перезаписывается.
         """
         if mappings is None:
             mappings = self._collect_mappings()
@@ -803,17 +792,12 @@ class CompareService:
                 self.log("Нет сопоставлений для сохранения")
                 return
 
-        # Нормализуем имена брендов, если есть brands_from_config
+        # Нормализуем имена брендов, если есть brands_from_config.
         if self.brands_from_config:
             mappings = self._normalize_brand_names(mappings, self.brands_from_config)
 
-        mappings_path = self._get_mappings_path()
-        try:
-            with open(mappings_path, "w", encoding="utf-8") as f:
-                json.dump(mappings, f, ensure_ascii=False, indent=4)
-            self.log(f"Сохранено брендов: {len(mappings)}")
-        except IOError as e:
-            self.log(f"Ошибка сохранения сопоставлений: {e}")
+        self._mappings_storage.replace_all(mappings)
+        self.log(f"Сохранено брендов: {len(mappings)}")
 
     def _apply_mappings(self, items: List[SupplyItem], candidates: List[Candidate]) -> Tuple[
         List[SupplyItem], List[Candidate]]:

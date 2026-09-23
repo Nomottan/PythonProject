@@ -3,7 +3,7 @@ from typing import Optional
 from models.planner_task import PlannerTask, TaskStatus
 from storage.planner_task_storage import PlannerTaskStorage
 from storage.planner_archive_storage import PlannerArchiveStorage
-from utils.task_id_generator import TaskIdGenerator
+from utils.planner_utils import TaskIdGenerator
 
 
 class PlannerArchiveService:

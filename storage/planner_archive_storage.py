@@ -1,129 +1,47 @@
-import json
-import os
-import sys
-import tempfile
-from pathlib import Path
+"""
+Хранилище архива задач планировщика в JSON-файле.
+
+Переработка на ListJsonStorage: как PlannerTaskStorage, но
+для planner_archive.json. Отдельный source в логах, чтобы
+записи архива и активных задач не смешивались.
+"""
 
 from models.planner_task import PlannerTask
+from storage.base_json_storage import ListJsonStorage
 
 
-class PlannerArchiveStorage:
-    """Хранилище архива задач планировщика в JSON-файле.
+class PlannerArchiveStorage(ListJsonStorage):
+    """Хранилище архива задач планировщика.
 
-    Формат файла: список словарей (результат PlannerTask.to_dict()).
-    Не потокобезопасен — вне текущего скоупа.
-
-    Роль в программе:
-        Инфраструктурный слой между PlannerArchiveService и файлом
-        planner_archive.json в Data/. Не содержит бизнес-логики.
+    Роль: хранит список PlannerTask в planner_archive.json.
+          Отличие от PlannerTaskStorage — только путь и source
+          в логах. Поведение полностью наследуется.
     """
 
-    def __init__(self, file_path: Path, log_manager=None):
+    def __init__(self, file_path, log_manager=None) -> None:
         """Конструктор.
 
         Вход:
-            file_path — путь к JSON-файлу.
-            log_manager — LogManager для логирования. Если None — только stderr.
-
-        Роль: сохраняет путь, создаёт logger, загружает существующие задачи.
+            file_path — путь к planner_archive.json.
+            log_manager — LogManager для логирования.
         """
-        self._file_path = Path(file_path)
-        self._logger = None
-        if log_manager is not None:
-            # source явно указывает на архивный storage — удобно при чтении логов.
-            self._logger = log_manager.create_logger(
-                source="PlannerArchiveStorage.planner_archive_storage",
-                work_folder=None,
-            )
-        self._tasks: list[PlannerTask] = []
-        self.load()
+        super().__init__(
+            file_path, log_manager,
+            source="PlannerArchiveStorage.planner_archive_storage",
+        )
 
-    def load(self) -> None:
-        """Загружает задачи из файла.
+    def _default_data(self) -> list:
+        """Пустой список, если файла нет или он битый."""
+        return []
 
-        Если файла нет — self._tasks = [].
-        Если файл битый — логирует warning, self._tasks = [].
-        """
-        if not self._file_path.exists():
-            # Ленивое создание файла: при первом сохранении.
-            self._tasks = []
-            return
-        try:
-            with open(self._file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self._tasks = [PlannerTask.from_dict(item) for item in data]
-        except (json.JSONDecodeError, KeyError, IOError, OSError) as e:
-            self._log_warning(f"Ошибка загрузки {self._file_path.name}: {e}")
-            self._tasks = []
+    def _deserialize(self, raw: dict) -> PlannerTask:
+        """Восстанавливает PlannerTask из dict."""
+        return PlannerTask.from_dict(raw)
 
-    def save(self) -> None:
-        """Атомарно сохраняет список задач в JSON.
+    def _serialize(self, item: PlannerTask) -> dict:
+        """Превращает PlannerTask в dict для JSON."""
+        return item.to_dict()
 
-        Запись во временный файл + os.replace. Ошибки пробрасываются.
-        """
-        self._file_path.parent.mkdir(parents=True, exist_ok=True)
-        data = [task.to_dict() for task in self._tasks]
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w", dir=self._file_path.parent, delete=False,
-                suffix=".tmp", encoding="utf-8"
-            ) as f:
-                tmp_path = f.name
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, self._file_path)
-        except Exception as e:
-            self._log_error(f"Ошибка сохранения {self._file_path.name}: {e}")
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-            raise
-
-    def get_all(self) -> list[PlannerTask]:
-        """Возвращает копию списка задач."""
-        return list(self._tasks)
-
-    def add(self, task: PlannerTask) -> None:
-        """Добавляет задачу и сохраняет на диск.
-
-        Вход: task — PlannerTask.
-        Роль: append + save. Ошибка сохранения пробрасывается.
-        """
-        self._tasks.append(task)
-        self.save()
-
-    def remove(self, task_id: int) -> bool:
-        """Удаляет задачу по task_id и сохраняет файл.
-
-        Вход: task_id — идентификатор задачи.
-        Выход: True — задача была найдена и удалена; False — не найдена.
-
-        Роль: удаление из planner_archive.json (навсегда).
-        """
-        original_len = len(self._tasks)
-        self._tasks = [t for t in self._tasks if t.task_id != task_id]
-        if len(self._tasks) == original_len:
-            self._log_warning(
-                f"Удаление: задача с id={task_id} не найдена в {self._file_path.name}"
-            )
-            return False
-        self.save()
-        return True
-
-    # ---------- Приватные методы ----------
-
-    def _log_warning(self, message: str) -> None:
-        """Пишет WARNING в logger или stderr."""
-        if self._logger is not None:
-            self._logger.warning(message)
-        else:
-            sys.stderr.write(f"[PlannerArchiveStorage] WARNING: {message}\n")
-
-    def _log_error(self, message: str) -> None:
-        """Пишет ERROR в logger или stderr."""
-        if self._logger is not None:
-            self._logger.error(message)
-        else:
-            sys.stderr.write(f"[PlannerArchiveStorage] ERROR: {message}\n")
+    def _get_id(self, item: PlannerTask) -> int:
+        """Возвращает task_id элемента — для remove."""
+        return item.task_id
