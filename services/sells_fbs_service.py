@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QDialog
 from datetime import datetime
 from pathlib import Path
+from decimal import Decimal
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
@@ -500,7 +501,17 @@ class GenerateSalesService:
         ctx.log("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
 
 class FinalizePricesService:
-    """Сервис внесения цен из отчётов МП и финализации итоговых файлов."""
+    """Сервис внесения цен и финализации итоговых файлов.
+
+    Роль: для каждого продавца создаёт ИТОГ в корне рабочей папки
+          (копия предитогового файла из «Обработки») и заполняет
+          цены в три этапа:
+            1. Цены из отчёта МП — точное совпадение по КИЗу.
+            2. Распределение числовых цен внутри кластеров GTIN.
+            3. Генерация по средней для оставшихся нечисловых C.
+
+    Исходник в «Обработке» не изменяется — вся работа идёт с копией.
+    """
     def __init__(self, kiz_validator):
         self.kiz_validator = kiz_validator
 
@@ -523,7 +534,213 @@ class FinalizePricesService:
             )
         return data
 
+    @staticmethod
+    def _is_numeric(value) -> bool:
+        """Проверяет, что значение — число (int, float, Decimal), но не bool.
+
+        Вход: value — значение ячейки.
+        Выход: True, если число. False для None, str, bool.
+
+        Роль: используется в этапах 2 и 3 и в _is_processed.
+              bool исключён намеренно — в Excel True/False могут
+              случайно попасть в C, их нельзя принимать за 1/0.
+        """
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, (int, float, Decimal))
+
+    def _is_processed(self, path, ctx) -> bool:
+        """Проверяет, все ли непустые C в файле числовые.
+
+        Вход:
+            path — путь к файлу ИТОГ.
+            ctx — TaskContext для логирования.
+
+        Выход: True, если все непустые C числовые; иначе False.
+
+        Роль: если ИТОГ уже создан и обработан ранее, повторно
+              его не перезаписываем. Строки без КИЗа и строки
+              заголовка пропускаем — они не участвуют.
+        """
+        wb = ExcelHelper.open_workbook_with_ctx(
+            path, ctx, description="проверка итога",
+            read_only=False, data_only=True,
+        )
+        if wb is None:
+            return False
+        try:
+            sheet = wb.active
+            if sheet.max_row < 2:
+                return False
+            for row_idx in range(2, sheet.max_row + 1):
+                kiz_cell = sheet.cell(row=row_idx, column=2)
+                kiz = (
+                    str(kiz_cell.value).strip()
+                    if kiz_cell.value is not None else ""
+                )
+                if not kiz or kiz == "КИЗ":
+                    continue
+                price_cell = sheet.cell(row=row_idx, column=3)
+                if not self._is_numeric(price_cell.value):
+                    return False
+            return True
+        finally:
+            wb.close()
+
+    # ---------- Три этапа установки цен ----------
+
+    def _apply_stage1(self, sheet, price_map) -> int:
+        """Этап 1: цены из отчёта по КИЗу.
+
+        Вход:
+            sheet — открытый лист.
+            price_map — dict {kiz: price} из отчёта МП.
+
+        Выход: количество установленных цен.
+
+        Роль: точное совпадение КИЗа. Если КИЗа нет в price_map —
+              C не трогаем (там криптохвост от BestMark).
+        """
+        count = 0
+        for row_idx in range(2, sheet.max_row + 1):
+            kiz_cell = sheet.cell(row=row_idx, column=2)
+            kiz = (
+                str(kiz_cell.value).strip()
+                if kiz_cell.value is not None else ""
+            )
+            if not kiz or kiz == "КИЗ":
+                continue
+            if kiz in price_map:
+                sheet.cell(row=row_idx, column=3).value = price_map[kiz]
+                count += 1
+        return count
+
+    def _apply_stage2(self, sheet, ctx) -> dict:
+        """Этап 2: распределение цен по кластерам GTIN.
+
+        Вход:
+            sheet — открытый лист.
+            ctx — TaskContext для логирования.
+
+        Выход: dict со статистикой:
+            total_clusters      — всего кластеров GTIN;
+            processed           — кластеров, где распределяли;
+            skipped_no_numeric  — кластеров без числовых цен;
+            skipped_all_numeric — кластеров, где всё уже числовое;
+            filled_rows         — сколько строк заполнено.
+
+        Роль: в каждом кластере GTIN берём все числовые C и
+              распределяем их random.choice по строкам с нечисловым C.
+              Если в кластере числовых нет — пропускаем (этап 3
+              разберётся позже). Если все числовые — уже готово.
+              Строки без GTIN в кластеры не попадают.
+        """
+        # Шаг 1: строим кластеры {gtin: [row_indexes]}.
+        gtin_clusters = {}
+        for row_idx in range(2, sheet.max_row + 1):
+            kiz_cell = sheet.cell(row=row_idx, column=2)
+            kiz = (
+                str(kiz_cell.value).strip()
+                if kiz_cell.value is not None else ""
+            )
+            if not kiz or kiz == "КИЗ":
+                continue
+            gtin_cell = sheet.cell(row=row_idx, column=8)  # H
+            gtin = (
+                str(gtin_cell.value).strip()
+                if gtin_cell.value is not None else ""
+            )
+            if not gtin:
+                continue
+            gtin_clusters.setdefault(gtin, []).append(row_idx)
+
+        # Шаг 2: обрабатываем кластеры.
+        stats = {
+            "total_clusters": len(gtin_clusters),
+            "processed": 0,
+            "skipped_no_numeric": 0,
+            "skipped_all_numeric": 0,
+            "filled_rows": 0,
+        }
+        for gtin, row_indexes in gtin_clusters.items():
+            numeric_values = []
+            non_numeric_rows = []
+            for row_idx in row_indexes:
+                price_cell = sheet.cell(row=row_idx, column=3)
+                if self._is_numeric(price_cell.value):
+                    numeric_values.append(price_cell.value)
+                else:
+                    non_numeric_rows.append(row_idx)
+
+            # Нет числовых — распределять нечего, ждём этапа 3.
+            if not numeric_values:
+                stats["skipped_no_numeric"] += 1
+                continue
+            # Всё уже числовое — кластер готов.
+            if not non_numeric_rows:
+                stats["skipped_all_numeric"] += 1
+                continue
+
+            # Заполняем нечисловые строки случайной числовой ценой.
+            for row_idx in non_numeric_rows:
+                sheet.cell(row=row_idx, column=3).value = random.choice(
+                    numeric_values
+                )
+                stats["filled_rows"] += 1
+            stats["processed"] += 1
+
+        return stats
+
+    def _apply_stage3(self, sheet, average_price) -> int:
+        """Этап 3: добиваем остатки по средней.
+
+        Вход:
+            sheet — открытый лист.
+            average_price — средняя для генерации.
+
+        Выход: количество сгенерированных цен.
+
+        Роль: проходим по всем строкам. Если C не числовое —
+              генерируем цену по средней. Сюда попадают строки
+              без GTIN и кластеры, где числовых не было.
+        """
+        count = 0
+        for row_idx in range(2, sheet.max_row + 1):
+            kiz_cell = sheet.cell(row=row_idx, column=2)
+            kiz = (
+                str(kiz_cell.value).strip()
+                if kiz_cell.value is not None else ""
+            )
+            if not kiz or kiz == "КИЗ":
+                continue
+            price_cell = sheet.cell(row=row_idx, column=3)
+            if not self._is_numeric(price_cell.value):
+                price_cell.value = PriceUtils.generate_varied_price(
+                    average_price
+                )
+                count += 1
+        return count
+
     def finalize(self, target_dir, sellers, saved_prices=None, log_callback=None):
+        """Финализация цен по продавцам.
+
+        Вход:
+            target_dir — корень рабочей папки.
+            sellers — список Seller.
+            saved_prices — dict {seller_name: средняя}, может быть пуст.
+            log_callback — колбэк для логов.
+
+        Выход: обновлённый saved_prices.
+
+        Роль: для каждого продавца:
+            1. Определяем среднюю (из отчёта / сохранённую / диалог).
+            2. Если ИТОГ уже есть и обработан — пропускаем.
+            3. Если исходника в «Обработке» нет — пропускаем.
+            4. Копируем исходник в корень как ИТОГ.
+            5. Открываем ИТОГ и применяем три этапа.
+            6. Сохраняем ИТОГ. Исходник не трогаем.
+        """
+
         if saved_prices is None:
             saved_prices = {}
 
@@ -531,37 +748,43 @@ class FinalizePricesService:
                           subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
         ctx.log(f"Рабочая папка: {ctx.work_folder}")
-        # REPLACE: лог KizValidator — в Логи/.
         self.kiz_validator.set_log_path(ctx.logs_dir)
         self.kiz_validator.load()
 
-        # NEW: читаем цены из JSON один раз — до цикла по продавцам.
+        # читаем цены из JSON один раз — до цикла по продавцам.
         all_prices = self._load_prices_from_json(ctx)
 
         for seller in sellers:
-            # NEW: price_map берётся из JSON, а не из повторного открытия отчёта.
             price_map = all_prices.get(seller.name, {})
             prices_list = list(price_map.values())
             average_price = None
-            # NEW: средняя рассчитывается сразу, если есть цены.
+            # средняя рассчитывается сразу, если есть цены.
             if prices_list:
-                average_price = PriceUtils.calculate_average(saved_prices.get(seller.name), prices_list)
+                average_price = PriceUtils.calculate_average(
+                    saved_prices.get(seller.name), prices_list
+                )
                 ctx.log(
-                    f"\nПродавец '{seller.name}': загружено {len(prices_list)} цен из отчёта, средняя: {average_price}")
+                    f"\nПродавец '{seller.name}': загружено "
+                    f"{len(prices_list)} цен из отчёта, средняя: "
+                    f"{average_price}"
+                )
             else:
-                ctx.log(f"\nПродавец '{seller.name}': в отчётах нет цен – средняя будет определена ниже")
-            # ---- 2. Если средняя цена не определена, запрашиваем у пользователя ----
+                ctx.log(f"\nПродавец '{seller.name}': в отчётах нет цен – "
+                    f"средняя будет определена ниже")
+
+            # ---- 1. Средняя цена ----
             if average_price is None:
-                # NEW: сначала — сохранённая цена текущего продавца.
+                # Сначала — сохранённая цена текущего продавца.
                 if saved_prices.get(seller.name):
                     average_price = saved_prices[seller.name]
                     ctx.log(f"  Использую сохранённую цену: {average_price}")
-                # NEW: затем — случайная средняя с другого продавца.
+                # Затем — случайная средняя с другого продавца.
                 elif saved_prices:
                     average_price = random.choice(list(saved_prices.values()))
-                    ctx.log(f"  Использую случайную среднюю с другого продавца: {average_price}")
+                    ctx.log(f"  Использую случайную среднюю с другого "
+                        f"продавца: {average_price}")
+                # Диалог ввода — крайний случай.
                 else:
-                    # NEW: и только если совсем нет цен — диалог ввода.
                     from ui.windows.shared_dialogs import AveragePriceInputDialog
                     dialog = AveragePriceInputDialog(self, seller.name)
                     if dialog.exec_() == QDialog.Accepted:
@@ -572,14 +795,36 @@ class FinalizePricesService:
                         ctx.log(f"  ⚠️ Пользователь отменил ввод для продавца '{seller.name}' – пропускаем")
                         continue
 
+            # ---- 2. Проверка существующего ИТОГа ----
+            new_name = ctx.format_filename(f"ИТОГ {seller.name} {{date}}")
+            new_path = ctx.work_folder / new_name
+
+            if new_path.is_file() and self._is_processed(new_path, ctx):
+                ctx.log(
+                    f"\nИТОГ {seller.name} уже создан и обработан "
+                    f"ранее – пропускаем."
+                )
+                saved_prices[seller.name] = average_price
+                continue
+
             # ---- 3. Обработка предитогового файла ----
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
                 ctx.log(f"Файл для продавца '{seller.name}' не найден – пропущен")
                 continue
 
-            ctx.log(f"\nОбработка файла: {file_path.name}")
-            wb = ExcelHelper.open_workbook_with_ctx(file_path, ctx, description="предитоговый файл", read_only=False, data_only=True)
+            # ---- 4. Копирование в корень как ИТОГ ----
+            FileHelper.copy_file_with_log(
+                file_path, new_path, ctx,
+                description="итоговый файл", overwrite=True
+            )
+            ctx.log(f"\nФайл скопирован в корень: {new_path.name}")
+
+            # ---- 5. Открытие ИТОГа и применение трёх этапов ----
+            wb = ExcelHelper.open_workbook_with_ctx(
+                new_path, ctx, description="итоговый файл",
+                read_only=False, data_only=True,
+            )
             if wb is None:
                 continue
 
@@ -589,52 +834,46 @@ class FinalizePricesService:
                     ctx.log("  Файл пуст (только заголовки) – пропущен")
                     continue
 
-                from_report_count = 0
-                generated_count = 0
+                # Этап 1 — цены из отчёта.
+                stage1_count = self._apply_stage1(sheet, price_map)
+                ctx.log(f"  Установлено цен из отчёта: {stage1_count}")
 
-                for row_idx in range(2, sheet.max_row + 1):
-                    kiz_cell = sheet.cell(row=row_idx, column=2)
-                    price_cell = sheet.cell(row=row_idx, column=3)
-
-                    kiz = str(kiz_cell.value).strip() if kiz_cell.value is not None else ""
-                    if not kiz or kiz == "КИЗ":
-                        continue
-
-                    price_cell.value = None
-
-                    if kiz in price_map:
-                        price_cell.value = price_map[kiz]
-                        from_report_count += 1
-                    else:
-                        price_cell.value = PriceUtils.generate_varied_price(average_price)
-                        generated_count += 1
-
-                ctx.log(f"  Установлено цен из отчёта: {from_report_count}")
-                ctx.log(f"  Сгенерировано цен по средней: {generated_count}")
-
-                # ---- Сохранение и переименование ----
-                wb.save(file_path)
-                wb.close()
-
-                # REPLACE: копируем предитоговый файл в корень с новым именем.
-                # Исходник остаётся в «Обработке». Раньше был rename —
-                # предитоговый файл исчезал из исходного места.
-                new_name = ctx.format_filename(f"ИТОГ {seller.name} {{date}}")
-                new_path = ctx.work_folder / new_name
-                FileHelper.copy_file_with_log(
-                    file_path, new_path, ctx,
-                    description="итоговый файл", overwrite=True
+                # Этап 2 — кластеры GTIN.
+                stage2_stats = self._apply_stage2(sheet, ctx)
+                ctx.log(
+                    f"  Кластеров GTIN: {stage2_stats['total_clusters']}"
                 )
-                ctx.log(f"  Итоговый файл сохранён: {new_path.name}")
+                ctx.log(
+                    f"  Обработано кластеров: {stage2_stats['processed']}"
+                )
+                ctx.log(
+                    f"  Пропущено (нет числовых): "
+                    f"{stage2_stats['skipped_no_numeric']}"
+                )
+                ctx.log(
+                    f"  Пропущено (все числовые): "
+                    f"{stage2_stats['skipped_all_numeric']}"
+                    )
+                ctx.log(
+                    f"  Установлено цен по кластерам GTIN: "
+                    f"{stage2_stats['filled_rows']}"
+                )
 
-                # Сохраняем среднюю цену
+                # Этап 3 — добиваем остатки по средней.
+                stage3_count = self._apply_stage3(sheet, average_price)
+                ctx.log(
+                    f"  Сгенерировано цен по средней: {stage3_count}"
+                )
+
+                # ---- 6. Сохранение ИТОГа ----
+                wb.save(new_path)
+                ctx.log(f"  Итоговый файл сохранён: {new_path.name}")
                 saved_prices[seller.name] = average_price
 
             except Exception as e:
                 ctx.log(f"  Ошибка обработки файла: {e}")
             finally:
-                if wb:
-                    wb.close()
+                wb.close()
 
         ctx.log("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
         return saved_prices
