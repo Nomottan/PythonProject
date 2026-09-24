@@ -1,11 +1,14 @@
 # window_factories.py
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QApplication, QMainWindow, QDialog
-from ui.factories.factories import ButtonFactory
+from ui.factories.factories import ButtonFactory, WindowFactory
 
-class ExtendedWindowFactory:
+class ExtendedWindowFactory(WindowFactory):
     """
     Универсальная фабрика для настройки окон (QMainWindow или QDialog).
+    Наследует WindowFactory — базовая фабрика дочерних окон.
+    Расширяет её настройкой каркаса: заголовок, кнопки ОК/Отмена,
+    перетаскивание, закрытие по клику вне.
     Поддерживает:
     - кнопку закрытия (close_button)
     - кнопку добавления (add_button)

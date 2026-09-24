@@ -4,19 +4,15 @@
 UI-каркас без данных. Наследник _BasePlannerListWindow.
 """
 
-from ui.windows.planner_base_window import _BasePlannerListWindow
-
-
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from PySide6.QtCore import Qt
-from ui.factories.factories import (
-    LabelFactory, ButtonFactory, LayoutFactory, InputWidgetFactory,
-    DeadlineFieldsWidget,
-    )
+from ui.factories.factories import  ButtonFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
-from ui.factories.window_factories import ExtendedWindowFactory
+from ui.windows.planner_task_dialogs import (
+    DeadlineEditDialog, PlannerRecurrenceEditDialog,
+)
 
 class PlannerArchiveWindow(_BasePlannerListWindow):
     """Окно архива задач планировщика.
@@ -134,12 +130,12 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
             dialog = DeadlineEditDialog(self, task)
             if dialog.exec() != QDialog.Accepted:
                 return
-            deadline_datetime = dialog.get_deadline_data()
+            deadline_datetime = dialog.get_result()["deadline_datetime"]
         elif task.is_generator():
             dialog = PlannerRecurrenceEditDialog(self, task)
             if dialog.exec() != QDialog.Accepted:
                 return
-            recurrence_data = dialog.get_recurrence_data()
+            recurrence_data = dialog.get_result()["recurrence_data"]
 
         self.service.restore_task(
             task.task_id,
@@ -178,154 +174,3 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         if parent is not None and hasattr(parent, "_reload_tasks"):
             parent._reload_tasks()
         super().closeEvent(event)
-
-class DeadlineEditDialog(QDialog):
-    """Диалог редактирования дедлайна.
-
-    Роль: открывается из PlannerArchiveWindow при восстановлении
-          дедлайн-задачи. Позволяет задать новый дедлайн; приоритет
-          остаётся DEADLINE без возможности смены.
-    """
-
-    def __init__(self, parent=None, task=None, planner_service=None):
-        """Конструктор.
-
-        Вход:
-            parent — родитель (PlannerArchiveWindow).
-            task — PlannerTask для восстановления.
-            planner_service — не используется сейчас, оставлено на будущее.
-        """
-        super().__init__(parent)
-        self._task = task
-        self._service = planner_service
-        bg_color = (70, 80, 90, 0.95)
-
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=self,
-            parent=parent,
-            title="Восстановление дедлайна",
-            bg_color=bg_color,
-            close_button=False,
-            ok_cancel=True,
-            ok_callback=self.accept,
-            cancel_callback=self.reject,
-            draggable=True,
-            return_content_layout=True,
-            default_width=420,
-            default_height=280,
-        )
-
-        # Название задачи (read-only).
-        title_lbl = LabelFactory.create_label(
-            self,
-            text=f"Задача: {task.title}",
-            bg_color=(0, 0, 0, 0),
-            text_color="#ffffff",
-            alignment=Qt.AlignCenter,
-            word_wrap=True,
-            font_size=13,
-            font_weight="bold",
-        )
-        content_layout.addWidget(title_lbl)
-
-        # Строка «Тип дедлайна»: label + combo.
-        type_row = QWidget()
-        type_row_layout = QHBoxLayout(type_row)
-        type_row_layout.setContentsMargins(0, 0, 0, 0)
-        type_row_layout.setSpacing(6)
-        type_row_layout.addWidget(LabelFactory.create_label(
-            type_row, "Тип:",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4", font_size=11,
-        ))
-        # Combo типа — темнее фона диалога (70, 80, 90), чтобы визуально
-        # читалось как поле ввода, а не сливалось с фоном.
-        self.deadline_type_combo = InputWidgetFactory.create_combo_box(
-            type_row,
-            items=["До даты включительно", "Срок"],
-            current_index=0,
-            bg_color=(50, 60, 70, 0.95),
-            border="1px solid #3a4556",
-        )
-        type_row_layout.addWidget(self.deadline_type_combo, 1)
-        content_layout.addWidget(type_row)
-
-        # Поля ввода — та же сине-серая палитра, что у combo.
-        self._fields = DeadlineFieldsWidget(
-            self,
-            initial=task.deadline_datetime,
-            mode="inclusive",
-            field_bg=(50, 60, 70, 0.95),
-            field_border="1px solid #3a4556",
-        )
-        content_layout.addWidget(self._fields)
-
-        # Триггер.
-        self.deadline_type_combo.currentTextChanged.connect(
-            lambda text: self._fields.set_mode(
-                "inclusive" if text == "До даты включительно" else "duration"
-            )
-        )
-
-    def get_deadline_data(self):
-        """Возвращает новую строку дедлайна или None."""
-        mode = ("inclusive"
-                if self.deadline_type_combo.currentText() == "До даты включительно"
-                else "duration")
-        return self._fields.get_deadline_data(mode)
-
-class PlannerRecurrenceEditDialog(QDialog):
-    """Диалог редактирования правила повторения.
-
-    Роль: открывается из PlannerArchiveWindow при восстановлении
-          регулярной задачи. Позволяет задать новое правило.
-    """
-
-    def __init__(self, parent=None, task: PlannerTask = None):
-        super().__init__(parent)
-        self._task = task
-        bg_color = (70, 80, 90, 0.95)
-
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=self,
-            parent=parent,
-            title="Восстановление регулярной задачи",
-            bg_color=bg_color,
-            close_button=False,
-            ok_cancel=True,
-            ok_callback=self.accept,
-            cancel_callback=self.reject,
-            draggable=True,
-            return_content_layout=True,
-            default_width=420,
-            default_height=300,
-        )
-
-        content_layout.addWidget(LabelFactory.create_label(
-            self, f"Задача: {task.title}",
-            bg_color=(0, 0, 0, 0), text_color="#ffffff",
-            alignment=Qt.AlignCenter, font_size=13, font_weight="bold",
-            word_wrap=True,
-        ))
-
-        # Поля правила — из фабрики, с предзаполнением из задачи.
-        initial = None
-        if task and task.recurrence_type:
-            initial = {
-                "type": task.recurrence_type,
-                "value": task.recurrence_value,
-                "weekdays": task.recurrence_weekdays,
-                "monthdays": task.recurrence_monthdays,
-                "use_last_day": task.recurrence_use_last_day,
-            }
-        self._fields = ButtonFactory.create_recurrence_fields(
-            self, initial,
-            field_bg=(50, 60, 70, 0.95),
-            field_border="1px solid #3a4556",
-            button_border="1px solid #6a7a8a",
-        )
-        content_layout.addWidget(self._fields.rule_combo)
-        content_layout.addWidget(self._fields)
-
-    def get_recurrence_data(self):
-        """Возвращает правило повторения."""
-        return self._fields.get_recurrence_data()

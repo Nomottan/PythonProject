@@ -10,18 +10,10 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from typing import Optional
-from ui.factories.factories import (
-    WindowFactory, ButtonFactory, LabelFactory,
-    InputWidgetFactory, LayoutFactory, ListWidgetFactory,
-    DeadlineFieldsWidget,
-    )
-from ui.factories.window_factories import ExtendedWindowFactory
-from services.planner_service import PlannerService
+from ui.factories.factories import WindowFactory, ButtonFactory
+from ui.windows.planner_task_dialogs import NewTaskDialog
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
-from ui.windows.message_dialog import MessageDialog, NotificationDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
-from datetime import datetime
 
 class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
@@ -134,27 +126,25 @@ class PlannerWindow(_BasePlannerListWindow):
         dialog = NewTaskDialog(self, self.service)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
-            priority = self.service.get_priority_by_display_name(
-                dialog.get_priority()
-            )
-            # NEW: определение типа задачи по приоритету.
+            result = dialog.get_result()
+            priority = result["priority"]
             if priority == TaskPriority.RECURRING:
                 task_type = TaskType.RECURRING
             elif priority == TaskPriority.DEADLINE:
                 task_type = TaskType.DEADLINE
-            elif priority == TaskPriority.EVENT:  # NEW
+            elif priority == TaskPriority.EVENT:
                 task_type = TaskType.EVENT
             else:
                 task_type = TaskType.REGULAR
 
             self.service.create_task(
-                title=dialog.get_title(),
-                description=dialog.get_description(),
+                title=result["title"],
+                description=result["description"],
                 priority=priority,
-                deadline_datetime=dialog.get_deadline_data(),
+                deadline_datetime=result["deadline_datetime"],
                 task_type=task_type,
-                recurrence_data=dialog.get_recurrence_data(),
-                event_date=dialog.get_event_data(),  # NEW
+                recurrence_data=result["recurrence_data"],
+                event_date=result["event_date"],
             )
             self._reload_tasks()
 
@@ -232,14 +222,14 @@ class PlannerWindow(_BasePlannerListWindow):
         dialog = NewTaskDialog(self, self.service, task=task)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
-            priority = self.service.get_priority_by_display_name(
-                dialog.get_priority()
-            )
+            result = dialog.get_result()
             self.service.update_task(
                 task_id=task.task_id,
-                title=dialog.get_title(),
-                description=dialog.get_description(),
-                priority=priority,
+                title=result["title"],
+                description=result["description"],
+                priority=result["priority"],
+                deadline_datetime=result["deadline_datetime"],
+                recurrence_data=result["recurrence_data"],
             )
             self._reload_tasks()
 
@@ -261,296 +251,3 @@ class PlannerWindow(_BasePlannerListWindow):
         if self.parent() and hasattr(self.parent(), "active_child"):
             self.parent().active_child = None
         super().closeEvent(event)
-
-
-class NewTaskDialog(QDialog):
-    """Диалог-заглушка «Новая задача».
-
-    Назначение:
-        Показывает форму с полями: «Задача» (QLineEdit), «Приоритет»
-        (QComboBox) и условно появляющимся «Подробное описание» (QTextEdit).
-        Ничего не сохраняет — OK/Отмена через accept/reject.
-
-    Роль в программе:
-        Открывается из PlannerWindow по кнопке «Новая задача» через
-        setWindowModality(Qt.WindowModal) + exec(). Модальность блокирует
-        только PlannerWindow.
-    """
-
-    def __init__(self, parent=None, planner_service=None, task=None):
-        """Конструктор.
-
-        Вход:
-            parent — родитель (PlannerWindow).
-            planner_service — сервис для получения списка приоритетов.
-
-        Роль: строит форму с тремя полями и подключает показ скрытого
-              поля «Подробное описание» к editingFinished у «Задачи».
-        """
-        super().__init__(parent)
-        self.service = planner_service
-        self.task = task
-        self.creator = task is None
-        self.bg_color = (111, 78, 55, 0.95)
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=self,
-            parent=parent,
-            title="Новая задача",
-            bg_color=self.bg_color,
-            # NEW: крестик убран — единое поведение остальных диалогов.
-            close_button=False,
-            ok_cancel=True,
-            # Заглушки: обе кнопки вызывают accept/reject.
-            ok_callback=self.accept,
-            cancel_callback=self.reject,
-            draggable= True,
-            return_content_layout=True,
-            default_width=400,
-            default_height=350,
-        )
-
-        # NEW: скрытое поле «Подробное описание».
-        # Label создаём вручную — чтобы иметь ссылку для setVisible.
-        # LayoutFactory.create_form принимает QLabel как первый элемент,
-        # если это не str (см. его код).
-        self.full_desc_edit = InputWidgetFactory.create_text_edit(
-            self,
-            placeholder="Подробное описание...",
-            bg_color=(85, 60, 42, 0.9),
-            border="1px solid #6b4a33",
-        )
-        self.full_desc_edit.setReadOnly(True)
-        content_layout.addWidget(self.full_desc_edit)
-
-        # NEW: поле «Задача» — без placeholder.
-        self.task_edit = InputWidgetFactory.create_line_edit(
-            self,
-            bg_color=(85, 60, 42, 0.9),
-            text_color="#d4d4d4",
-            border="1px solid #6b4a33",
-            border_radius=3,
-            padding="3px",
-        )
-
-        # NEW: комбобокс приоритета. Дефолт — «Средний» (индекс 1).
-        priorities = (
-            self.service.get_priorities() if self.service
-            else ["Дедлайн", "Высокий", "Средний", "Низкий"]
-        )
-        self.priority_combo = InputWidgetFactory.create_combo_box(
-            self,
-            items=priorities,
-            current_index=2,
-            bg_color=(85, 60, 42, 0.9),
-            border="1px solid #6b4a33",
-        )
-
-        # NEW: combo типа дедлайна — в ряду с приоритетом.
-        # Изначально скрыт, появляется при выборе DEADLINE.
-        self.deadline_type_combo = InputWidgetFactory.create_combo_box(
-            self,
-            items=["До даты включительно", "Срок"],
-            current_index=0,
-            bg_color=(85, 60, 42, 0.9),
-            border="1px solid #6b4a33",
-        )
-        self.deadline_type_combo.setVisible(False)
-        self._recurrence_fields = ButtonFactory.create_recurrence_fields(self)
-        self._recurrence_fields.setVisible(False)
-        # Combo «Правило» — из виджета, встраиваем в ряд с приоритетом.
-        self._recurrence_fields.rule_combo.setVisible(False)
-
-        # Строка «Приоритет» — контейнер из трёх combo.
-        priority_row = QWidget()
-        priority_row_layout = QHBoxLayout(priority_row)
-        priority_row_layout.setContentsMargins(0, 0, 0, 0)
-        priority_row_layout.setSpacing(6)
-        priority_row_layout.addWidget(self.priority_combo, 1)
-        priority_row_layout.addWidget(self.deadline_type_combo, 1)
-        priority_row_layout.addWidget(self._recurrence_fields.rule_combo, 1)
-
-        self.task_edit.textChanged.connect(self._on_title_changed)
-
-        # Поля ввода дедлайна — под формой, показываются при DEADLINE.
-        self._deadline_fields = DeadlineFieldsWidget(self)
-        self._deadline_fields.setVisible(False)
-
-        label_kwargs = {
-            "bg_color": (145, 105, 75, 0.0),
-            "text_color": "#dabdab",
-            "padding": "4px 8px",
-            "border_radius": 3,
-            "alignment": Qt.AlignLeft | Qt.AlignVCenter,
-            "fixed_size": (120, 24),
-        }
-        task_label = LabelFactory.create_label(self, "Задача:", **label_kwargs)
-        priority_label = LabelFactory.create_label(self, "Приоритет:", **label_kwargs)
-
-        form = LayoutFactory.create_form(
-            self,
-            rows=[
-                (task_label, self.task_edit),
-                (priority_label, priority_row),
-            ],
-            spacing=10,
-            margins=(10, 10, 10, 10),
-        )
-        content_layout.addWidget(form)
-        content_layout.addWidget(self._deadline_fields)
-        content_layout.addWidget(self._recurrence_fields)
-        # Триггеры.
-        self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
-        self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
-        self._event_date_row = QWidget()
-        event_row_layout = QHBoxLayout(self._event_date_row)
-        event_row_layout.setContentsMargins(0, 0, 0, 0)
-        event_row_layout.setSpacing(6)
-
-        event_label = LabelFactory.create_label(
-            self._event_date_row, "Дата события:",
-            bg_color=(145, 105, 75, 0.0), text_color="#dabdab",
-            padding="4px 8px", border_radius=3,
-            alignment=Qt.AlignLeft | Qt.AlignVCenter,
-            fixed_size=(120, 24),
-        )
-        self._event_date_edit = InputWidgetFactory.create_line_edit(
-            self._event_date_row,
-            bg_color=(85, 60, 42, 0.9),
-            text_color="#d4d4d4",
-            border="1px solid #6b4a33",
-            border_radius=3,
-            padding="3px",
-        )
-        # Маска ввода ДД.ММ.ГГГГ — пользователь не введёт лишнего.
-        self._event_date_edit.setInputMask("99.99.9999")
-        event_row_layout.addWidget(event_label)
-        event_row_layout.addWidget(self._event_date_edit, 1)
-        self._event_date_row.setVisible(False)
-        content_layout.addWidget(self._event_date_row)
-        # Предзаполнение при редактировании (один блок, без дублирования).
-        if not self.creator:
-            self.task_edit.setText(self.task.title)
-            self.full_desc_edit.setPlainText(self.task.description)
-            for i in range(self.priority_combo.count()):
-                if self.priority_combo.itemText(i) == self.task.priority.display_name:
-                    self.priority_combo.setCurrentIndex(i)
-                    break
-            # Показать поля дедлайна, если задача дедлайновая.
-            self._on_priority_changed(self.priority_combo.currentText())
-            if self.task.priority == TaskPriority.DEADLINE and self.task.deadline_datetime:
-                self._deadline_fields._load_initial(self.task.deadline_datetime)
-
-    def get_title(self) -> str:
-        """Возвращает введённое название, очищенное от пробелов."""
-        return self.task_edit.text().strip()
-
-    def get_description(self) -> str:
-        """Возвращает подробное описание."""
-        return self.full_desc_edit.toPlainText().strip()
-
-    def get_priority(self) -> str:
-        """Возвращает выбранный приоритет как строку (display_name)."""
-        return self.priority_combo.currentText()
-
-    def accept(self):
-        """Проверяет title. Пустое название — предупреждение.
-
-        Поведение кнопок MessageDialog:
-            «Да»  (Accepted) — закрыть только предупреждение,
-                               остаться в диалоге создания.
-            «Нет» (Rejected) — закрыть предупреждение и отменить
-                               создание задачи (закрыть этот диалог).
-        """
-        if not self.get_title():
-            result = MessageDialog.warning(
-                self,
-                "Название задачи не может быть пустым.\n"
-                "Хотите продолжить создание задачи?",
-                bg_color=self.bg_color,
-            )
-            if result == QDialog.Rejected:
-                # «Нет» — пользователь решил не продолжать.
-                # reject() закроет NewTaskDialog с результатом Rejected,
-                # и в _on_new_task ветка создания задачи не сработает.
-                self.reject()
-            return
-        if self.priority_combo.currentText() == TaskPriority.EVENT.display_name:
-            date_str = self._event_date_edit.text().strip()
-            try:
-                datetime.strptime(date_str, "%d.%m.%Y")
-            except ValueError:
-                MessageDialog.warning(
-                    self,
-                    "Введите корректную дату события в формате ДД.ММ.ГГГГ.",
-                    bg_color=self.bg_color,
-                )
-                return
-        super().accept()
-
-    def get_event_data(self) -> Optional[str]:
-        """Возвращает дату события или None.
-
-        Выход: строка "%d.%m.%Y" для EVENT, иначе None.
-        Роль: используется _on_new_task при создании задачи.
-        """
-        if self.priority_combo.currentText() != TaskPriority.EVENT.display_name:
-            return None
-        return self._event_date_edit.text().strip()
-
-    def _on_title_changed(self, text: str) -> None:
-        """Разрешает редактирование описания, только если название непустое.
-
-        Вход: text — текущий текст поля «Задача».
-        Выход: нет.
-
-        Роль: переключает readOnly у full_desc_edit. Текст описания
-              НЕ очищается — при возврате названия поле снова доступно
-              с прежним содержимым. adjustSize() убран: диалог больше
-              не «прыгает», поле видно всегда.
-        """
-        # strip() — чтобы одни пробелы не считались «непустым» названием.
-        self.full_desc_edit.setReadOnly(not bool(text.strip()))
-
-
-    def _on_deadline_type_changed(self, text: str) -> None:
-        """Переключает режим полей ввода в DeadlineFieldsWidget."""
-        mode = "inclusive" if text == "До даты включительно" else "duration"
-        self._deadline_fields.set_mode(mode)
-
-    def _on_priority_changed(self, text: str) -> None:
-        """Показывает нужные поля в зависимости от приоритета."""
-        is_deadline = (text == TaskPriority.DEADLINE.display_name)
-        is_recurring = (text == TaskPriority.RECURRING.display_name)
-        is_event = (text == TaskPriority.EVENT.display_name)        # NEW
-
-        self.deadline_type_combo.setVisible(is_deadline)
-        self._deadline_fields.setVisible(is_deadline)
-
-        self._recurrence_fields.rule_combo.setVisible(is_recurring)
-        self._recurrence_fields.setVisible(is_recurring)
-
-        self._event_date_row.setVisible(is_event)
-        if not is_event:
-            self._event_date_edit.clear()
-
-    def get_deadline_data(self) -> Optional[str]:
-        """Возвращает строку дедлайна или None.
-
-        Для не-DEADLINE приоритетов всегда None.
-        """
-        if self.priority_combo.currentText() != TaskPriority.DEADLINE.display_name:
-            return None
-        mode = ("inclusive"
-                if self.deadline_type_combo.currentText() == "До даты включительно"
-                else "duration")
-        return self._deadline_fields.get_deadline_data(mode)
-
-    def get_recurrence_data(self) -> Optional[dict]:
-        """Возвращает правило повторения или None.
-
-        Делегирует в PlannerRecurrenceFieldsWidget.
-        Для не-RECURRING приоритетов возвращает None.
-        """
-        if self.priority_combo.currentText() != TaskPriority.RECURRING.display_name:
-            return None
-        return self._recurrence_fields.get_recurrence_data()
