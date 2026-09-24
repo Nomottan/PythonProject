@@ -1,0 +1,89 @@
+"""
+LogManagerV2 — фабрика логгеров V2.
+
+Создаёт LoggerV2 с набором handlers для каждого источника.
+Пока подключает только файловые каналы: Info, Report, Warning,
+Debug. UI-каналы (Notification, Status, Critical) подключаются
+позже, когда появится active_child.
+"""
+
+from .logger_v2 import LoggerV2
+from .handlers_v2 import (
+    InfoFileHandler, ReportHandler, WarningFileHandler,
+    DebugFileHandler,
+)
+
+
+class LogManagerV2:
+    """Менеджер логгеров V2.
+
+    Поля:
+        _debug_enabled — включён ли debug.
+        _paths — PathManager.
+        _active_child_getter — callable для получения active_child.
+                               Пока None — UI-каналы не работают.
+
+    Роль: единая точка создания LoggerV2. Каждый логгер получает
+          одинаковый набор handlers, настроенных на source и
+          work_folder конкретного сервиса.
+    """
+
+    def __init__(self, debug_enabled: bool, paths,
+                 active_child_getter=None):
+        """Конструктор.
+
+        Вход:
+            debug_enabled — если True, debug.txt очищается при старте,
+                            и debug() начинает писать.
+            paths — PathManager.
+            active_child_getter — опциональный callable, возвращающий
+                                  active_child. Пока не используется.
+        """
+        self._debug_enabled = debug_enabled
+        self._paths = paths
+        self._active_child_getter = active_child_getter
+
+        # Чистим debug.txt при включённом debug.
+        if debug_enabled and paths is not None:
+            debug_path = paths.app_root / "debug.txt"
+            if debug_path.exists():
+                try:
+                    debug_path.unlink()
+                except OSError:
+                    pass
+
+    def create_logger_v2(self, source: str, domain: str,
+                         work_folder=None) -> LoggerV2:
+        """Создаёт LoggerV2 для источника.
+
+        Вход:
+            source — идентификатор источника ("Class.module").
+            domain — домен (пока не используется, зарезервирован
+                     под реестр типов).
+            work_folder — рабочая папка задачи (может быть None).
+
+        Выход: LoggerV2.
+
+        Роль: создаёт handlers и собирает LoggerV2. NotificationHandler,
+              StatusHandler, CriticalHandler пока не подключаем —
+              они требуют active_child.
+        """
+        handlers = [
+            InfoFileHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+            ReportHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+            WarningFileHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+            DebugFileHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+        ]
+        return LoggerV2(source, handlers, self._debug_enabled)

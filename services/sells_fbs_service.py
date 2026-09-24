@@ -1,3 +1,20 @@
+"""
+Сервисы ЧЗ МП: подготовка файлов, выгрузка КИЗов, фильтрация,
+формирование продаж, финализация цен.
+
+Содержит пять сервисов пайплайна:
+    PreparationService     — копирование входных файлов в рабочую папку.
+    ExportKizService       — выгрузка КИЗов из ЧЗ_МП и отчётов МП.
+    FilterPreFinalService  — фильтрация предитоговых файлов.
+    GenerateSalesService   — формирование файлов продаж между продавцами.
+    FinalizePricesService  — установка цен и финализация ИТОГ-файлов.
+
+Роль в программе:
+    Вызываются из ChzMPWindow по кнопкам пайплайна. Каждый сервис
+    работает через TaskContext — единую точку рабочей папки и
+    логирования. Сервисы независимы: порядок задаёт UI.
+"""
+
 from PySide6.QtWidgets import QDialog
 from datetime import datetime
 from pathlib import Path
@@ -14,12 +31,39 @@ from services.kiz_validator import ValidationResult, KizValidator
 import random
 
 class PreparationService:
-    """Сервис подготовки: копирование файлов ЧЗ МП и отчётов МП в рабочую папку."""
+    """Сервис подготовки: копирование входных файлов в рабочую папку.
+
+    Роль: создаёт структуру рабочей папки задачи и складывает туда
+          исходные файлы — ЧЗ МП и отчёты МП. Оригиналы в источнике
+          не трогаются. Заодно чистит устаревшие записи КИЗов
+          (старше 1 месяца) через KizValidator.
+
+    Публичный API:
+        prepare(target_dir, fbs_files, mp_files, sellers, log_callback).
+    """
 
     def __init__(self, kiz_validator):
+        """Конструктор.
+
+                Вход: kiz_validator — KizValidator для очистки старых записей.
+                Роль: сохраняет ссылку на валидатор.
+                """
         self.kiz_validator = kiz_validator
 
     def prepare(self, target_dir, fbs_files=None, mp_files=None, sellers=None, log_callback=None):
+        """Запускает подготовку.
+
+            Вход:
+                target_dir — корневая папка, куда складываются задачи.
+                fbs_files — список путей к файлам ЧЗ МП.
+                mp_files — список путей к отчётам МП.
+                sellers — список Seller (для определения продавца по имени файла).
+                log_callback — колбэк для логов.
+
+            Выход: нет.
+            Роль: создаёт TaskContext, копирует файлы, чистит старые
+                записи КИЗов. Одна точка входа для окна ЧЗ МП.
+        """
         if sellers is None:
             sellers = []
 
@@ -44,6 +88,11 @@ class PreparationService:
 
     # ---------- Приватные методы ----------
     def _copy_fbs_files(self, ctx: TaskContext, fbs_files):
+        """Копирует файлы ЧЗ МП в подпапку Отчёты/.
+        Вход: ctx — TaskContext; fbs_files — список путей.
+        Роль: первому файлу даёт имя "ЧЗ_МП_{date}", последующим —
+              "ЧЗ_МП_{date}_2", "ЧЗ_МП_{date}_3" и т.д.
+        """
         if not fbs_files:
             return
         for i, src in enumerate(fbs_files):
@@ -60,6 +109,15 @@ class PreparationService:
             )
 
     def _copy_mp_files(self, ctx: TaskContext, mp_files, sellers):
+        """Копирует отчёты МП в подпапку Отчёты/.
+
+            Вход: ctx — TaskContext; mp_files — список путей;
+                sellers — список Seller.
+            Роль: имя отчёта формируется по имени продавца. Если
+                  продавца определить не удалось — файл копируется
+                  под исходным именем, и в лог идёт предупреждение.
+                  Одноимённые отчёты одного продавца нумеруются.
+            """
         if not mp_files:
             return
         seller_counters = {}
@@ -87,18 +145,55 @@ class PreparationService:
             )
 
     def _determine_seller_for_mp_file(self, file_name_lower: str, sellers):
+        """Определяет продавца по имени файла отчёта.
+
+            Вход: file_name_lower — имя файла в нижнем регистре;
+                    sellers — список Seller.
+            Выход: Seller или None.
+            Роль: ищет в имени файла любой из ключей продавца
+                    (seller.keys). Возвращает первого совпавшего.
+        """
         for seller in sellers:
             if any(key.lower() in file_name_lower for key in seller.keys):
                 return seller
         return None
 
 class ExportKizService:
-    """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы с валидацией."""
+    """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы.
+
+    Роль: обрабатывает скопированные отчёты — ЧЗ_МП (прямое списание)
+          и отчёты МП (продажи с проверкой возвратов). КИЗы валидируются
+          через KizValidator и попадают в used_kiz.json. Для каждого
+          продавца пишется .txt со списком очищенных полных КИЗов.
+          Цены из отчётов МП кладутся в prices_from_mp.json —
+          их потом использует FinalizePricesService.
+
+    Публичный API:
+        export(target_dir, sellers, log_callback).
+    """
 
     def __init__(self, kiz_validator):
+        """Конструктор.
+            Вход: kiz_validator — KizValidator для валидации КИЗов.
+            Роль: сохраняет ссылку на валидатор.
+        """
         self.kiz_validator = kiz_validator
 
     def export(self, target_dir, sellers, log_callback=None):
+        """Запускает выгрузку КИЗов.
+
+                Вход:
+                    target_dir — корневая папка задачи.
+                    sellers — список Seller.
+                    log_callback — колбэк для логов.
+                Выход: нет.
+
+                Роль: два больших цикла — ЧЗ_МП и отчёты МП — работают в одном
+                batch-контексте KizStorage: накопленные изменения
+                сохраняются одним флешем на выходе. По завершении:
+                    1) в «Обработке» появляются .txt со списками КИЗов;
+                    2) туда же кладётся prices_from_mp.json.
+            """
         ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_выгрузка_кизов.txt", log_callback,
                           subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ (с валидацией и очисткой) ===")
@@ -341,9 +436,33 @@ class ExportKizService:
         ctx.log("\n=== ВЫГРУЗКА ЗАВЕРШЕНА ===")
 
 class FilterPreFinalService:
-    """Сервис фильтрации предитоговых файлов по статусу и владельцу."""
+    """Сервис фильтрации предитоговых файлов.
+
+    Роль: для каждого продавца берёт файл из «Обработки» и
+          оставляет только строки со статусом «В ОБОРОТЕ» и
+          допустимым владельцем (см. TextUtils.get_allowed_companies).
+          Файл перезаписывается на месте — дальнейшие шаги пайплайна
+          работают с уже очищенными данными.
+
+    Публичный API:
+        filter_files(target_dir, sellers, log_callback).
+    """
 
     def filter_files(self, target_dir, sellers, log_callback=None):
+        """Запускает фильтрацию.
+
+                Вход:
+                    target_dir — корневая папка задачи.
+                    sellers — список Seller.
+                    log_callback — колбэк для логов.
+
+                Выход: нет.
+
+                Роль: собирает разрешённые компании из sellers, фильтрует
+                      строки по статусу (столбец D) и владельцу (столбец L).
+                      Пишет статистику в лог. Перезаписывает предитоговый
+                      файл — исходник не сохраняется.
+                """
         ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_фильтрация.txt", log_callback,
                           subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ФИЛЬТРАЦИЯ ПРЕДИТОГОВЫХ ФАЙЛОВ ===")
@@ -415,9 +534,34 @@ class FilterPreFinalService:
         ctx.log("\n=== ФИЛЬТРАЦИЯ ЗАВЕРШЕНА ===")
 
 class GenerateSalesService:
-    """Сервис формирования файлов продаж на основе владельца (company) КИЗов."""
+    """Сервис формирования файлов продаж.
+
+    Роль: по предитоговым файлам продавцов строит файлы передачи
+          КИЗов между продавцами. Владелец КИЗа (company, столбец L)
+          определяет отправителя, текущий продавец — получателя.
+          Если владелец = текущий продавец, строка пропускается.
+          Файлы продаж пишет SalesFileGenerator в подпапку Продажи/,
+          пустые файлы в конце удаляются.
+
+    Публичный API:
+        generate(target_dir, sellers, log_callback).
+    """
 
     def generate(self, target_dir, sellers, log_callback=None):
+        """Запускает формирование файлов продаж.
+
+                Вход:
+                    target_dir — корневая папка задачи.
+                    sellers — список Seller.
+                    log_callback — колбэк для логов.
+
+                Выход: нет.
+
+                Роль: проходит по предитоговым файлам продавцов, для каждой
+                      строки определяет отправителя (по company) и получателя
+                      (текущий продавец). Итог — файлы передачи между
+                      продавцами + лог со статистикой по направлениям.
+        """
         ctx = TaskContext(target_dir, "ЧЗ_МП_{date}", "log_продажи.txt", log_callback,
                           subfolders=["Логи", "Отчёты", "Обработка", "Продажи"])
         ctx.log("=== ФОРМИРОВАНИЕ ФАЙЛОВ ПРОДАЖ ===")
