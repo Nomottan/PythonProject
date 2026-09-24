@@ -1,9 +1,9 @@
 """
 Виджет быстрого просмотра активных задач — «мини-планировщик».
 
-Семь слотов-кнопок: 1 DEADLINE, 3 HIGH, 2 MEDIUM, 1 LOW (по умолчанию).
+Слоты-кнопки: 1 DEADLINE, 3 HIGH, 2 MEDIUM, 1 LOW (по умолчанию).
 Для дедлайн-задач слот — DeadlineTaskButton с прогрессбаром. Для
-остальных — QPushButton с цветной полосой слева.
+экземпляров и событий — InstanceTaskButton с цветной полосой.
 """
 
 from PySide6.QtWidgets import (
@@ -12,16 +12,17 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from ui.factories.factories import (
-    ButtonFactory, BaseWidgetFactory, DeadlineTaskButton,  InstanceTaskButton,
+    BaseWidgetFactory, DeadlineTaskButton, InstanceTaskButton,
 )
+from ui.factories.composite_widget_factory import CompositeWidgetFactory
 from models.planner_task import TaskPriority
 
 
 class PlannerQuickView(QWidget):
-    """Виджет с 8 кнопками задач.
+    """Виджет с 9 кнопками задач.
 
     Назначение:
-        Показать до 8 активных задач. Слоты распределяет
+        Показать до 9 активных задач. Слоты распределяет
         PlannerQuickViewController; виджет только отображает.
 
     Сигналы:
@@ -31,7 +32,7 @@ class PlannerQuickView(QWidget):
 
     task_clicked = Signal(object)
 
-    SLOT_COUNT = 8
+    SLOT_COUNT = 9
 
     # Стили обычной кнопки (не-дедлайн).
     SLOT_BG = (78, 78, 83, 0.95)
@@ -153,21 +154,49 @@ class PlannerQuickView(QWidget):
 
     def _create_widget(self, task, color, index: int):
         """Создаёт виджет слота: DeadlineTaskButton, InstanceTaskButton
-        или QPushButton."""
+        или QPushButton.
+
+        Вход: task — PlannerTask; color — цвет полосы приоритета;
+              index — номер слота (для замыкания в сигнале).
+        Выход: QWidget-слот.
+
+        Роль: единая точка выбора виджета по типу задачи. Конкретный
+              приоритетный цвет выбирается здесь — фабрика слотов
+              про TaskPriority не знает.
+        """
+        # DEADLINE → слот с прогрессбаром.
         if task.priority == TaskPriority.DEADLINE:
-            widget = ButtonFactory.create_deadline_button(self)
+            widget = CompositeWidgetFactory.create_progress_slot(self)
             widget.set_task(task)
-            widget.clicked.connect(lambda idx=index: self._on_widget_clicked(idx))
+            widget.clicked.connect(
+                lambda idx=index: self._on_widget_clicked(idx)
+            )
             return widget
 
+        # EVENT → жёлтая полоса.
+        if task.is_event():
+            widget = CompositeWidgetFactory.create_striped_slot(
+                self, stripe_color=(240, 240, 40, 1.0),
+            )
+            widget.set_task(task)
+            widget.clicked.connect(
+                lambda idx=index: self._on_widget_clicked(idx)
+            )
+            return widget
+
+        # INSTANCE → голубая полоса.
         if task.is_recurring_instance():
-            widget = InstanceTaskButton(self)
+            widget = CompositeWidgetFactory.create_striped_slot(
+                self, stripe_color=(80, 160, 220, 1.0),
+            )
             widget.set_task(task)
-            widget.clicked.connect(lambda idx=index: self._on_widget_clicked(idx))
+            widget.clicked.connect(
+                lambda idx=index: self._on_widget_clicked(idx)
+            )
             return widget
 
-        # Обычная кнопка.
-        btn = QPushButton(self)
+        # Обычная задача → QPushButton с ручной стилизацией.
+        btn = CompositeWidgetFactory.create_simple_slot(self)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setText(task.title)
         btn.setToolTip("")

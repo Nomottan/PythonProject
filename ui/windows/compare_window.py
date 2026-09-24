@@ -1,12 +1,12 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QListWidget, QTableWidget, QHeaderView, QTableWidgetItem, QCheckBox,
-    QTextEdit, QApplication, QSizePolicy
+    QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
+    QListWidget, QTableWidget, QHeaderView, QTableWidgetItem,
+    QCheckBox, QApplication, QSizePolicy,
 )
 from PySide6.QtCore import Qt
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, ListWidgetFactory,
-    LayoutFactory, WindowFactory, FileDialogFactory
+    LayoutFactory, WindowFactory, FileDialogFactory, StatusLogFactory,
 )
 from ui.windows.mappings_window import BrandMappingsWindow
 from ui.factories.window_factories import ExtendedWindowFactory
@@ -33,7 +33,7 @@ class CompareWindow(QMainWindow):
         self.target_dir = parent.main_config.get("target_dir", None)
         self.supply_file = None          # путь к файлу листа поставки
         self.supply_files = []           # список путей к файлам поставок
-
+        self.bg_color = (50, 80, 70, 0.95)
         brands = parent.sellers_brands_service.get_brands_objects()
         brands_set = set()
         for b in brands:
@@ -51,7 +51,7 @@ class CompareWindow(QMainWindow):
         # Настройка окна через WindowFactory
         main_layout = WindowFactory.setup_child_window(
             self, "Сравнение поставок",
-            bg_color=(50, 80, 70, 0.95)
+            bg_color=self.bg_color
         )
 
         # ============================================================
@@ -212,21 +212,10 @@ class CompareWindow(QMainWindow):
         main_layout.addWidget(mappings_row)
 
         # ---- Лог-область ----
-        self.status_display = QTextEdit()
-        self.status_display.setReadOnly(True)
-        self.status_display.setStyleSheet("""
-            QTextEdit {
-                background-color: rgba(30, 20, 35, 0.3);
-                color: #d4d4d4;
-                border: 1px solid #5a4a5c;
-                border-radius: 5px;
-                padding: 5px;
-                font-family: Consolas, monospace;
-                font-size: 10px;
-            }
-        """)
-        self.status_display.setMaximumHeight(200)
-        self.status_display.setMinimumHeight(100)
+        self.status_display = StatusLogFactory.create_status_log(
+            self, bg_color=self.bg_color,
+            min_height=100, max_height=200,
+        )
         main_layout.addWidget(self.status_display)
 
         # Инициализация

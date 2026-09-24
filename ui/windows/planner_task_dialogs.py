@@ -8,7 +8,7 @@
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtWidgets import QWidget, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QDialog
 from PySide6.QtCore import Qt
 
 from ui.base.base_task_dialog import BaseTaskDialog
@@ -18,7 +18,7 @@ from ui.factories.factories import (
 )
 from ui.windows.message_dialog import MessageDialog
 from models.planner_task import TaskPriority, PlannerTask
-
+from ui.factories.composite_widget_factory import CompositeWidgetFactory
 
 class NewTaskDialog(BaseTaskDialog):
     """Диалог создания/редактирования задачи.
@@ -93,10 +93,14 @@ class NewTaskDialog(BaseTaskDialog):
         self.priority_combo = InputWidgetFactory.create_combo_box(
             self,
             items=priorities,
-            current_index=2,
             bg_color=(85, 60, 42, 0.9),
             border="1px solid #6b4a33",
         )
+        # NEW: явно выбираем «Средний» по имени, а не по индексу.
+        medium_name = TaskPriority.MEDIUM.display_name
+        medium_idx = self.priority_combo.findText(medium_name)
+        if medium_idx >= 0:
+            self.priority_combo.setCurrentIndex(medium_idx)
 
         # --- Combo типа дедлайна ---
         self.deadline_type_combo = InputWidgetFactory.create_combo_box(
@@ -109,7 +113,7 @@ class NewTaskDialog(BaseTaskDialog):
         self.deadline_type_combo.setVisible(False)
 
         # --- Поля правила повторения ---
-        self._recurrence_fields = ButtonFactory.create_recurrence_fields(self)
+        self._recurrence_fields = CompositeWidgetFactory.create_recurrence_fields(self)
         self._recurrence_fields.setVisible(False)
         self._recurrence_fields.rule_combo.setVisible(False)
 
@@ -205,12 +209,25 @@ class NewTaskDialog(BaseTaskDialog):
         """Проверяет название и дату события.
 
         Выход: True — можно закрывать; False — остаться.
+
+        Особенность: при пустом названии спрашивает «продолжить?».
+            «Да»  (Accepted) — остаёмся в диалоге, правим название.
+            «Нет» (Rejected) — reject() закрывает и предупреждение,
+                               и NewTaskDialog.
         """
         if not self.task_edit.text().strip():
-            MessageDialog.warning(
-                self, "Название задачи не может быть пустым.",
+            result = MessageDialog.warning(
+                self,
+                "Название задачи не может быть пустым.\n"
+                "Хотите продолжить создание задачи?",
                 bg_color=self.bg_color,
             )
+            if result == QDialog.Rejected:
+                # «Нет» — пользователь передумал создавать задачу.
+                # reject() закроет NewTaskDialog с результатом Rejected,
+                # и в PlannerWindow._on_new_task ветка создания
+                # не сработает.
+                self.reject()
             return False
 
         if self.priority_combo.currentText() == TaskPriority.EVENT.display_name:
@@ -225,7 +242,6 @@ class NewTaskDialog(BaseTaskDialog):
                 )
                 return False
         return True
-
     # ---------- Сбор результата ----------
 
     def _collect_result(self):
@@ -417,7 +433,7 @@ class PlannerRecurrenceEditDialog(BaseTaskDialog):
                 "monthdays": self._task.recurrence_monthdays,
                 "use_last_day": self._task.recurrence_use_last_day,
             }
-        self._recurrence_fields = ButtonFactory.create_recurrence_fields(
+        self._recurrence_fields = CompositeWidgetFactory.create_recurrence_fields(
             self, initial,
             field_bg=(50, 60, 70, 0.95),
             field_border="1px solid #3a4556",

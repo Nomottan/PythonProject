@@ -1,4 +1,28 @@
-from __future__ import annotations
+"""
+Общие фабрики виджетов.
+
+Содержит:
+    BaseWidgetFactory      — базовые операции со стилями и цветами.
+    ButtonFactory          — кнопки: обычные, добавления, удаления,
+                             редактирования, выполнения, дата/время.
+    StatusLabel            — QLabel со встроенным сигналом status_update.
+    LabelFactory           — метки и заголовки.
+    InputWidgetFactory     — поля ввода: QLineEdit, QCheckBox, QComboBox,
+                             QTextEdit, QSpinBox, QDateTimeEdit, QDateEdit.
+    ListWidgetFactory      — QListWidget и QScrollArea.
+    DeadlineTaskButton     — кнопка-слот дедлайна (полоса + прогрессбар).
+    InstanceTaskButton     — кнопка-слот с цветной полосой (экземпляр/событие).
+    DeadlineFieldsWidget   — поля ввода дедлайна.
+    LayoutFactory          — контейнеры с компоновками.
+    WindowFactory          — настройка дочерних окон.
+    FileDialogFactory      — диалоги выбора файлов.
+    ThreadFactory          — фоновые потоки.
+    StatusLogFactory       — лог статуса (StatusLog).
+
+Планировщик-специфичные составные виджеты — в
+ui/factories/composite_widget_factory.py (CompositeWidgetFactory).
+"""
+
 import threading
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QSize, Signal, QDateTime, QDate
@@ -9,7 +33,6 @@ from PySide6.QtWidgets import (
     QTextEdit, QSpinBox, QDateTimeEdit, QAbstractSpinBox, QDateEdit
 )
 from typing import Callable, Tuple, Optional
-from models.planner_task import TaskPriority
 
 class BaseWidgetFactory:
     """Базовый класс для фабрик виджетов. Предоставляет общие методы стилизации и настройки."""
@@ -205,25 +228,6 @@ class ButtonFactory(BaseWidgetFactory):
         return btn
 
     @staticmethod
-    def create_task_slot_button(parent, task, priority_color) -> QWidget:
-        """Возвращает подходящий виджет-слот для задачи.
-
-        Вход: parent — родитель; task — PlannerTask; priority_color — цвет полосы.
-        Выход: DeadlineTaskButton, InstanceTaskButton или QPushButton.
-
-        Роль: EVENT и INSTANCE используют InstanceTaskButton с разными
-              цветами полосы: жёлтый для события, голубой для экземпляра.
-        """
-        if task.priority == TaskPriority.DEADLINE:
-            return DeadlineTaskButton(parent)
-        if task.is_event():  # NEW
-            return InstanceTaskButton(parent, stripe_color=(240, 240, 40, 1.0))
-        if task.is_recurring_instance():
-            return InstanceTaskButton(parent, stripe_color=(80, 160, 220, 1.0))
-        btn = QPushButton(parent)
-        return btn
-
-    @staticmethod
     def create_datetime_button(parent, callback):
         """
         Создаёт кнопку для отображения текущей даты и времени.
@@ -250,11 +254,6 @@ class ButtonFactory(BaseWidgetFactory):
         )
         btn.clicked.connect(callback)
         return btn
-
-    @staticmethod
-    def create_deadline_button(parent) -> DeadlineTaskButton:
-        """Создаёт кнопку задачи с дедлайном и прогрессбаром."""
-        return DeadlineTaskButton(parent)
 
     @staticmethod
     def _apply_button_style(btn, bg_color, text_color=None, padding="8px 16px",
@@ -458,55 +457,6 @@ class ButtonFactory(BaseWidgetFactory):
         btn.clicked.connect(callback)
         return btn
 
-    @staticmethod
-    def create_pause_button(parent, callback, paused=False, size=(26, 26), bg_color=(180, 150, 70)):
-        """
-        Создаёт кнопку паузы/возобновления (⏸/▶).
-        """
-        text = "▶" if paused else "⏸"
-        btn = ButtonFactory.create_button(
-            parent,
-            text=text,
-            bg_color=bg_color,
-            fixed_size=size,
-            padding="0px",
-            font_size=14,
-        )
-        btn.clicked.connect(callback)
-        return btn
-
-    @staticmethod
-    def create_recurrence_fields(parent, initial_data=None,
-                                 field_bg=None, field_border=None,
-                                 button_border=None):
-        """Создаёт виджет полей правила повторения.
-
-        Вход:
-            parent — родитель.
-            initial_data — dict для предзаполнения.
-            field_bg, field_border — цвета полей. None — дефолтные коричневые.
-            button_border — рамка кнопки «Выбрать числа».
-        """
-        from ui.widgets.planner_recurrence_fields_widget import (
-            PlannerRecurrenceFieldsWidget,
-        )
-        return PlannerRecurrenceFieldsWidget(
-            parent, initial_data,
-            field_bg=field_bg,
-            field_border=field_border,
-            button_border=button_border,
-        )
-
-    @staticmethod
-    def create_day_picker(parent, selected=None):
-        """Создаёт диалог выбора чисел месяца.
-
-        Вход: parent — родитель; selected — список предвыбранных чисел.
-        Выход: PlannerDayPickerDialog.
-        """
-        from ui.windows.planner_day_picker_dialog import PlannerDayPickerDialog
-        return PlannerDayPickerDialog(parent, selected)
-
 class StatusLabel(QLabel):
     """
     Специализированная метка для отображения статусных сообщений.
@@ -542,6 +492,49 @@ class StatusLabel(QLabel):
 
         # Подключаем сигнал к обновлению текста
         self.status_update.connect(self.setText)
+
+class StatusLogFactory(BaseWidgetFactory):
+    """Фабрика лога статуса (StatusLog).
+
+    Назначение:
+        Единая точка создания StatusLog — read-only QTextEdit
+        со стилем под фон окна.
+
+    Роль в программе:
+        Используется в ChzMPWindow, CompareWindow, ReturnsWindow
+        вместо самодельных QTextEdit с QSS.
+    """
+
+    @staticmethod
+    def create_status_log(parent, bg_color=None, border_color=None,
+                          font_family="Consolas, monospace", font_size=10,
+                          min_height=100, max_height=200):
+        """Создаёт StatusLog.
+
+        Вход:
+            parent — родительское окно.
+            bg_color — фон лога. Если None — берётся у parent.
+            border_color — цвет рамки. Если None — авто-расчёт.
+            font_family — шрифт (моноширинный по умолчанию).
+            font_size — размер шрифта.
+            min_height, max_height — ограничения высоты.
+
+        Выход: StatusLog.
+
+        Роль: локальный импорт — StatusLog живёт в ui/widgets и
+              не должен тянуться в шапку фабрики (иначе цикл:
+              status_log импортирует BaseWidgetFactory).
+        """
+        from ui.widgets.status_log import StatusLog
+        return StatusLog(
+            parent=parent,
+            bg_color=bg_color,
+            border_color=border_color,
+            font_family=font_family,
+            font_size=font_size,
+            min_height=min_height,
+            max_height=max_height,
+        )
 
 class LabelFactory(BaseWidgetFactory):
     """Фабрика для создания стилизованных меток (QLabel)."""
@@ -665,98 +658,6 @@ class LabelFactory(BaseWidgetFactory):
             StatusLabel с подключённым сигналом.
         """
         return StatusLabel(parent, text=text, **kwargs)
-
-class ProgressFactory(BaseWidgetFactory):
-    """Фабрика для создания индикаторов прогресса (QProgressBar)."""
-
-    @staticmethod
-    def create_progress_bar(parent, min_value=0, max_value=100, value=0,
-                            orientation=Qt.Horizontal, text_visible=True,
-                            bg_color=(60, 50, 70, 0.9), chunk_color=(100, 80, 120),
-                            text_color=None, border="none", border_radius=5,
-                            padding="0px", fixed_size=None, object_name=None,
-                            cursor_shape=None, tooltip=None,
-                            font_size=None, font_weight=None,
-                            extra_style=""):
-        """
-        Создаёт стилизованный прогресс-бар.
-
-        Параметры:
-            parent        – родительский виджет.
-            min_value     – минимальное значение.
-            max_value     – максимальное значение.
-            value         – текущее значение (должно быть в пределах [min_value, max_value]).
-            orientation   – ориентация (Qt.Horizontal или Qt.Vertical).
-            text_visible  – отображать ли текст (процент выполнения).
-            bg_color      – цвет фона канала прогресса.
-            chunk_color   – цвет заполнителя (прогресса).
-            text_color    – цвет текста (если None, подбирается автоматически на основе фона).
-            border        – рамка.
-            border_radius – радиус скругления углов.
-            padding       – внутренние отступы.
-            fixed_size    – фиксированный размер (ширина, высота).
-            object_name   – objectName для точечной стилизации.
-            cursor_shape  – курсор при наведении.
-            tooltip       – всплывающая подсказка.
-            font_size     – размер шрифта текста.
-            font_weight   – насыщенность шрифта.
-            extra_style   – дополнительный CSS.
-
-        Возвращает:
-            QProgressBar с заданными параметрами.
-        """
-        progress = QProgressBar(parent)
-        progress.setRange(min_value, max_value)
-        progress.setValue(value)
-        progress.setOrientation(orientation)
-        progress.setTextVisible(text_visible)
-
-        if object_name:
-            progress.setObjectName(object_name)
-        if cursor_shape is not None:
-            progress.setCursor(cursor_shape)
-        if tooltip:
-            progress.setToolTip(tooltip)
-        if fixed_size:
-            progress.setFixedSize(*fixed_size)
-
-        # Определяем цвет текста
-        if text_color is None:
-            text_color = BaseWidgetFactory.calc_text_color(bg_color, forced="#ffffff")
-        else:
-            text_color = text_color
-
-        bg_c = BaseWidgetFactory.color_to_str(bg_color)
-        chunk_c = BaseWidgetFactory.color_to_str(chunk_color)
-
-        selector = f"QProgressBar#{object_name}" if object_name else "QProgressBar"
-
-        style = f"""
-            {selector} {{
-                background-color: {bg_c};
-                color: {text_color};
-                border: {border};
-                border-radius: {border_radius}px;
-                padding: {padding};
-                text-align: center;
-        """
-        if font_size is not None:
-            style += f"font-size: {font_size}px;"
-        if font_weight is not None:
-            style += f"font-weight: {font_weight};"
-        style += "}"
-        style += f"""
-            {selector}::chunk {{
-                background-color: {chunk_c};
-                border-radius: {border_radius}px;
-            }}
-        """
-
-        progress.setStyleSheet(style)
-        if extra_style:
-            progress.setStyleSheet(progress.styleSheet() + extra_style)
-
-        return progress
 
 class InputWidgetFactory(BaseWidgetFactory):
     """Фабрика для создания элементов ввода: QLineEdit, QCheckBox, QComboBox."""

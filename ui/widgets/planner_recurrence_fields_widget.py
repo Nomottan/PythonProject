@@ -14,7 +14,7 @@ from PySide6.QtCore import Signal
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory,
 )
-
+from ui.factories.composite_widget_factory import CompositeWidgetFactory
 
 class PlannerRecurrenceFieldsWidget(QWidget):
     """Поля правила повторения: «Каждые N дней» / «Дни недели» / «Числа».
@@ -236,7 +236,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         центрирует диалог относительно виджета внутри формы, и он
         может оказаться за пределами экрана.
         """
-        dialog = ButtonFactory.create_day_picker(
+        dialog = CompositeWidgetFactory.create_day_picker(
             self.window(), self._selected_monthdays
         )
         if dialog.exec():

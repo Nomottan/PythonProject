@@ -2,16 +2,19 @@ from pathlib import Path
 from datetime import date
 from openpyxl import load_workbook
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout
 )
 from PySide6.QtCore import Qt
 from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
-    FileDialogFactory, ThreadFactory, WindowFactory
+    FileDialogFactory, ThreadFactory, WindowFactory, StatusLogFactory,
 )
 from ui.widgets.path_selector import PathSelector
 from ui.windows.shared_dialogs import PricesEditWindow
-from services.sells_fbs_service import PreparationService, ExportKizService, FilterPreFinalService, GenerateSalesService, FinalizePricesService
+from services.sells_fbs_service import (
+    PreparationService, ExportKizService,
+    FilterPreFinalService, GenerateSalesService, FinalizePricesService,
+)
 from services.sales_accumulator import SalesAccumulatorService
 from ui.windows.message_dialog import NotificationDialog
 
@@ -91,21 +94,10 @@ class ChzMPWindow(QMainWindow):
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
         # ---- СТАТУСНАЯ ОБЛАСТЬ (лог с прокруткой) ----
-        self.status_display = QTextEdit()
-        self.status_display.setReadOnly(True)
-        self.status_display.setStyleSheet("""
-            QTextEdit {
-                background-color: rgba(30, 20, 35, 0.3);
-                color: #d4d4d4;
-                border: 1px solid #5a4a5c;
-                border-radius: 5px;
-                padding: 5px;
-                font-family: Consolas, monospace;
-                font-size: 10px;
-            }
-        """)
-        self.status_display.setMaximumHeight(200)
-        self.status_display.setMinimumHeight(100)
+        self.status_display = StatusLogFactory.create_status_log(
+            self, bg_color=self.bg_color,
+            min_height=100, max_height=200,
+        )
 
         # ---- КНОПКИ ДЕЙСТВИЙ (НОВЫЙ ПРОЦЕСС) ----
         _action_configs = [

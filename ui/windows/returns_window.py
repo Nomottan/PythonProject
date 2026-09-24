@@ -1,11 +1,16 @@
-from ui.factories.factories import ButtonFactory, LabelFactory, LayoutFactory, FileDialogFactory, ThreadFactory, WindowFactory
+from ui.factories.factories import (
+    ButtonFactory, LabelFactory, LayoutFactory,
+    FileDialogFactory, ThreadFactory, WindowFactory, StatusLogFactory,
+)
 from ui.widgets.path_selector import PathSelector
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 )
 from pathlib import Path
 from PySide6.QtCore import Qt
-from services.returns_service import ReturnsPreparationService, KizExportService, KizTransferService
+from services.returns_service import (
+    ReturnsPreparationService, KizExportService, KizTransferService,
+)
 from services.sales_accumulator import SalesAccumulatorService
 
 class ReturnsWindow(QMainWindow):
@@ -79,7 +84,9 @@ class ReturnsWindow(QMainWindow):
         self.status_label = LabelFactory.create_status_label(
             self, "Выберите файл и целевую папку"
         )
-
+        self.status_log = StatusLogFactory.create_status_log(
+            self, min_height=100, max_height=200,
+        )
         self.btn_export_kiz = ButtonFactory.create_button(
             self, "Выгрузить КИЗы для возврата", (130, 50, 100),
             padding="8px 16px", fixed_size=(220, 35)
@@ -108,9 +115,9 @@ class ReturnsWindow(QMainWindow):
         center_layout.addWidget(self.path_selector)
 
         prepare_layout = QHBoxLayout()
-        prepare_layout.addStretch()
+
         prepare_layout.addWidget(self.btn_prepare)
-        prepare_layout.addStretch()
+
         center_layout.addLayout(prepare_layout)
 
         center_layout.addWidget(self.status_label)
@@ -119,8 +126,12 @@ class ReturnsWindow(QMainWindow):
             self, self.btn_export_kiz, self.btn_prepare_transfer, spacing=20
         )
         center_layout.addWidget(bottom_row)
-
         center_layout.addStretch(1)
+        # NEW: лог статуса — там же, где в chz_mp_window:
+        # после всех кнопок действий, до нижнего ряда «Собрать продажи».
+        center_layout.addWidget(self.status_log)
+
+
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
         self.btn_accumulate = ButtonFactory.create_button(
@@ -130,6 +141,7 @@ class ReturnsWindow(QMainWindow):
         self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
         bottom_layout.addWidget(self.btn_accumulate)
         center_layout.addLayout(bottom_layout)
+
         main_layout.addLayout(center_layout)
 
     # ---------- МЕТОДЫ ----------
@@ -139,8 +151,18 @@ class ReturnsWindow(QMainWindow):
         self.status_label.setText("Целевая папка обновлена.")
 
     def _ui_log(self, message: str, level: str = "INFO") -> None:
-        """UI-адаптер для нового логгера."""
-        self.status_label.status_update.emit(message)
+        """UI-адаптер для логгера сервисов.
+
+        Вход:
+            message — текст.
+            level — уровень. Оставлен для совместимости с сервисами;
+                    внутри игнорируется.
+
+        Роль: все длинные сообщения сервисов идут в status_log.
+              Короткие подсказки UI по-прежнему пишет в status_label
+              через status_update.emit.
+        """
+        self.status_log.log(message)
 
     def select_source_file(self):
         start_dir = self.parent().main_config.get("last_returns_dir", None) or self.target_dir or str(Path.home())
