@@ -322,6 +322,9 @@ class CriticalHandler(HandlerV2):
 
         Вход: record — запись.
         Роль: файл пишем сразу, диалог — в UI-потоке.
+              Родитель диалога — active_child (если есть), фон —
+              bg_color active_child. Если окна нет — parent=None,
+              диалог показывается без родителя.
         """
         # 1. Запись в errors.txt.
         self._append_to_file(
@@ -331,6 +334,9 @@ class CriticalHandler(HandlerV2):
         # 2. Диалог в UI-потоке.
         msg = record.message
         can_influence = record.can_influence
+        # REPLACE: parent — active_child; bg_color — из него же.
+        parent = self._get_active_child()
+        bg_color = getattr(parent, "bg_color", None) if parent else None
 
         def show_dialog():
             from ui.windows.message_dialog import (
@@ -338,11 +344,13 @@ class CriticalHandler(HandlerV2):
             )
             if can_influence:
                 MessageDialog.question(
-                    None, msg, title_text="Критическая ошибка"
+                    parent=parent, text=msg,
+                    bg_color=bg_color, title_text="Критическая ошибка",
                 )
             else:
                 NotificationDialog.notify(
-                    None, msg, title_text="Критическая ошибка"
+                    parent=parent, text=msg,
+                    bg_color=bg_color, title_text="Критическая ошибка",
                 )
 
         self._run_in_ui_thread(show_dialog)

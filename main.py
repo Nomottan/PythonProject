@@ -11,6 +11,8 @@ from ui.widgets.planner_quick_view import PlannerQuickView
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
 from utils.log_system import LogManager
+from utils.log_tools.decorators import log_button_action
+from services.subservices.logging import LogManagerV2
 from services.kiz_validator import KizValidator
 from services.planner_service import PlannerService
 from services.planner_archive_service import PlannerArchiveService
@@ -42,13 +44,11 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        # --- Пути и логирование ---
+        # --- Пути и старое логирование ---
         self.paths = PathManager()
         self.log_manager = LogManager()
 
-        # --- Конфиг + сервис продавцов/брендов (REPLACE ConfigManager) ---
-        # MainConfig — хранилище config.json, SellersBrandsService —
-        # высокоуровневые операции над Seller/Brand.
+        # --- Конфиг + сервис продавцов/брендов ---
         self.main_config = MainConfig(self.paths, self.log_manager)
         self.sellers_brands_service = SellersBrandsService(self.main_config)
 
@@ -58,7 +58,28 @@ class MainWindow(QMainWindow):
         )
 
         # --- Теги активности дочерних окон ---
+        # REPLACE: active_child объявлен ДО LogManagerV2 — getter
+        # ссылается на атрибут, поэтому он должен существовать.
         self.active_child = None
+
+        # NEW: новая система логирования LoggerV2.
+        # Параллельно со старой, старую не отключаем.
+        debug_enabled = self.main_config.get("debug_enabled", False)
+        self.log_manager_v2 = LogManagerV2(
+            debug_enabled=debug_enabled,
+            paths=self.paths,
+            active_child_getter=lambda: self.active_child,
+        )
+        self.logger = self.log_manager_v2.create_logger_v2(
+            source="MainWindow.main",
+            domain="main",
+        )
+
+        # NEW: счётчик тиков on_timer — для периодического debug.
+        # Срабатывает раз в 600 тиков (600 * 100 мс = 60 сек).
+        self._timer_tick_count = 0
+
+        # --- Теги активности дочерних окон ---
         self.chz_mp_window = None
         self.sellers_window = None
         self.brands_window = None
@@ -220,51 +241,84 @@ class MainWindow(QMainWindow):
     # ============================================================
     # 5. ОТКРЫТИЕ ДОЧЕРНИХ ОКОН
     # ============================================================
+    @log_button_action(
+        "open_chz_mp_window",
+        "Ошибка при открытии окна 'Списание КИЗов': {e}",
+    )
     def open_chz_mp_window(self):
         if self.chz_mp_window is None or not self.chz_mp_window.isVisible():
             self.chz_mp_window = ChzMPWindow(self)
             WindowFactory.show_child_window(self, self.chz_mp_window)
+            self.logger.debug("open_chz_mp_window: окно создано заново")
         else:
             self.chz_mp_window.raise_()
             self.chz_mp_window.activateWindow()
+            self.logger.debug("open_chz_mp_window: окно активировано")
 
+    @log_button_action(
+        "open_returns_window",
+        "Ошибка при открытии окна 'Возвраты': {e}",
+    )
     def open_returns_window(self):
         if self.returns_window is None or not self.returns_window.isVisible():
+            # ReturnsWindow получает старый log_manager — не меняем.
             self.returns_window = ReturnsWindow(self, self.log_manager)
             WindowFactory.show_child_window(self, self.returns_window)
+            self.logger.debug("open_returns_window: окно создано заново")
         else:
             self.returns_window.raise_()
             self.returns_window.activateWindow()
+            self.logger.debug("open_returns_window: окно активировано")
 
+    @log_button_action(
+        "open_sellers_window",
+        "Ошибка при открытии окна 'Продавцы': {e}",
+    )
     def open_sellers_window(self):
         if self.sellers_window is None or not self.sellers_window.isVisible():
             self.sellers_window = SellersWindow(self)
             WindowFactory.show_child_window(self, self.sellers_window)
+            self.logger.debug("open_sellers_window: окно создано заново")
         else:
             self.sellers_window.raise_()
             self.sellers_window.activateWindow()
+            self.logger.debug("open_sellers_window: окно активировано")
 
     def refresh_sellers_window(self):
+        # Без декоратора: внутренний метод, не кнопка.
         if self.sellers_window and self.sellers_window.isVisible():
             self.sellers_window.refresh_ui()
 
+    @log_button_action(
+        "open_brands_window",
+        "Ошибка при открытии окна 'Бренды': {e}",
+    )
     def open_brands_window(self):
         if self.brands_window is None or not self.brands_window.isVisible():
             self.brands_window = BrandsWindow(self)
             WindowFactory.show_child_window(self, self.brands_window)
+            self.logger.debug("open_brands_window: окно создано заново")
         else:
             self.brands_window.raise_()
             self.brands_window.activateWindow()
+            self.logger.debug("open_brands_window: окно активировано")
 
+    @log_button_action(
+        "open_compare_window",
+        "Ошибка при открытии окна 'Сравнение поставок': {e}",
+    )
     def open_compare_window(self):
         if self.compare_window is None or not self.compare_window.isVisible():
             self.compare_window = CompareWindow(
                 self, mappings_storage=self.compare_mappings_storage,
             )
             WindowFactory.show_child_window(self, self.compare_window)
+            self.logger.debug("open_compare_window: окно создано заново")
         else:
-            self.brands_window.raise_()
-            self.brands_window.activateWindow()
+            # REPLACE: было self.brands_window.raise_() — опечатка.
+            self.compare_window.raise_()
+            self.compare_window.activateWindow()
+            self.logger.debug("open_compare_window: окно активировано")
 
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
@@ -273,18 +327,23 @@ class MainWindow(QMainWindow):
         dialog = StringListDialog(self, title, strings)
         dialog.show()
 
+    @log_button_action(
+        "open_datetime_window",
+        "Ошибка при открытии окна 'Планировщик': {e}",
+    )
     def open_datetime_window(self):
         if self.planner_window is None or not self.planner_window.isVisible():
-            # NEW: передаём planner_service, созданный в __init__.
             self.planner_window = PlannerWindow(
                 self,
                 planner_service=self.planner_service,
                 archive_service=self.planner_archive_service,
             )
             WindowFactory.show_child_window(self, self.planner_window)
+            self.logger.debug("open_datetime_window: окно создано заново")
         else:
             self.planner_window.raise_()
             self.planner_window.activateWindow()
+            self.logger.debug("open_datetime_window: окно активировано")
 
     def resizeEvent(self, event):
         for child in (self.chz_mp_window, self.sellers_window,
@@ -306,7 +365,27 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
 
     def on_timer(self):
-        self.datetime_btn.setText(DateTimeUtils.get_current_datetime_text())
+        """Тик таймера кнопки даты/времени.
+
+        Роль: обновляет текст кнопки. Раз в 600 тиков (60 сек при
+              интервале 100 мс) пишет debug «таймер работает».
+              Ошибки не пробрасываются — critical и продолжаем.
+        """
+        # NEW: счётчик для периодического debug.
+        self._timer_tick_count += 1
+        if self._timer_tick_count >= 600:
+            self._timer_tick_count = 0
+            self.logger.debug(
+                f"on_timer: таймер работает, время "
+                f"{DateTimeUtils.get_current_datetime_text()}"
+            )
+
+        try:
+            self.datetime_btn.setText(DateTimeUtils.get_current_datetime_text())
+        except Exception as e:
+            self.logger.critical(
+                f"Ошибка в on_timer: {e}", can_influence=False,
+            )
 
     def _on_recurrence_timer(self):
         """Обработчик таймера: события + генерация экземпляров.
@@ -322,10 +401,29 @@ class MainWindow(QMainWindow):
         архивируем «вчерашнее», потом активируем «сегодняшнее»,
         потом генерируем новое. Иначе на границе дня возможна гонка:
         генерация создаст экземпляр, а expire тут же его заархивирует.
+
+        При ошибке на любом шаге — critical и прерываем тик: следующий
+        шаг зависит от предыдущего.
         """
-        self.planner_service.expire_past_events()
-        self.planner_service.activate_due_events()
-        self.planner_recurrence_service.generate_due_instances()
+        self.logger.debug("_on_recurrence_timer: старт")
+        try:
+            self.planner_service.expire_past_events()
+            self.logger.debug(
+                "_on_recurrence_timer: expire_past_events выполнен"
+            )
+            self.planner_service.activate_due_events()
+            self.logger.debug(
+                "_on_recurrence_timer: activate_due_events выполнен"
+            )
+            self.planner_recurrence_service.generate_due_instances()
+            self.logger.debug(
+                "_on_recurrence_timer: generate_due_instances выполнен"
+            )
+        except Exception as e:
+            self.logger.critical(
+                f"Ошибка в _on_recurrence_timer: {e}",
+                can_influence=False,
+            )
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

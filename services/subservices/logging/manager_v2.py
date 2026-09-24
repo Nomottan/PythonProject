@@ -2,15 +2,13 @@
 LogManagerV2 — фабрика логгеров V2.
 
 Создаёт LoggerV2 с набором handlers для каждого источника.
-Пока подключает только файловые каналы: Info, Report, Warning,
-Debug. UI-каналы (Notification, Status, Critical) подключаются
-позже, когда появится active_child.
 """
 
 from .logger_v2 import LoggerV2
 from .handlers_v2 import (
     InfoFileHandler, ReportHandler, WarningFileHandler,
     DebugFileHandler,
+    NotificationHandler, StatusHandler, CriticalHandler,
 )
 
 
@@ -64,11 +62,14 @@ class LogManagerV2:
 
         Выход: LoggerV2.
 
-        Роль: создаёт handlers и собирает LoggerV2. NotificationHandler,
-              StatusHandler, CriticalHandler пока не подключаем —
-              они требуют active_child.
+        Роль: создаёт полный набор handlers и собирает LoggerV2.
+              UI-каналы (Notification, Status, Critical) работают
+              через _active_child_getter: если active_child есть —
+              показывают UI, иначе уходят в fallback (Info-файл +
+              errors.txt).
         """
         handlers = [
+            # Файловые каналы.
             InfoFileHandler(
                 source, work_folder, self._paths,
                 self._active_child_getter,
@@ -82,6 +83,19 @@ class LogManagerV2:
                 self._active_child_getter,
             ),
             DebugFileHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+            # REPLACE: UI-каналы подключены.
+            NotificationHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+            StatusHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
+            CriticalHandler(
                 source, work_folder, self._paths,
                 self._active_child_getter,
             ),

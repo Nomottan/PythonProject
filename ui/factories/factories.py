@@ -2179,6 +2179,49 @@ class WindowFactory:
 
         main_layout.addLayout(top_layout)
 
+        # NEW: динамические методы для LoggerV2-каналов.
+        # Позволяют окну принимать notify() и set_status() без
+        # наследования от специального базового класса.
+        if not hasattr(child, "notify"):
+            def _notify(msg, _child=child):
+                """Показать уведомление поверх окна.
+
+                Вход: msg — текст.
+                Роль: обёртка над NotificationDialog.notify.
+                      bg_color берётся из атрибута окна, если он есть.
+                """
+                from ui.windows.message_dialog import NotificationDialog
+                bg = getattr(_child, "bg_color", None)
+                NotificationDialog.notify(
+                    parent=_child, text=msg, bg_color=bg,
+                )
+
+            child.notify = _notify
+
+        if not hasattr(child, "set_status"):
+            def _set_status(msg, _child=child):
+                """Обновить статус в окне.
+
+                Вход: msg — текст.
+                Роль: пытается найти статусный виджет по известным
+                      атрибутам и обновить его. Если у виджета есть
+                      сигнал status_update — emit; если есть append —
+                      append; иначе — молча выходим.
+                """
+                label = (
+                        getattr(_child, "status_label", None)
+                        or getattr(_child, "status_display", None)
+                        or getattr(_child, "status_log", None)
+                )
+                if label is None:
+                    return
+                if hasattr(label, "status_update"):
+                    label.status_update.emit(msg)
+                elif hasattr(label, "append"):
+                    label.append(msg)
+
+            child.set_status = _set_status
+
         if return_layout:
             return main_layout
         return None
@@ -2198,17 +2241,23 @@ class WindowFactory:
         Роль: единая точка показа дочерних окон. cover_parent используется
               для окон, которые должны визуально «заменить» родителя
               (например, архив планировщика).
+
+              Здесь же устанавливается parent.active_child = child —
+              чтобы LoggerV2 знал, куда отправлять UI-сообщения.
+              Сброс — в closeEvent самих окон (уже реализован).
         """
         parent_rect = parent.frameGeometry()
 
         if cover_parent:
-            # Полное перекрытие: дочернее окно занимает площадь родителя.
             child.setGeometry(parent_rect)
         else:
-            # Со старыми отступами: 10px по краям, 50px снизу.
             child.setGeometry(10, 10,
                               parent_rect.width() - 20,
                               parent_rect.height() - 50)
+
+        # Метка окна как активного для LoggerV2-каналов.
+        if hasattr(parent, "active_child"):
+            parent.active_child = child
 
         child.show()
         child.activateWindow()
