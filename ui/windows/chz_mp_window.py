@@ -1,5 +1,18 @@
+"""
+Окно «Списание проданных КИЗов» (ЧЗ МП).
+
+Назначение:
+    Пайплайн из пяти шагов: подготовка файлов, выгрузка КИЗов,
+    фильтрация предитоговых файлов, формирование продаж,
+    установка цен и финализация.
+
+Роль в программе:
+    Открывается из MainWindow. Связано с LoggerV2 через
+    log_manager_v2 — сервисы по-прежнему пишут через старый
+    Logger/TaskContext, окно пишет только свои сообщения.
+"""
+
 from pathlib import Path
-from datetime import date
 from openpyxl import load_workbook
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout
@@ -17,10 +30,39 @@ from services.sells_fbs_service import (
 )
 from services.sales_accumulator import SalesAccumulatorService
 from ui.windows.message_dialog import NotificationDialog
+# NEW: декоратор для обработчиков кнопок.
+from utils.log_tools.decorators import log_button_action
+
 
 class ChzMPWindow(QMainWindow):
-    def __init__(self, parent=None):
+    """Окно пайплайна ЧЗ МП.
+
+    Роль: объединяет шаги обработки КИЗов. Каждый шаг —
+          отдельный сервис, запускается в фоновом потоке через
+          ThreadFactory. Логи шагов идут в status_display;
+          короткие подсказки — в status_label.
+    """
+
+    def __init__(self, parent=None, log_manager_v2=None):
+        """Конструктор.
+
+        Вход:
+            parent — MainWindow.
+            log_manager_v2 — LogManagerV2 или None. Если None —
+                             logger остаётся None, окно работает
+                             как раньше, но без логирования.
+        """
         super().__init__(parent)
+
+        # NEW: создаём logger из LogManagerV2 (если передан).
+        self.logger = None
+        if log_manager_v2 is not None:
+            self.logger = log_manager_v2.create_logger_v2(
+                source="ChzMPWindow.chz_mp_window",
+                domain="chz_mp",
+            )
+        if self.logger:
+            self.logger.debug("ChzMPWindow.__init__: старт")
 
         # Переменные состояния
         self.target_dir = parent.main_config.get("target_dir", None)
@@ -28,6 +70,7 @@ class ChzMPWindow(QMainWindow):
         self.mp_files = []
         self.fbs_signatures = []
         self.bg_color = (50, 60, 90, 0.95)
+
         # Настройка окна через фабрику
         main_layout = WindowFactory.setup_child_window(
             self, "Списание проданных КИЗов",
@@ -93,6 +136,11 @@ class ChzMPWindow(QMainWindow):
         )
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
+        # NEW: короткая подсказка для set_status-канала.
+        self.status_label = LabelFactory.create_status_label(
+            self, "Выберите целевую папку и файлы"
+        )
+
         # ---- СТАТУСНАЯ ОБЛАСТЬ (лог с прокруткой) ----
         self.status_display = StatusLogFactory.create_status_log(
             self, bg_color=self.bg_color,
@@ -151,6 +199,9 @@ class ChzMPWindow(QMainWindow):
         # Выбор папки
         center_layout.addWidget(self.path_selector)
 
+        # NEW: короткая подсказка сразу под выбором пути.
+        center_layout.addWidget(self.status_label)
+
         # Ряд кнопок: Подготовка, Выгрузка, Сбор данных
         row1 = LayoutFactory.create_row(
             self, self.btn_prepare, self.btn_export_kiz, self.btn_filter_prefinal,
@@ -185,10 +236,21 @@ class ChzMPWindow(QMainWindow):
         self.btn_fbs.clicked.connect(self.select_fbs_files)
         self.btn_reports.clicked.connect(self.select_report_files)
 
+        if self.logger:
+            self.logger.debug("ChzMPWindow.__init__: окно инициализировано")
+
     # ============================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     # ============================================================
     def _on_target_dir_changed(self, new_path):
+        """Обработка смены целевой папки.
+
+        Вход: new_path — новый путь.
+        Роль: обновляет target_dir, пишет в main_config,
+              сбрасывает кнопки шагов 2–5 до готовности.
+        """
+        if self.logger:
+            self.logger.debug(f"_on_target_dir_changed: новая папка {new_path}")
         self.target_dir = new_path
         self.parent().main_config.set("target_dir", new_path)
         self.status_display.clear()
@@ -198,11 +260,21 @@ class ChzMPWindow(QMainWindow):
         self.btn_generate_sales.setEnabled(False)
         self.btn_finalize_prices.setEnabled(False)
 
+    @log_button_action("btn_fbs", "Ошибка при выборе файлов ЧЗ МП: {e}")
     def select_fbs_files(self):
+        """Открывает диалог выбора файлов ЧЗ МП.
+
+        Роль: выбранные файлы добавляются в self.fbs_files.
+              Дубликаты (по первой ячейке листа) отсеиваются
+              с уведомлением.
+        """
         start = self.parent().main_config.get("last_fbs_dir", None)
         files = FileDialogFactory.open_files_dialog(self, "Выберите файлы ЧЗ МП", start)
         if not files:
             return
+        if self.logger:
+            self.logger.debug(f"select_fbs_files: выбрано файлов {len(files)}")
+
         first_file = Path(files[0])
         self.parent().main_config.set("last_fbs_dir", str(first_file.parent))
 
@@ -217,6 +289,10 @@ class ChzMPWindow(QMainWindow):
                 first_val = ""
 
             if first_val in self.fbs_signatures:
+                if self.logger:
+                    self.logger.debug(
+                        f"select_fbs_files: файл {Path(f).name} уже выбран (дубликат)"
+                    )
                 NotificationDialog.notify(
                     self,
                     f"Файл {Path(f).name} уже выбран (совпадает первая строка). Дубль не был добавлен",
@@ -229,10 +305,18 @@ class ChzMPWindow(QMainWindow):
             self.fbs_signatures.append(first_val)
             self.list_fbs.addItem(Path(f).name)
 
+    @log_button_action("btn_reports", "Ошибка при выборе отчётов МП: {e}")
     def select_report_files(self):
+        """Открывает диалог выбора отчётов МП.
+
+        Роль: выбранные файлы заменяют содержимое self.mp_files
+              и списка list_reports.
+        """
         start = self.parent().main_config.get("last_mp_dir", None)
         files = FileDialogFactory.open_files_dialog(self, "Выберите файлы отчётов МП", start)
         if files:
+            if self.logger:
+                self.logger.debug(f"select_report_files: выбрано файлов {len(files)}")
             first_file = Path(files[0])
             self.parent().main_config.set("last_mp_dir", str(first_file.parent))
             self.mp_files = files
@@ -240,32 +324,12 @@ class ChzMPWindow(QMainWindow):
             for f in files:
                 self.list_reports.addItem(Path(f).name)
 
-    def _get_log_path(self, log_filename):
-        """Формирует путь к лог-файлу в подпапке Логи/ рабочей папки."""
-        if not self.target_dir:
-            return None
-        today = date.today()
-        date_str = f"{today.day}_{today.month}_{today.year}"
-        work_folder = Path(self.target_dir) / date_str / f"ЧЗ_МП_{date_str}"
-        return work_folder / "Логи" / log_filename
-
-    def _load_log_into_status(self, log_path):
-        """Загружает содержимое лог-файла в статусную область."""
-        self.status_display.clear()
-        if not log_path or not Path(log_path).exists():
-            self.status_display.append("Лог-файл не найден.")
-            return
-        try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                self.status_display.setPlainText(content)
-        except Exception as e:
-            self.status_display.append(f"Ошибка чтения лога: {e}")
-
     # ============================================================
     # ОБРАБОТЧИКИ КНОПОК
     # ============================================================
+    @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
     def on_prepare(self):
+        """Шаг 1: подготовка — копирование файлов в рабочую папку."""
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
@@ -278,16 +342,21 @@ class ChzMPWindow(QMainWindow):
         self.status_display.append("Идёт подготовка...")
 
         service = PreparationService(self.parent().kiz_validator)
+        if self.logger:
+            self.logger.debug("on_prepare: PreparationService создан")
 
         def on_finished():
             self.status_display.append("Подготовка завершена.")
             self.btn_export_kiz.setEnabled(True)
-            log_path = self._get_log_path("log_подготовка.txt")
-            if log_path:
-                self._load_log_into_status(log_path)
+            if self.logger:
+                self.logger.debug("on_prepare: фоновый поток завершён")
 
         def on_error(e):
             self.status_display.append(f"Ошибка подготовки: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в on_prepare: {e}", can_influence=False,
+                )
 
         ThreadFactory.create_thread(
             parent=self,
@@ -306,7 +375,9 @@ class ChzMPWindow(QMainWindow):
             error_callback=on_error
         )
 
+    @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
     def on_export_kiz(self):
+        """Шаг 2: выгрузка КИЗов из ЧЗ_МП и отчётов МП."""
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
@@ -316,16 +387,21 @@ class ChzMPWindow(QMainWindow):
         self.status_display.append("Выгрузка КИЗов для обработки...")
 
         service = ExportKizService(self.parent().kiz_validator)
+        if self.logger:
+            self.logger.debug("on_export_kiz: ExportKizService создан")
 
         def on_finished():
             self.status_display.append("Выгрузка завершена.")
             self.btn_filter_prefinal.setEnabled(True)
-            log_path = self._get_log_path("log_выгрузка_кизов.txt")
-            if log_path:
-                self._load_log_into_status(log_path)
+            if self.logger:
+                self.logger.debug("on_export_kiz: фоновый поток завершён")
 
         def on_error(e):
             self.status_display.append(f"Ошибка выгрузки: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в on_export_kiz: {e}", can_influence=False,
+                )
 
         ThreadFactory.create_thread(
             parent=self,
@@ -342,7 +418,9 @@ class ChzMPWindow(QMainWindow):
             error_callback=on_error
         )
 
+    @log_button_action("btn_filter_prefinal", "Ошибка в on_filter_prefinal: {e}")
     def on_filter_prefinal(self):
+        """Шаг 3: фильтрация предитоговых файлов."""
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
@@ -352,16 +430,21 @@ class ChzMPWindow(QMainWindow):
         self.status_display.append("Фильтрация предитоговых файлов...")
 
         service = FilterPreFinalService()
+        if self.logger:
+            self.logger.debug("on_filter_prefinal: FilterPreFinalService создан")
 
         def on_finished():
             self.status_display.append("Сбор данных завершён.")
             self.btn_generate_sales.setEnabled(True)
-            log_path = self._get_log_path("log_фильтрация.txt")
-            if log_path:
-                self._load_log_into_status(log_path)
+            if self.logger:
+                self.logger.debug("on_filter_prefinal: фоновый поток завершён")
 
         def on_error(e):
             self.status_display.append(f"Ошибка фильтрации: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в on_filter_prefinal: {e}", can_influence=False,
+                )
 
         ThreadFactory.create_thread(
             parent=self,
@@ -378,7 +461,9 @@ class ChzMPWindow(QMainWindow):
             error_callback=on_error
         )
 
+    @log_button_action("btn_generate_sales", "Ошибка в on_generate_sales: {e}")
     def on_generate_sales(self):
+        """Шаг 4: формирование файлов продаж между продавцами."""
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
@@ -388,16 +473,21 @@ class ChzMPWindow(QMainWindow):
         self.status_display.append("Формирование файлов продаж...")
 
         service = GenerateSalesService()
+        if self.logger:
+            self.logger.debug("on_generate_sales: GenerateSalesService создан")
 
         def on_finished():
             self.status_display.append("Продажи сформированы.")
             self.btn_finalize_prices.setEnabled(True)
-            log_path = self._get_log_path("log_продажи.txt")
-            if log_path:
-                self._load_log_into_status(log_path)
+            if self.logger:
+                self.logger.debug("on_generate_sales: фоновый поток завершён")
 
         def on_error(e):
             self.status_display.append(f"Ошибка формирования продаж: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в on_generate_sales: {e}", can_influence=False,
+                )
 
         ThreadFactory.create_thread(
             parent=self,
@@ -414,7 +504,9 @@ class ChzMPWindow(QMainWindow):
             error_callback=on_error
         )
 
+    @log_button_action("btn_finalize_prices", "Ошибка в on_finalize_prices: {e}")
     def on_finalize_prices(self):
+        """Шаг 5: установка цен и финализация ИТОГ-файлов."""
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
@@ -425,15 +517,20 @@ class ChzMPWindow(QMainWindow):
         self.status_display.append("Внесение цен и финализация...")
 
         service = FinalizePricesService(self.parent().kiz_validator)
+        if self.logger:
+            self.logger.debug("on_finalize_prices: FinalizePricesService создан")
 
         def on_finished():
             self.status_display.append("Цены установлены, файлы финализированы.")
-            log_path = self._get_log_path("log_цены.txt")
-            if log_path:
-                self._load_log_into_status(log_path)
+            if self.logger:
+                self.logger.debug("on_finalize_prices: фоновый поток завершён")
 
         def on_error(e):
             self.status_display.append(f"Ошибка установки цен: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в on_finalize_prices: {e}", can_influence=False,
+                )
 
         ThreadFactory.create_thread(
             parent=self,
@@ -451,8 +548,12 @@ class ChzMPWindow(QMainWindow):
             error_callback=on_error
         )
 
+    @log_button_action("btn_prices", "Ошибка при открытии окна цен: {e}")
     def on_open_prices_window(self):
-        """Открывает окно для редактирования сохранённых цен."""
+        """Открывает окно редактирования сохранённых цен.
+
+        Роль: диалог синхронный, потока нет. Ошибка — в critical.
+        """
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
@@ -463,23 +564,29 @@ class ChzMPWindow(QMainWindow):
         )
         window.exec()
 
+    @log_button_action("btn_accumulate_sales", "Ошибка в on_accumulate_sales: {e}")
     def on_accumulate_sales(self):
-        """Запускает аккумуляцию продаж из ЧЗ_МП и Возвратов."""
+        """Отдельная операция: аккумуляция продаж из ЧЗ_МП и Возвратов."""
         if not self.target_dir:
             self.status_display.append("Сначала выберите целевую папку")
             return
         self.status_display.clear()
         self.status_display.append("Аккумуляция продаж...")
         service = SalesAccumulatorService()
+        if self.logger:
+            self.logger.debug("on_accumulate_sales: SalesAccumulatorService создан")
 
         def on_finished():
             self.status_display.append("Аккумуляция завершена.")
-            log_path = self._get_log_path("log_аккумуляция.txt")
-            if log_path:
-                self._load_log_into_status(log_path)
+            if self.logger:
+                self.logger.debug("on_accumulate_sales: фоновый поток завершён")
 
         def on_error(e):
             self.status_display.append(f"Ошибка аккумуляции: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в on_accumulate_sales: {e}", can_influence=False,
+                )
 
         ThreadFactory.run_in_thread(
             target_func=service.accumulate,
@@ -489,6 +596,7 @@ class ChzMPWindow(QMainWindow):
         )
 
     def cleanup(self):
+        """Сброс состояния окна (файлы, списки, подписи)."""
         self.fbs_files = []
         self.mp_files = []
         self.list_fbs.clear()
@@ -496,6 +604,13 @@ class ChzMPWindow(QMainWindow):
         self.fbs_signatures = []
 
     def closeEvent(self, event):
+        """Обработка закрытия окна.
+
+        Роль: пишет debug, чистит состояние, снимает active_child
+              у родителя.
+        """
+        if self.logger:
+            self.logger.debug("ChzMPWindow: closeEvent получен")
         self.cleanup()
         if self.parent() and hasattr(self.parent(), 'active_child'):
             self.parent().active_child = None

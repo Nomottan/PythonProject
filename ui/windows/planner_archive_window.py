@@ -6,7 +6,7 @@ UI-каркас без данных. Наследник _BasePlannerListWindow.
 
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from PySide6.QtCore import Qt
-from ui.factories.factories import  ButtonFactory
+from ui.factories.button_factory import ButtonFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.windows.planner_base_window import _BasePlannerListWindow
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
@@ -81,12 +81,9 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         layout.setSpacing(4)
 
         if not task.is_recurring_instance() and not task.is_event():
-            restore_btn = ButtonFactory.create_button(
-                container, "↺", bg_color=(100, 130, 150),
-                fixed_size=(26, 26), padding="0px", font_size=14,
-            )
-            restore_btn.clicked.connect(
-                lambda checked=False, t=task: self._on_restore_task(t)
+            restore_btn = ButtonFactory.create_restore_button(
+                container,
+                lambda checked=False, t=task: self._on_restore_task(t),
             )
             layout.addWidget(restore_btn)
 

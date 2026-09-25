@@ -1,9 +1,10 @@
 """
 Виджет быстрого просмотра активных задач — «мини-планировщик».
 
-Слоты-кнопки: 1 DEADLINE, 3 HIGH, 2 MEDIUM, 1 LOW (по умолчанию).
-Для дедлайн-задач слот — DeadlineTaskButton с прогрессбаром. Для
-экземпляров и событий — InstanceTaskButton с цветной полосой.
+Слоты-кнопки: 9 слотов. Раскладку распределяет
+PlannerQuickViewController. Для дедлайн-задач слот — прогрессбар,
+для экземпляров и событий — цветная полоса, для остальных — та же
+кнопка-слот с цветом приоритета.
 """
 
 from PySide6.QtWidgets import (
@@ -11,9 +12,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from ui.factories.factories import (
-    BaseWidgetFactory, DeadlineTaskButton, InstanceTaskButton,
-)
 from ui.factories.composite_widget_factory import CompositeWidgetFactory
 from models.planner_task import TaskPriority
 
@@ -34,13 +32,12 @@ class PlannerQuickView(QWidget):
 
     SLOT_COUNT = 9
 
-    # Стили обычной кнопки (не-дедлайн).
-    SLOT_BG = (78, 78, 83, 0.95)
-    SLOT_BG_HOVER = (98, 98, 103, 0.95)
-    SLOT_BG_PRESSED = (60, 60, 65, 0.95)
-    SLOT_TEXT = "#e0e0e0"
-
     def __init__(self, parent=None):
+        """Конструктор.
+
+        Вход: parent — родительский виджет.
+        Роль: создаёт контейнерный layout и хранилище состояния слотов.
+        """
         super().__init__(parent)
 
         # Фон контейнера — темнее главного окна.
@@ -73,7 +70,6 @@ class PlannerQuickView(QWidget):
             None — пустой слот (пропускается);
             (task, color) — заполненный слот.
         """
-        # Очистка.
         while self._layout.count():
             item = self._layout.takeAt(0)
             w = item.widget()
@@ -99,15 +95,18 @@ class PlannerQuickView(QWidget):
     def update_slot(self, index: int, task, color) -> None:
         """Обновляет содержимое слота (для карусели).
 
-        Тип виджета не меняется: карусель крутит задачи одного приоритета.
-        Поэтому только текст (и прогресс для дедлайна).
+        Вход: index — номер слота; task — новая задача; color — цвет
+              полосы приоритета.
+
+        Роль: тип виджета не меняется — карусель крутит задачи
+              одного приоритета. Обновляем только текст и прогресс.
         """
         widget = self._slot_widgets[index]
         if widget is None:
             return
-        if isinstance(widget, DeadlineTaskButton):
+        if hasattr(widget, "set_task"):
             widget.set_task(task)
-        else:
+        elif hasattr(widget, "setText"):
             widget.setText(task.title)
         self._slot_task_ids[index] = task.task_id
         self._slot_tasks[index] = task
@@ -116,8 +115,11 @@ class PlannerQuickView(QWidget):
         """Обновляет прогрессбары у всех дедлайн-слотов.
 
         Роль: вызывается таймером контроллера (60 сек) — без полной
-              перерисовки слотов.
+              перерисовки слотов. Локальный импорт — DeadlineTaskButton
+              используется только здесь, чтобы не тянуть зависимость
+              в шапку модуля.
         """
+        from ui.widgets.planner_slot_buttons import DeadlineTaskButton
         for i, task in enumerate(self._slot_tasks):
             w = self._slot_widgets[i]
             if isinstance(w, DeadlineTaskButton) and task is not None:
@@ -153,84 +155,38 @@ class PlannerQuickView(QWidget):
     # ---------- Внутренние ----------
 
     def _create_widget(self, task, color, index: int):
-        """Создаёт виджет слота: DeadlineTaskButton, InstanceTaskButton
-        или QPushButton.
+        """Создаёт виджет слота.
 
-        Вход: task — PlannerTask; color — цвет полосы приоритета;
-              index — номер слота (для замыкания в сигнале).
-        Выход: QWidget-слот.
+        Вход:
+            task — PlannerTask.
+            color — цвет полосы приоритета.
+            index — номер слота (для замыкания в лямбде).
 
-        Роль: единая точка выбора виджета по типу задачи. Конкретный
-              приоритетный цвет выбирается здесь — фабрика слотов
-              про TaskPriority не знает.
+        Выход: QWidget-слот одного из трёх видов.
+
+        Роль: единая точка выбора виджета по типу задачи.
+              Конкретный цвет полосы задаётся здесь.
         """
         # DEADLINE → слот с прогрессбаром.
         if task.priority == TaskPriority.DEADLINE:
             widget = CompositeWidgetFactory.create_progress_slot(self)
-            widget.set_task(task)
-            widget.clicked.connect(
-                lambda idx=index: self._on_widget_clicked(idx)
-            )
-            return widget
-
         # EVENT → жёлтая полоса.
-        if task.is_event():
-            widget = CompositeWidgetFactory.create_striped_slot(
-                self, stripe_color=(240, 240, 40, 1.0),
-            )
-            widget.set_task(task)
-            widget.clicked.connect(
-                lambda idx=index: self._on_widget_clicked(idx)
-            )
-            return widget
-
+        elif task.is_event():
+            widget = CompositeWidgetFactory.create_event_slot(self)
         # INSTANCE → голубая полоса.
-        if task.is_recurring_instance():
+        elif task.is_recurring_instance():
             widget = CompositeWidgetFactory.create_striped_slot(
-                self, stripe_color=(80, 160, 220, 1.0),
-            )
-            widget.set_task(task)
-            widget.clicked.connect(
-                lambda idx=index: self._on_widget_clicked(idx)
-            )
-            return widget
+                self, stripe_color=(80, 160, 220, 1.0))
+        # Обычная задача → SimpleTaskButton с цветом приоритета.
+        else:
+            widget = CompositeWidgetFactory.create_simple_slot(
+                self, stripe_color=color)
 
-        # Обычная задача → QPushButton с ручной стилизацией.
-        btn = CompositeWidgetFactory.create_simple_slot(self)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setText(task.title)
-        btn.setToolTip("")
-        self._apply_regular_style(btn, color)
-        btn.clicked.connect(
-            lambda checked=False, idx=index: self._on_widget_clicked(idx)
+        widget.set_task(task)
+        widget.clicked.connect(
+            lambda idx=index: self._on_widget_clicked(idx)
         )
-        return btn
-
-    def _apply_regular_style(self, btn: QPushButton, color) -> None:
-        """Единый QSS для не-дедлайн кнопки: фон + полоса слева."""
-        stripe = BaseWidgetFactory.color_to_str(color)
-        bg = BaseWidgetFactory.color_to_str(self.SLOT_BG)
-        bg_hover = BaseWidgetFactory.color_to_str(self.SLOT_BG_HOVER)
-        bg_pressed = BaseWidgetFactory.color_to_str(self.SLOT_BG_PRESSED)
-
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {bg};
-                color: {self.SLOT_TEXT};
-                text-align: left;
-                padding: 6px 12px 6px 14px;
-                border: none;
-                border-left: 4px solid {stripe};
-                border-radius: 4px;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background-color: {bg_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {bg_pressed};
-            }}
-        """)
+        return widget
 
     def _on_widget_clicked(self, index: int) -> None:
         """Клик по слоту — испускает task_clicked с текущим task_id."""

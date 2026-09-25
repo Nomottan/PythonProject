@@ -267,6 +267,39 @@ class InfoFileHandler(HandlerV2):
             self._info_file_path(), self._format_line(record)
         )
 
+class InfoUIHandler(HandlerV2):
+    """Handler Info-канала в UI (Channel.INFO_LOG).
+
+    Роль: доставляет info-сообщения в прокручиваемый лог активного
+          окна через active_child.set_info. Если active_child нет
+          или у него нет set_info — молча выходим.
+
+    Почему без fallback: InfoFileHandler уже пишет ту же запись
+          в файл. Дублировать в errors.txt или через
+          _write_fallback не нужно — канал парный, но не резервный.
+    """
+
+    def _should_handle(self, record: LogRecordV2) -> bool:
+        """Обрабатывает только канал INFO_LOG."""
+        return record.channel == Channel.INFO_LOG
+
+    def emit(self, record: LogRecordV2) -> None:
+        """Добавляет сообщение в лог активного окна.
+
+        Вход: record — запись.
+        Роль: если у active_child есть set_info — вызываем его
+              в UI-потоке. Иначе — молча выходим (файл уже
+              обработан InfoFileHandler).
+        """
+        active_child = self._get_active_child()
+        if active_child is None:
+            return
+        if not hasattr(active_child, "set_info"):
+            return
+        msg = record.message
+        self._run_in_ui_thread(
+            lambda: active_child.set_info(msg)
+        )
 
 class ReportHandler(HandlerV2):
     """Handler журнала сервиса (Channel.REPORT).

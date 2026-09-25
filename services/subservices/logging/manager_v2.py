@@ -6,8 +6,8 @@ LogManagerV2 — фабрика логгеров V2.
 
 from .logger_v2 import LoggerV2
 from .handlers_v2 import (
-    InfoFileHandler, ReportHandler, WarningFileHandler,
-    DebugFileHandler,
+    InfoFileHandler, InfoUIHandler, ReportHandler,
+    WarningFileHandler, DebugFileHandler,
     NotificationHandler, StatusHandler, CriticalHandler,
 )
 
@@ -87,6 +87,10 @@ class LogManagerV2:
                 self._active_child_getter,
             ),
             # REPLACE: UI-каналы подключены.
+            InfoUIHandler(
+                source, work_folder, self._paths,
+                self._active_child_getter,
+            ),
             NotificationHandler(
                 source, work_folder, self._paths,
                 self._active_child_getter,

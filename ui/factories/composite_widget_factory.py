@@ -1,40 +1,36 @@
 """
 Фабрика составных виджетов.
 
-Содержит CompositeWidgetFactory — создаёт виджеты, собранные из
-нескольких элементов или требующие локальных зависимостей
-(например, PlannerRecurrenceFieldsWidget, PlannerDayPickerDialog).
-Не знает про TaskPriority — выбор приоритетных стилей делает
+Содержит CompositeWidgetFactory — создаёт виджеты-слоты для
+мини-планировщика (три варианта) и составные виджеты
+(поля правила повторения, диалог выбора чисел).
+Не знает про TaskPriority — конкретный цвет полосы выбирает
 вызывающий код.
 """
 
-from PySide6.QtWidgets import QPushButton
-
-from ui.factories.factories import (
-    BaseWidgetFactory, DeadlineTaskButton, InstanceTaskButton,
-)
+from ui.factories.base_factory import BaseWidgetFactory
 
 
 class CompositeWidgetFactory(BaseWidgetFactory):
     """Фабрика составных виджетов.
 
     Назначение:
-        Создаёт виджеты-слоты для мини-планировщика (с полосой,
-        с прогрессбаром, обычные кнопки), а также составные
-        виджеты (поля правила повторения, диалог выбора чисел).
-        Не знает про TaskPriority — конкретный стиль выбирает
-        вызывающий код.
+        Создаёт виджеты-слоты для мини-планировщика (три варианта),
+        а также составные виджеты (поля правила повторения,
+        диалог выбора чисел). Не знает про TaskPriority —
+        конкретный стиль выбирает вызывающий код.
 
     Роль в программе:
         Заменяет методы ButtonFactory.create_task_slot_button,
-        create_deadline_button, create_recurrence_fields, create_day_picker,
-        которые смешивали общий код фабрики с planner-спецификой.
+        create_deadline_button, create_recurrence_fields,
+        create_day_picker, которые смешивали общий код фабрики
+        с planner-спецификой.
 
     Публичный API:
-        create_striped_slot(parent, stripe_color) — InstanceTaskButton
-                                                    с цветной полосой.
         create_progress_slot(parent) — DeadlineTaskButton.
-        create_simple_slot(parent) — QPushButton.
+        create_striped_slot(parent, stripe_color) — InstanceTaskButton.
+        create_event_slot(parent) — EventTaskButton.
+        create_simple_slot(parent, stripe_color) — SimpleTaskButton.
         create_recurrence_fields(parent, ...) — PlannerRecurrenceFieldsWidget.
         create_day_picker(parent, selected) — PlannerDayPickerDialog.
     """
@@ -43,17 +39,20 @@ class CompositeWidgetFactory(BaseWidgetFactory):
 
     @staticmethod
     def create_striped_slot(parent, stripe_color=(80, 160, 220, 1.0)):
-        """Создаёт слот с цветной полосой слева.
+        """Создаёт слот экземпляра регулярной задачи.
 
         Вход:
             parent — родитель.
             stripe_color — цвет полосы. По умолчанию голубой
-                           (INSTANCE). Для события вызывающий код
-                           передаёт жёлтый (240, 240, 40).
+                           (INSTANCE).
 
         Выход: InstanceTaskButton.
-        Роль: используется для экземпляров регулярных задач и событий.
+
+        Роль: используется для экземпляров регулярных задач.
+              События теперь создаются через create_event_slot —
+              у них свой класс EventTaskButton с жёлтой полосой.
         """
+        from ui.widgets.planner_slot_buttons import InstanceTaskButton
         return InstanceTaskButton(parent, stripe_color=stripe_color)
 
     @staticmethod
@@ -64,18 +63,39 @@ class CompositeWidgetFactory(BaseWidgetFactory):
         Выход: DeadlineTaskButton.
         Роль: используется для дедлайн-задач.
         """
+        from ui.widgets.planner_slot_buttons import DeadlineTaskButton
         return DeadlineTaskButton(parent)
 
     @staticmethod
-    def create_simple_slot(parent):
-        """Создаёт простую кнопку-слот без стиля.
+    def create_event_slot(parent):
+        """Создаёт слот события.
 
         Вход: parent — родитель.
-        Выход: QPushButton.
-        Роль: используется для обычных задач. Стиль
-              (полоса, фон) задаёт вызывающий код.
+        Выход: EventTaskButton.
+        Роль: используется для задач с task_type == EVENT.
+              Жёлтая полоса — чтобы событие визуально выделялось.
         """
-        return QPushButton(parent)
+        from ui.widgets.planner_slot_buttons import EventTaskButton
+        return EventTaskButton(parent)
+
+    @staticmethod
+    def create_simple_slot(parent, stripe_color=(80, 160, 220, 1.0)):
+        """Создаёт слот обычной задачи.
+
+        Вход:
+            parent — родитель.
+            stripe_color — цвет полосы слева. Обычно — цвет
+                           приоритета (LOW/MEDIUM/HIGH).
+
+        Выход: SimpleTaskButton.
+
+        Роль: используется для задач без особого типа
+              (не дедлайн, не экземпляр, не событие). Заменяет
+              прежний QPushButton с ручной стилизацией — теперь
+              единая база с остальными слотами.
+        """
+        from ui.widgets.planner_slot_buttons import SimpleTaskButton
+        return SimpleTaskButton(parent, stripe_color=stripe_color)
 
     # ---------- Составные виджеты planner ----------
 

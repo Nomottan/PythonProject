@@ -7,13 +7,14 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 )
 from pathlib import Path
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from services.returns_service import (
     ReturnsPreparationService, KizExportService, KizTransferService,
 )
 from services.sales_accumulator import SalesAccumulatorService
 
 class ReturnsWindow(QMainWindow):
+    log_line = Signal(str)
     def __init__(self, parent=None, log_manager=None):
         """Окно возвратов.
 
@@ -87,6 +88,7 @@ class ReturnsWindow(QMainWindow):
         self.status_log = StatusLogFactory.create_status_log(
             self, min_height=100, max_height=200,
         )
+        self.log_line.connect(self._append_to_status_log)
         self.btn_export_kiz = ButtonFactory.create_button(
             self, "Выгрузить КИЗы для возврата", (130, 50, 100),
             padding="8px 16px", fixed_size=(220, 35)
@@ -158,9 +160,24 @@ class ReturnsWindow(QMainWindow):
             level — уровень. Оставлен для совместимости с сервисами;
                     внутри игнорируется.
 
-        Роль: все длинные сообщения сервисов идут в status_log.
-              Короткие подсказки UI по-прежнему пишет в status_label
-              через status_update.emit.
+        Роль: эмитит сигнал log_line — доставка в главный поток Qt
+              через queued connection. Вызывается из фоновых потоков
+              сервисов, поэтому напрямую трогать status_log нельзя:
+              QTextEdit — UI-объект, из другого потока это access violation.
+
+        REPLACE: раньше здесь было self.status_log.log(message) —
+        прямое обращение к QTextEdit. Оно валило приложение с
+        0xC0000005, когда сервис вызывал log_callback из
+        ThreadFactory.create_thread.
+        """
+        self.log_line.emit(message)
+
+    def _append_to_status_log(self, message: str) -> None:
+        """Слот главного потока: дописывает строку в status_log.
+
+        Вход: message — текст.
+        Роль: единая точка записи в QTextEdit. Вызывается только
+              через сигнал log_line, то есть всегда в главном потоке.
         """
         self.status_log.log(message)
 

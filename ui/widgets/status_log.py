@@ -8,8 +8,7 @@
 
 from PySide6.QtWidgets import QTextEdit
 
-from ui.factories.factories import BaseWidgetFactory
-
+from ui.factories.base_factory import BaseWidgetFactory
 
 class StatusLog(QTextEdit):
     """Лог статуса: read-only QTextEdit со стилем под фон окна.

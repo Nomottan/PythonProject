@@ -14,12 +14,12 @@
         "C:/Users/Владимир/Desktop/чз/Шаблоны/ЧЗ МП/Шилович Света.xlsx"
     ],
     "seller_prices": {
-        "Фит Икс": 358,
-        "Гаак Наташа": 1170,
-        "Котова Аня": 904,
-        "Степанов Гоша": 1838,
-        "Хорошун Ира": 1581,
-        "Шилович Света": 1347,
+        "Фит Икс": 357,
+        "Гаак Наташа": 1383,
+        "Котова Аня": 912,
+        "Степанов Гоша": 1897,
+        "Хорошун Ира": 1531,
+        "Шилович Света": 1301,
         "Шилович Настя": 1825
     },
     "sellers": [
@@ -415,7 +415,7 @@
             ]
         }
     ],
-    "last_returns_dir": "C:\\Users\\Владимир\\Desktop\\Работа",
+    "last_returns_dir": "C:\\Users\\Владимир\\Desktop",
     "last_compare_supply_dir": "C:\\Users\\Владимир\\Downloads\\Telegram Desktop",
     "last_compare_supplies_dir": "C:\\Users\\Владимир\\Downloads\\Telegram Desktop"
 }

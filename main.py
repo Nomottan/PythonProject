@@ -247,13 +247,15 @@ class MainWindow(QMainWindow):
     )
     def open_chz_mp_window(self):
         if self.chz_mp_window is None or not self.chz_mp_window.isVisible():
-            self.chz_mp_window = ChzMPWindow(self)
+            self.chz_mp_window = ChzMPWindow(
+                self, log_manager_v2=self.log_manager_v2,
+            )
             WindowFactory.show_child_window(self, self.chz_mp_window)
             self.logger.debug("open_chz_mp_window: окно создано заново")
         else:
             self.chz_mp_window.raise_()
             self.chz_mp_window.activateWindow()
-            self.logger.debug("open_chz_mp_window: окно активировано")
+            self.logger.debug("open_chz_mp_wi   ndow: окно активировано")
 
     @log_button_action(
         "open_returns_window",
