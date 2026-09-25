@@ -231,7 +231,7 @@ class KizExportService:
 
                         # NEW: передаём ctx.logger — детальные сообщения уйдут
                         # в debug.txt при включённом debug.
-                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz, logger=ctx.logger)
+                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz, logger=None)
                         if not full_cleaned_list:
                             ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
                             continue
@@ -240,7 +240,7 @@ class KizExportService:
                         safe_company = TextUtils.sanitize_filename(company_str)
 
                         for full_kiz in full_cleaned_list:
-                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz, logger=ctx.logger)
+                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz, logger=None)
                             if not storage_list:
                                 continue
                             storage_kiz = storage_list[0]
@@ -345,7 +345,7 @@ class KizTransferService:
         try:
             sheet_src = wb_src.active
             # NEW: прокидываем logger — отладочные сообщения уйдут в debug.txt.
-            sales_gen = SalesFileGenerator(ctx.sales_dir, logger=ctx.logger)
+            sales_gen = SalesFileGenerator(ctx.sales_dir, logger=None)
             KizUtils.start_stats()
 
             # NEW: счётчики для итогового INFO.

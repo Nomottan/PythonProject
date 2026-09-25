@@ -16,7 +16,6 @@ class ValidationResult(Enum):
     ADDED = "added"
     SKIPPED_NO_RETURN = "skipped_no_return"
     SKIPPED_DATE_BEFORE_RETURN = "skipped_date_before_return"
-    SKIPPED_DUPLICATE = "skipped_duplicate"
 
 class KizValidator:
     """

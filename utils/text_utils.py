@@ -91,6 +91,31 @@ class TextUtils:
         return None
 
     @staticmethod
+    def find_seller_by_file_name(file_name_lower: str, sellers) -> "Seller | None":
+        """Находит продавца по имени файла.
+
+        Вход:
+            file_name_lower — имя файла в нижнем регистре (без пути,
+                              без расширения — вызывающий код приводит сам).
+            sellers — список Seller.
+
+        Выход:
+            Первый Seller, у которого хотя бы один ключ из seller.keys
+            содержится в file_name_lower как подстрока, либо None,
+            если совпадений нет.
+
+        Роль:
+            Определение продавца по имени отчёта МП. Имена файлов
+            нестабильны, поэтому ищем не по равенству, а по вхождению
+            любого ключа продавца. Возвращаем первого — порядок
+            в sellers задаёт приоритет.
+        """
+        for seller in sellers:
+            if any(key.lower() in file_name_lower for key in seller.keys):
+                return seller
+        return None
+
+    @staticmethod
     def log_unknown_entities(unknown_dict, log_path, title, ctx):
         if not unknown_dict:
             return

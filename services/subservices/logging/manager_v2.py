@@ -51,7 +51,8 @@ class LogManagerV2:
                     pass
 
     def create_logger_v2(self, source: str, domain: str,
-                         work_folder=None) -> LoggerV2:
+                         work_folder=None,
+                         log_filename: str | None = None) -> LoggerV2:
         """Создаёт LoggerV2 для источника.
 
         Вход:
@@ -59,6 +60,10 @@ class LogManagerV2:
             domain — домен (пока не используется, зарезервирован
                      под реестр типов).
             work_folder — рабочая папка задачи (может быть None).
+            log_filename — опциональное имя файла журнала сервиса
+                           (Channel.REPORT). Если None — используется
+                           fallback log_{source}.txt в папке «Логи».
+                           Пример: "log_подготовка.txt".
 
         Выход: LoggerV2.
 
@@ -74,9 +79,11 @@ class LogManagerV2:
                 source, work_folder, self._paths,
                 self._active_child_getter,
             ),
+            # REPLACE: в ReportHandler пробрасывается log_filename.
             ReportHandler(
                 source, work_folder, self._paths,
                 self._active_child_getter,
+                log_filename,
             ),
             WarningFileHandler(
                 source, work_folder, self._paths,
@@ -86,7 +93,7 @@ class LogManagerV2:
                 source, work_folder, self._paths,
                 self._active_child_getter,
             ),
-            # REPLACE: UI-каналы подключены.
+            # UI-каналы.
             InfoUIHandler(
                 source, work_folder, self._paths,
                 self._active_child_getter,

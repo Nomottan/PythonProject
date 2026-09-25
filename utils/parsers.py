@@ -4,21 +4,15 @@
 Модуль собирает в одном месте все операции преобразования строк
 в типизированные значения: даты, числа, имена файлов, КИЗы.
 
-Зачем нужен:
-    Раньше парсинг был размазан по сервисам — каждый писал свой
-    try/except и свои форматы. Модуль фиксирует единый контракт:
-    все методы возвращают None при ошибке и НИКОГДА не бросают
-    исключений. Это упрощает вызывающий код: не нужен try/except
-    в каждой точке, достаточно проверить на None.
-
 Использование:
     from utils.parsers import DateParser, NumberParser
     d = DateParser.parse_dotted("25.12.2025")   # date(2025, 12, 25)
     n = NumberParser.to_int("1 234")            # 1234
     bad = DateParser.parse_dotted("abc")        # None
 """
-
+from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 import re
 
@@ -176,6 +170,28 @@ class NumberParser(BaseParser):
         except (ValueError, TypeError):
             return None
 
+    @staticmethod
+    def is_numeric(value) -> bool:
+        """Проверяет, что значение — число (int, float, Decimal), но не bool.
+
+        Вход:
+            value — значение любого типа (обычно — содержимое ячейки Excel).
+
+        Выход:
+            True — если value является int, float или Decimal.
+            False — для bool, None, str и всего остального.
+
+        Роль:
+            Отличает «уже число» от «строки, которую ещё нужно
+            распарсить» и от «пустого значения». Используется там,
+            где не нужно парсить строку, а нужно только отделить
+            числовые ячейки от нечисловых.
+        """
+        # bool проверяем ПЕРВЫМ: он подкласс int, поэтому обычный
+        # isinstance(True, (int, float, Decimal)) дал бы True.
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, (int, float, Decimal))
 
 class FilenameParser(BaseParser):
     """Парсер имён файлов.
@@ -243,3 +259,75 @@ class KizParser(BaseParser):
             return None
         cleaned = KizParser._CLEAN_RE.sub("", str(text)).lower()
         return cleaned or None
+
+@dataclass
+class PreFinalRow:
+    """Одна строка предитогового файла ЧЗ МП.
+
+    Роль:
+        Типизированное представление строки листа «предитоговый
+        файл продавца». Заменяет набор магических индексов
+        row[1] / row[5] / row[6] / row[11] именованными полями.
+        Используется GenerateSalesService при построении файлов
+        продаж между продавцами.
+
+    Поля:
+        kiz — полный КИЗ из столбца B.
+        owner_company — компания-владелец КИЗа из столбца L.
+        brand — бренд товара из столбца G.
+        product_name — наименование продукта из столбца F.
+    """
+    kiz: str
+    owner_company: str
+    brand: str
+    product_name: str
+
+    @classmethod
+    def from_row(cls, row: tuple,
+                 min_columns: int = 12) -> "PreFinalRow | None":
+        """Создаёт PreFinalRow из строки листа Excel.
+
+        Вход:
+            row — кортеж значений строки (как выдаёт openpyxl
+                  в режиме values_only=True).
+            min_columns — минимальная длина row. Если фактическая
+                          длина меньше — строка считается
+                          некорректной и метод вернёт None.
+
+        Выход:
+            PreFinalRow, если удалось прочитать КИЗ и владельца.
+            None — если row короче min_columns, либо КИЗ пустой,
+            либо владелец пустой.
+
+        Роль:
+            Единственная точка знания о раскладке столбцов
+            предитогового файла. Значения приводятся к str и
+            очищаются от краевых пробелов; None становится "".
+            Если КИЗ или владелец пусты — строка не имеет смысла
+            для дальнейшей обработки и отбрасывается здесь.
+        """
+        if len(row) < min_columns:
+            return None
+
+        def _to_str(value) -> str:
+            """Приводит значение ячейки к строке без краевых пробелов.
+
+            Вход: value — значение из row.
+            Выход: str; пустая строка, если value is None.
+            """
+            return str(value).strip() if value is not None else ""
+
+        kiz = _to_str(row[1])
+        product_name = _to_str(row[5])
+        brand = _to_str(row[6])
+        owner_company = _to_str(row[11])
+
+        if not kiz or not owner_company:
+            return None
+
+        return cls(
+            kiz=kiz,
+            owner_company=owner_company,
+            brand=brand,
+            product_name=product_name,
+        )

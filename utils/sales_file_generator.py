@@ -4,7 +4,7 @@ from typing import List, Dict, Optional
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.kiz_utils import KizUtils
-from utils.log_system.logger import Logger
+from services.subservices.logging import LoggerV2
 
 
 class SalesFileGenerator:
@@ -22,24 +22,24 @@ class SalesFileGenerator:
     ]
 
     def __init__(self, work_folder: Path, headers: Optional[List[str]] = None,
-                 logger: Optional[Logger] = None):
+                 logger: Optional[LoggerV2] = None):
         """Генератор файлов продаж.
 
         Вход:
             work_folder — папка, куда складываются файлы.
             headers — заголовки столбцов; None → DEFAULT_HEADERS.
-            logger — опциональный Logger из пакета log_system. Если передан,
-                     отладочные сообщения идут через него (в debug.txt при
+            logger — опциональный LoggerV2. Если передан, отладочные
+                     сообщения идут через него (в debug.txt при
                      включённом debug). Если нет — fallback на print.
 
-        Роль: сервис может создавать генератор с логгером (новый путь)
-              или без (легаси-путь). Поведение не ломается.
+        Роль:
+            Сервис может создавать генератор с логгером V2 (новый путь)
+            или без него (легаси-путь). Поведение не ломается.
         """
         self.work_folder = work_folder
         self.headers = headers or self.DEFAULT_HEADERS
         self.created_files: List[Path] = []
         self._stats: Dict[tuple, int] = {}
-        # NEW: сохраняем logger. Может быть None — тогда используется print.
         self._logger = logger
 
     def add_sale_row(self,

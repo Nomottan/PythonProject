@@ -1,8 +1,12 @@
 from pathlib import Path
 import xlrd, sys, csv, re, openpyxl
 from openpyxl import Workbook
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, TYPE_CHECKING
 from utils.text_utils import TextUtils
+from utils.parsers import NumberParser
+
+if TYPE_CHECKING:
+    from services.subservices.logging import LoggerV2
 
 class ExcelHelper:
     @staticmethod
@@ -349,6 +353,152 @@ class ExcelHelper:
             return is_empty
         except Exception:
             return True
+
+        # ---------- Логирование через LoggerV2 ----------
+
+    @staticmethod
+    def open_workbook_with_logger(file_path, logger,
+                                  description: str = "файл",
+                                  read_only: bool = False,
+                                  data_only: bool = True,
+                                  auto_fallback: bool = True):
+        """Открывает workbook и логирует результат через LoggerV2.
+
+        Вход:
+            file_path — путь к файлу.
+            logger — LoggerV2 для сообщений об ошибке и fallback.
+            description — описание для сообщений («отчёт МП»).
+            read_only — открывать ли в read-only (для .xlsx/.xlsm).
+            data_only — читать значения вместо формул.
+            auto_fallback — при read_only=True проверяет «схлопнутость»
+                            атрибута dimension и переоткрывает файл
+                            без read_only.
+
+        Выход:
+            openpyxl workbook или обёртка XlsReader/CsvReader, либо None.
+
+        Роль:
+            Аналог open_workbook_with_ctx для сервисов, работающих
+            через LoggerV2. Ошибка открытия уходит в critical,
+            fallback — в warning. Существующий open_workbook_with_ctx
+            остаётся для сервисов на старой системе логирования.
+        """
+        wb = ExcelHelper.open_workbook_safe(
+            file_path, read_only=read_only, data_only=data_only
+        )
+        if wb is None:
+            logger.critical(
+                f"Ошибка открытия {description}: {Path(file_path).name}",
+                can_influence=False,
+            )
+            return None
+
+        # Fallback имеет смысл только для .xlsx/.xlsm (openpyxl) и только
+        # при read_only=True. Для .xls (xlrd) и .csv (CsvReader) dimension
+        # не используется, там другой механизм чтения.
+        suffix = Path(file_path).suffix.lower()
+        if auto_fallback and read_only and suffix in ('.xlsx', '.xlsm'):
+            if ExcelHelper._is_dimension_broken(wb):
+                try:
+                    wb.close()
+                except Exception as e:
+                    sys.stderr.write(
+                        f"[ExcelHelper] Ошибка закрытия wb перед fallback: {e}\n"
+                    )
+                logger.warning(
+                    f"Файл {Path(file_path).name} не содержит корректного "
+                    f"dimension. Переоткрываю без read_only."
+                )
+                wb = ExcelHelper.open_workbook_safe(
+                    file_path, read_only=False, data_only=data_only
+                )
+                if wb is None:
+                    logger.critical(
+                        f"Ошибка повторного открытия {description}: "
+                        f"{Path(file_path).name}",
+                        can_influence=False,
+                    )
+                    return None
+
+        return wb
+
+    @staticmethod
+    def is_column_numeric(file_path, price_col: int, kiz_col: int,
+                          logger, header: str = "КИЗ") -> bool:
+        """Проверяет, что все непустые цены в столбце — числа.
+
+        Вход:
+            file_path — путь к файлу.
+            price_col — номер столбца с ценой (1-based).
+            kiz_col — номер столбца с КИЗ (1-based).
+            logger — LoggerV2 для сообщений об ошибках открытия.
+            header — значение КИЗ-ячейки в шапке, которое пропускается
+                     (по умолчанию "КИЗ").
+
+        Выход:
+            True — если во всех строках с непустым КИЗ цена числовая.
+            False — если хотя бы одна такая цена не число; если файл
+                    не открылся; если строк с КИЗ нет вовсе.
+
+        Роль:
+            Определяет, обработан ли уже файл — все ли цены
+            проставлены. Строки без КИЗ и строка заголовка
+            (значение == header) в проверке не участвуют.
+            Ранний выход False при первой нечисловой цене.
+        """
+        wb = ExcelHelper.open_workbook_with_logger(
+            file_path, logger, description="проверка итога",
+            read_only=False, data_only=True,
+        )
+        if wb is None:
+            return False
+        try:
+            sheet = wb.active
+            if sheet.max_row < 2:
+                return False
+            for row_idx in range(2, sheet.max_row + 1):
+                kiz_cell = sheet.cell(row=row_idx, column=kiz_col)
+                kiz = (
+                    str(kiz_cell.value).strip()
+                    if kiz_cell.value is not None else ""
+                )
+                if not kiz or kiz == header:
+                    continue
+                price_cell = sheet.cell(row=row_idx, column=price_col)
+                if not NumberParser.is_numeric(price_cell.value):
+                    return False
+            return True
+        finally:
+            wb.close()
+
+    @staticmethod
+    def rewrite_sheet(file_path, headers, rows,
+                      sheet_name: str = "Лист1") -> None:
+        """Перезаписывает файл: новые заголовки и строки.
+
+        Вход:
+            file_path — путь к файлу (тот же, что перезаписываем).
+            headers — список заголовков. None или пустой → пишем только строки.
+            rows — итерируемое строк для записи. Каждая строка — список значений.
+            sheet_name — имя листа в новом файле.
+
+        Выход: нет.
+
+        Роль:
+            Создаёт новый workbook, пишет заголовки и строки, сохраняет
+            по исходному пути. Исходное содержимое файла полностью
+            заменяется. Аналог ручной перезаписи в
+            FilterPreFinalService.filter_files.
+        """
+        new_wb, new_ws = ExcelHelper.create_workbook_with_headers(
+            headers or [], sheet_name=sheet_name
+        )
+        try:
+            for row in rows:
+                new_ws.append(row)
+            new_wb.save(file_path)
+        finally:
+            new_wb.close()
 
 class CsvReader:
     """Адаптер для чтения CSV-файлов как Excel-листа."""

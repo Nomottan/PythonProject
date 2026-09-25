@@ -15,22 +15,23 @@
 from pathlib import Path
 from openpyxl import load_workbook
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QApplication,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QMetaObject, Q_ARG, Slot, QThread
 from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
     FileDialogFactory, ThreadFactory, WindowFactory, StatusLogFactory,
 )
 from ui.widgets.path_selector import PathSelector
-from ui.windows.shared_dialogs import PricesEditWindow
+from ui.windows.shared_dialogs import (
+    PricesEditWindow, AveragePriceInputDialog,
+)
 from services.sells_fbs_service import (
     PreparationService, ExportKizService,
     FilterPreFinalService, GenerateSalesService, FinalizePricesService,
 )
 from services.sales_accumulator import SalesAccumulatorService
 from ui.windows.message_dialog import NotificationDialog
-# NEW: декоратор для обработчиков кнопок.
 from utils.log_tools.decorators import log_button_action
 
 
@@ -42,6 +43,15 @@ class ChzMPWindow(QMainWindow):
           ThreadFactory. Логи шагов идут в status_display;
           короткие подсказки — в status_label.
     """
+    PIPELINE_BUTTONS = (
+        "btn_prepare",
+        "btn_export_kiz",
+        "btn_filter_prefinal",
+        "btn_generate_sales",
+        "btn_finalize_prices",
+        "btn_fbs",
+        "btn_reports",
+    )
 
     def __init__(self, parent=None, log_manager_v2=None):
         """Конструктор.
@@ -54,7 +64,8 @@ class ChzMPWindow(QMainWindow):
         """
         super().__init__(parent)
 
-        # NEW: создаём logger из LogManagerV2 (если передан).
+        self.log_manager_v2 = log_manager_v2
+
         self.logger = None
         if log_manager_v2 is not None:
             self.logger = log_manager_v2.create_logger_v2(
@@ -260,6 +271,111 @@ class ChzMPWindow(QMainWindow):
         self.btn_generate_sales.setEnabled(False)
         self.btn_finalize_prices.setEnabled(False)
 
+    # ---------- Общая обвязка шагов пайплайна ----------
+
+    def _precheck_target_dir(self) -> bool:
+        """Проверяет, что выбрана целевая папка.
+
+            Вход: нет.
+            Выход:
+                True — папка выбрана, шаг можно запускать.
+                False — папки нет, в status_display записано предупреждение.
+
+            Роль:
+                Единая точка проверки target_dir для всех пяти шагов
+                пайплайна. Раньше одинаковый блок повторялся в каждом
+                обработчике.
+        """
+        if not self.target_dir:
+            self.status_display.append("Сначала выберите целевую папку")
+            return False
+        return True
+
+    def _current_sellers(self) -> list:
+        """Возвращает актуальный список продавцов.
+
+        Вход: нет.
+        Выход: список Seller из SellersBrandsService родителя.
+
+        Роль:
+            Единая точка получения sellers для шагов пайплайна.
+            Раньше одинаковый вызов повторялся в каждом обработчике.
+        """
+        return self.parent().sellers_brands_service.get_sellers_objects()
+
+    def _run_pipeline_step(self, *, service, target_method,
+                               kwargs: dict, start_message: str,
+                               finish_message: str, step_name: str,
+                               enable_after=None) -> None:
+        """Запускает шаг пайплайна в фоновом потоке.
+
+            Вход (все параметры именованные — так защищаемся от перепутывания
+            длинного списка похожих по типу аргументов):
+                service — уже созданный экземпляр сервиса.
+                target_method — bound method сервиса, который нужно
+                                выполнить в потоке (service.prepare,
+                                service.export, ...).
+                kwargs — доп. именованные аргументы target_method.
+                         target_dir и sellers добавляются здесь
+                         автоматически. Дополнительно каждый шаг может
+                         передать свои (fbs_files/mp_files/saved_prices).
+                start_message — текст для status_display в начале шага.
+                finish_message — текст для status_display при успехе.
+                step_name — префикс для сообщений в logger окна, например
+                            "on_prepare". Нужен, чтобы debug-логи
+                            различались между шагами.
+                enable_after — виджет QPushButton, который нужно включить
+                               после успешного завершения. None — если
+                               включать нечего (последний шаг пайплайна).
+
+            Выход: нет.
+
+            Роль:
+                Единая обвязка пяти шагов: очистка и заполнение
+                status_display, колбэки on_finished/on_error, вызов
+                ThreadFactory с фиксированным списком блокируемых
+                кнопок. Тело каждого публичного обработчика теперь —
+                создание сервиса + вызов этого метода.
+        """
+        self.status_display.clear()
+        self.status_display.append(start_message)
+
+        def on_finished():
+            """Вызывается в UI-потоке после успешного завершения шага."""
+            self.status_display.append(finish_message)
+            if enable_after is not None:
+                enable_after.setEnabled(True)
+            if self.logger:
+                self.logger.debug(f"{step_name}: фоновый поток завершён")
+
+        def on_error(e):
+            """Вызывается в UI-потоке при исключении в фоновом потоке.
+
+            Вход: e — пойманное исключение.
+            """
+            self.status_display.append(f"{finish_message.rstrip('.')} — ошибка: {e}")
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в {step_name}: {e}", can_influence=False,
+                    )
+
+        # Собираем финальные kwargs: target_dir и sellers — общие
+        # для всех шагов. Доп. параметры шага не должны их перекрывать.
+        call_kwargs = {
+            "target_dir": self.target_dir,
+            "sellers": self._current_sellers(),
+        }
+        call_kwargs.update(kwargs)
+
+        ThreadFactory.create_thread(
+            parent=self,
+            buttons=list(self.PIPELINE_BUTTONS),
+            target_func=target_method,
+            kwargs=call_kwargs,
+            on_finished=on_finished,
+            error_callback=on_error,
+        )
+
     @log_button_action("btn_fbs", "Ошибка при выборе файлов ЧЗ МП: {e}")
     def select_fbs_files(self):
         """Открывает диалог выбора файлов ЧЗ МП.
@@ -330,222 +446,126 @@ class ChzMPWindow(QMainWindow):
     @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
     def on_prepare(self):
         """Шаг 1: подготовка — копирование файлов в рабочую папку."""
-        if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+        if not self._precheck_target_dir():
             return
+        # Дополнительная проверка шага: должен быть хоть один файл.
         if not self.fbs_files and not self.mp_files:
-            self.status_display.append("Как насчёт добавить хоть один отчётик?")
+            self.status_display.append(
+                "Как насчёт добавить хоть один отчётик?"
+            )
             return
 
-        sellers = self.parent().sellers_brands_service.get_sellers_objects()
-        self.status_display.clear()
-        self.status_display.append("Идёт подготовка...")
-
-        service = PreparationService(self.parent().kiz_validator)
+        service = PreparationService(
+            self.parent().kiz_validator, self.log_manager_v2,
+        )
         if self.logger:
             self.logger.debug("on_prepare: PreparationService создан")
 
-        def on_finished():
-            self.status_display.append("Подготовка завершена.")
-            self.btn_export_kiz.setEnabled(True)
-            if self.logger:
-                self.logger.debug("on_prepare: фоновый поток завершён")
-
-        def on_error(e):
-            self.status_display.append(f"Ошибка подготовки: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в on_prepare: {e}", can_influence=False,
-                )
-
-        ThreadFactory.create_thread(
-            parent=self,
-            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
-                     "btn_generate_sales", "btn_finalize_prices",
-                     "btn_fbs", "btn_reports"],
-            target_func=service.prepare,
+        self._run_pipeline_step(
+            service=service,
+            target_method=service.prepare,
             kwargs={
-                "target_dir": self.target_dir,
                 "fbs_files": self.fbs_files,
                 "mp_files": self.mp_files,
-                "sellers": sellers,
-                "log_callback": None
             },
-            on_finished=on_finished,
-            error_callback=on_error
+            start_message="Идёт подготовка...",
+            finish_message="Подготовка завершена.",
+            step_name="on_prepare",
+            enable_after=self.btn_export_kiz,
         )
 
     @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
     def on_export_kiz(self):
         """Шаг 2: выгрузка КИЗов из ЧЗ_МП и отчётов МП."""
-        if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+        if not self._precheck_target_dir():
             return
 
-        sellers = self.parent().sellers_brands_service.get_sellers_objects()
-        self.status_display.clear()
-        self.status_display.append("Выгрузка КИЗов для обработки...")
-
-        service = ExportKizService(self.parent().kiz_validator)
+        service = ExportKizService(
+            self.parent().kiz_validator, self.log_manager_v2,
+        )
         if self.logger:
             self.logger.debug("on_export_kiz: ExportKizService создан")
 
-        def on_finished():
-            self.status_display.append("Выгрузка завершена.")
-            self.btn_filter_prefinal.setEnabled(True)
-            if self.logger:
-                self.logger.debug("on_export_kiz: фоновый поток завершён")
-
-        def on_error(e):
-            self.status_display.append(f"Ошибка выгрузки: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в on_export_kiz: {e}", can_influence=False,
-                )
-
-        ThreadFactory.create_thread(
-            parent=self,
-            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
-                     "btn_generate_sales", "btn_finalize_prices",
-                     "btn_fbs", "btn_reports"],
-            target_func=service.export,
-            kwargs={
-                "target_dir": self.target_dir,
-                "sellers": sellers,
-                "log_callback": None
-            },
-            on_finished=on_finished,
-            error_callback=on_error
+        self._run_pipeline_step(
+            service=service,
+            target_method=service.export,
+            kwargs={},
+            start_message="Выгрузка КИЗов для обработки...",
+            finish_message="Выгрузка завершена.",
+            step_name="on_export_kiz",
+            enable_after=self.btn_filter_prefinal,
         )
 
     @log_button_action("btn_filter_prefinal", "Ошибка в on_filter_prefinal: {e}")
     def on_filter_prefinal(self):
         """Шаг 3: фильтрация предитоговых файлов."""
-        if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+        if not self._precheck_target_dir():
             return
 
-        sellers = self.parent().sellers_brands_service.get_sellers_objects()
-        self.status_display.clear()
-        self.status_display.append("Фильтрация предитоговых файлов...")
-
-        service = FilterPreFinalService()
+        service = FilterPreFinalService(self.log_manager_v2)
         if self.logger:
-            self.logger.debug("on_filter_prefinal: FilterPreFinalService создан")
+            self.logger.debug(
+                "on_filter_prefinal: FilterPreFinalService создан"
+            )
 
-        def on_finished():
-            self.status_display.append("Сбор данных завершён.")
-            self.btn_generate_sales.setEnabled(True)
-            if self.logger:
-                self.logger.debug("on_filter_prefinal: фоновый поток завершён")
-
-        def on_error(e):
-            self.status_display.append(f"Ошибка фильтрации: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в on_filter_prefinal: {e}", can_influence=False,
-                )
-
-        ThreadFactory.create_thread(
-            parent=self,
-            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
-                     "btn_generate_sales", "btn_finalize_prices",
-                     "btn_fbs", "btn_reports"],
-            target_func=service.filter_files,
-            kwargs={
-                "target_dir": self.target_dir,
-                "sellers": sellers,
-                "log_callback": None
-            },
-            on_finished=on_finished,
-            error_callback=on_error
+        self._run_pipeline_step(
+            service=service,
+            target_method=service.filter_files,
+            kwargs={},
+            start_message="Фильтрация предитоговых файлов...",
+            finish_message="Сбор данных завершён.",
+            step_name="on_filter_prefinal",
+            enable_after=self.btn_generate_sales,
         )
 
     @log_button_action("btn_generate_sales", "Ошибка в on_generate_sales: {e}")
     def on_generate_sales(self):
         """Шаг 4: формирование файлов продаж между продавцами."""
-        if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+        if not self._precheck_target_dir():
             return
 
-        sellers = self.parent().sellers_brands_service.get_sellers_objects()
-        self.status_display.clear()
-        self.status_display.append("Формирование файлов продаж...")
-
-        service = GenerateSalesService()
+        service = GenerateSalesService(self.log_manager_v2)
         if self.logger:
-            self.logger.debug("on_generate_sales: GenerateSalesService создан")
+            self.logger.debug(
+                "on_generate_sales: GenerateSalesService создан"
+            )
 
-        def on_finished():
-            self.status_display.append("Продажи сформированы.")
-            self.btn_finalize_prices.setEnabled(True)
-            if self.logger:
-                self.logger.debug("on_generate_sales: фоновый поток завершён")
-
-        def on_error(e):
-            self.status_display.append(f"Ошибка формирования продаж: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в on_generate_sales: {e}", can_influence=False,
-                )
-
-        ThreadFactory.create_thread(
-            parent=self,
-            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
-                     "btn_generate_sales", "btn_finalize_prices",
-                     "btn_fbs", "btn_reports"],
-            target_func=service.generate,
-            kwargs={
-                "target_dir": self.target_dir,
-                "sellers": sellers,
-                "log_callback": None
-            },
-            on_finished=on_finished,
-            error_callback=on_error
+        self._run_pipeline_step(
+            service=service,
+            target_method=service.generate,
+            kwargs={},
+            start_message="Формирование файлов продаж...",
+            finish_message="Продажи сформированы.",
+            step_name="on_generate_sales",
+            enable_after=self.btn_finalize_prices,
         )
 
     @log_button_action("btn_finalize_prices", "Ошибка в on_finalize_prices: {e}")
     def on_finalize_prices(self):
         """Шаг 5: установка цен и финализация ИТОГ-файлов."""
-        if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+        if not self._precheck_target_dir():
             return
 
-        sellers = self.parent().sellers_brands_service.get_sellers_objects()
         saved_prices = self.parent().main_config.get("seller_prices", {})
-        self.status_display.clear()
-        self.status_display.append("Внесение цен и финализация...")
 
-        service = FinalizePricesService(self.parent().kiz_validator)
+        service = FinalizePricesService(
+            self.parent().kiz_validator,
+            self.log_manager_v2,
+            price_requester=self._request_average_price,
+        )
         if self.logger:
-            self.logger.debug("on_finalize_prices: FinalizePricesService создан")
+            self.logger.debug(
+                "on_finalize_prices: FinalizePricesService создан"
+            )
 
-        def on_finished():
-            self.status_display.append("Цены установлены, файлы финализированы.")
-            if self.logger:
-                self.logger.debug("on_finalize_prices: фоновый поток завершён")
-
-        def on_error(e):
-            self.status_display.append(f"Ошибка установки цен: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в on_finalize_prices: {e}", can_influence=False,
-                )
-
-        ThreadFactory.create_thread(
-            parent=self,
-            buttons=["btn_prepare", "btn_export_kiz", "btn_filter_prefinal",
-                     "btn_generate_sales", "btn_finalize_prices",
-                     "btn_fbs", "btn_reports"],
-            target_func=service.finalize,
-            kwargs={
-                "target_dir": self.target_dir,
-                "sellers": sellers,
-                "saved_prices": saved_prices,
-                "log_callback": None
-            },
-            on_finished=on_finished,
-            error_callback=on_error
+        self._run_pipeline_step(
+            service=service,
+            target_method=service.finalize,
+            kwargs={"saved_prices": saved_prices},
+            start_message="Внесение цен и финализация...",
+            finish_message="Цены установлены, файлы финализированы.",
+            step_name="on_finalize_prices",
+            enable_after=None,
         )
 
     @log_button_action("btn_prices", "Ошибка при открытии окна цен: {e}")
@@ -563,6 +583,73 @@ class ChzMPWindow(QMainWindow):
             main_config=self.parent().main_config,
         )
         window.exec()
+
+        # ---------- Диалог средней цены ----------
+
+        def _request_average_price(self, seller_name: str) -> int | None:
+            """Callback от FinalizePricesService: спросить цену у пользователя.
+
+            Вход:
+                seller_name — имя продавца (для текста диалога).
+
+            Выход:
+                int — цена, введённая пользователем; None — отмена.
+
+            Роль:
+                Вызывается из фонового потока сервиса. Если текущий
+                поток — главный (UI), открывает диалог напрямую.
+                Иначе — через QMetaObject.invokeMethod с
+                BlockingQueuedConnection: фон ждёт, пока главный поток
+                выполнит слот _show_price_dialog_slot, в котором
+                открывается диалог и результат пишется в self._price_response.
+            """
+            # Сброс предыдущего ответа — чтобы случайно не вернуть
+            # цену из прошлого вызова.
+            self._price_response = None
+
+            app = QApplication.instance()
+            if app is None:
+                # Qt не запущен — сервис работает вне UI, диалог
+                # показать не можем. Возвращаем None: сервис пропустит
+                # продавца, как если бы пользователь отменил.
+                return None
+
+            if QThread.currentThread() == app.thread():
+                # Мы уже в UI-потоке — открываем напрямую.
+                self._show_price_dialog_slot(seller_name)
+            else:
+                # Фоновый поток — переключаемся в главный через
+                # BlockingQueuedConnection. Слот выполнится в главном
+                # потоке, а мы дождёмся его завершения.
+                QMetaObject.invokeMethod(
+                    self,
+                    "_show_price_dialog_slot",
+                    Qt.BlockingQueuedConnection,
+                    Q_ARG(str, seller_name),
+                )
+            return self._price_response
+
+        @Slot(str)
+        def _show_price_dialog_slot(self, seller_name: str) -> None:
+            """Открывает диалог ввода средней цены в UI-потоке.
+
+            Вход:
+                seller_name — имя продавца.
+
+            Выход: нет.
+
+            Роль:
+                Выполняется в главном потоке. Открывает
+                AveragePriceInputDialog, ждёт результата через .exec()
+                (не .exec_() — тот deprecated), сохраняет цену
+                в self._price_response. Parent — self (окно), чтобы
+                диалог центрировался относительно окна и был модальным.
+            """
+            dialog = AveragePriceInputDialog(self, seller_name)
+            if dialog.exec():
+                self._price_response = dialog.get_price()
+            else:
+                self._price_response = None
 
     @log_button_action("btn_accumulate_sales", "Ошибка в on_accumulate_sales: {e}")
     def on_accumulate_sales(self):

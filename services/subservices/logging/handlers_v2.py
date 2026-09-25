@@ -304,19 +304,61 @@ class InfoUIHandler(HandlerV2):
 class ReportHandler(HandlerV2):
     """Handler журнала сервиса (Channel.REPORT).
 
-    Роль: пишет пошаговый журнал сервиса в
-          work_folder / "Логи" / f"log_{source}.txt".
+    Роль: пишет пошаговый журнал сервиса. Имя файла берётся из
+          log_filename, если он передан при создании. Иначе —
+          fallback на исторический формат log_{source}.txt
+          (обратная совместимость с уже существующими логгерами,
+          которые создавались без явного имени файла).
+
+    Поля:
+        _log_filename — имя файла журнала (например, "log_подготовка.txt"),
+                        либо None, если используется fallback.
     """
+
+    def __init__(self, source: str, work_folder=None, paths=None,
+                 active_child_getter=None,
+                 log_filename: str | None = None):
+        """Конструктор.
+
+        Вход:
+            source — идентификатор источника ("Class.module").
+            work_folder — рабочая папка задачи (может быть None).
+            paths — PathManager (для fallback-каналов).
+            active_child_getter — callable, возвращающий active_child
+                                  (ReportHandler его не использует, но
+                                  принимает для единого контракта с
+                                  другими handler'ами).
+            log_filename — имя файла журнала. Если None — используется
+                           fallback log_{source}.txt.
+
+        Роль: сохраняет log_filename и делегирует остальную инициализацию
+              в HandlerV2.
+        """
+        super().__init__(source, work_folder, paths, active_child_getter)
+        # NEW: имя файла журнала. None означает «использовать fallback».
+        self._log_filename: str | None = log_filename
 
     def _should_handle(self, record: LogRecordV2) -> bool:
         """Обрабатывает только канал REPORT."""
         return record.channel == Channel.REPORT
 
     def emit(self, record: LogRecordV2) -> None:
-        """Пишет строку в файл журнала сервиса."""
+        """Пишет строку в файл журнала сервиса.
+
+        Вход: record — запись лога.
+        Выход: нет.
+        Роль: вычисляет путь к файлу по правилу:
+              - если self._log_filename задан → work_folder/Логи/log_filename;
+              - иначе → work_folder/Логи/log_{source}.txt (fallback).
+              Если work_folder не задан — писать некуда, молча выходим.
+        """
         if self._work_folder is None:
             return
-        path = self._work_folder / "Логи" / f"log_{self._source}.txt"
+        # REPLACE: было f"log_{self._source}.txt" — стало вычисление имени
+        # с учётом log_filename. Fallback сохранён, чтобы старые вызовы
+        # create_logger_v2(source, domain) без log_filename работали как раньше.
+        filename = self._log_filename or f"log_{self._source}.txt"
+        path = self._work_folder / "Логи" / filename
         self._append_to_file(path, self._format_line(record))
 
 
