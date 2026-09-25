@@ -331,3 +331,79 @@ class PreFinalRow:
             brand=brand,
             product_name=product_name,
         )
+@dataclass
+class ReturnsRow:
+    """Одна строка файла возвратов.
+
+    Роль:
+        Типизированное представление строки файла «Возвраты_{date}.xlsx»
+        (тот, что создаётся ReturnsPreparationService). Заменяет набор
+        магических индексов row[0] / row[1] / row[2] / row[3] / row[5]
+        именованными полями. Используется ReturnsTransferReader при
+        подготовке передач КИЗов между продавцами.
+
+    Поля:
+        kiz — полный КИЗ из столбца A.
+        status — статус операции из столбца B (например, «ВЫБЫЛ»).
+        product_name — наименование продукта из столбца C.
+        brand — бренд товара из столбца D.
+        owner_company — компания-владелец КИЗа из столбца F.
+
+    Примечание:
+        Столбец E (индекс row[4]) в файле есть, но в этом dataclass
+        намеренно не включается: он не используется ни одним
+        сценарием. Оставлен в исходном файле и в списке
+        COLUMNS_TO_KEEP — потери данных нет.
+    """
+    kiz: str
+    status: str
+    product_name: str
+    brand: str
+    owner_company: str
+
+    @classmethod
+    def from_row(cls, row: tuple,
+                 min_columns: int = 6) -> "ReturnsRow | None":
+        """Создаёт ReturnsRow из строки файла возвратов.
+
+        Вход:
+            row — кортеж значений строки (как выдаёт openpyxl
+                  в режиме values_only=True).
+            min_columns — минимальная длина row. Если фактическая
+                          длина меньше — строка считается
+                          некорректной и метод вернёт None.
+
+        Выход:
+            ReturnsRow, если удалось прочитать КИЗ.
+            None — если row короче min_columns либо КИЗ пустой.
+
+        Роль:
+            Единственная точка знания о раскладке столбцов файла
+            возвратов. Значения приводятся к str и очищаются от
+            краевых пробелов; None становится "". Если КИЗ пуст —
+            строка бесполезна для дальнейшей обработки и
+            отбрасывается здесь. Пустой brand или owner_company
+            не отбрасывается: вызывающий код решает сам.
+        """
+        if len(row) < min_columns:
+            return None
+
+        def _to_str(value) -> str:
+            """Приводит значение ячейки к строке без краевых пробелов.
+
+            Вход: value — значение из row.
+            Выход: str; пустая строка, если value is None.
+            """
+            return str(value).strip() if value is not None else ""
+
+        kiz = _to_str(row[0])
+        if not kiz:
+            return None
+
+        return cls(
+            kiz=kiz,
+            status=_to_str(row[1]),
+            product_name=_to_str(row[2]),
+            brand=_to_str(row[3]),
+            owner_company=_to_str(row[5]),
+        )
