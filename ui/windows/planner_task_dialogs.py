@@ -113,7 +113,20 @@ class NewTaskDialog(BaseTaskDialog):
         self.deadline_type_combo.setVisible(False)
 
         # --- Поля правила повторения ---
-        self._recurrence_fields = CompositeWidgetFactory.create_recurrence_fields(self)
+        initial = None
+        if (not self.creator
+                and self._task.priority == TaskPriority.RECURRING
+                and self._task.recurrence_type):
+            initial = {
+                "type": self._task.recurrence_type,
+                "value": self._task.recurrence_value,
+                "weekdays": self._task.recurrence_weekdays,
+                "monthdays": self._task.recurrence_monthdays,
+                "use_last_day": self._task.recurrence_use_last_day,
+            }
+        self._recurrence_fields = CompositeWidgetFactory.create_recurrence_fields(
+            self, initial,
+        )
         self._recurrence_fields.setVisible(False)
         self._recurrence_fields.rule_combo.setVisible(False)
 
@@ -192,16 +205,19 @@ class NewTaskDialog(BaseTaskDialog):
 
         # --- Предзаполнение при редактировании ---
         if not self.creator:
-            self.task_edit.setText(self.task.title)
-            self.full_desc_edit.setPlainText(self.task.description)
+            self.task_edit.setText(self._task.title)
+            self.full_desc_edit.setPlainText(self._task.description)
             for i in range(self.priority_combo.count()):
-                if self.priority_combo.itemText(i) == self.task.priority.display_name:
+                if self.priority_combo.itemText(i) == self._task.priority.display_name:
                     self.priority_combo.setCurrentIndex(i)
                     break
             self._on_priority_changed(self.priority_combo.currentText())
-            if (self.task.priority == TaskPriority.DEADLINE
-                    and self.task.deadline_datetime):
-                self._deadline_fields._load_initial(self.task.deadline_datetime)
+            if (self._task.priority == TaskPriority.DEADLINE
+                    and self._task.deadline_datetime):
+                self._deadline_fields._load_initial(self._task.deadline_datetime)
+            if (self._task.priority == TaskPriority.EVENT
+                    and self._task.event_date):
+                self._event_date_edit.setText(self._task.event_date)
 
     # ---------- Валидация ----------
 

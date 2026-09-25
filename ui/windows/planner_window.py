@@ -218,7 +218,7 @@ class PlannerWindow(_BasePlannerListWindow):
         self._reload_tasks()
 
     def _on_edit_task(self, task: PlannerTask) -> None:
-        """Редактирование задачи."""
+        """Открывает диалог редактирования задачи и сохраняет результат."""
         dialog = NewTaskDialog(self, self.service, task=task)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
@@ -230,6 +230,7 @@ class PlannerWindow(_BasePlannerListWindow):
                 priority=result["priority"],
                 deadline_datetime=result["deadline_datetime"],
                 recurrence_data=result["recurrence_data"],
+                event_date=result["event_date"],   # NEW
             )
             self._reload_tasks()
 

@@ -246,24 +246,10 @@ class PlannerService(QObject):
                     title: Optional[str] = None,
                     description: Optional[str] = None,
                     priority: Optional[TaskPriority] = None,
-                    deadline_datetime: Optional[str] = None) -> bool:
-        """Обновляет существующую задачу.
-
-        Вход:
-            task_id — идентификатор задачи, которую меняем.
-            title — новое название (обязательное, непустое).
-            description — новое описание.
-            priority — новый приоритет.
-
-        Выход: обновлённый PlannerTask.
-
-        Ошибка:
-            ValueError — если title пустой или задача с таким task_id
-                         не найдена.
-
-        Роль: точечно меняет три поля, не трогая status/completed_date/
-              created_date. Сохраняет storage.
-        """
+                    deadline_datetime: Optional[str] = None,
+                    recurrence_data: Optional[dict] = None,
+                    event_date: Optional[str] = None) -> bool:
+        """Точечно обновляет поля задачи, не трогая status/completed_date."""
         if not title or not title.strip():
             raise ValueError("Название задачи не может быть пустым")
 
@@ -293,6 +279,33 @@ class PlannerService(QObject):
                 # Переключили на DEADLINE без даты, даты не было — fallback.
                 fallback_dt = datetime.now() + timedelta(days=1)
                 target.deadline_datetime = fallback_dt.strftime("%d.%m.%Y %H:%M")
+
+            # NEW: recurrence. Если не RECURRING — обнуляем всё правило;
+            # если RECURRING и пришли данные — заполняем и сбрасываем
+            # next_generation_date, чтобы сервис пересчитал дату от today.
+            if priority != TaskPriority.RECURRING:
+                target.recurrence_type = None
+                target.recurrence_value = None
+                target.recurrence_weekdays = None
+                target.recurrence_monthdays = None
+                target.recurrence_use_last_day = False
+                target.next_generation_date = None
+            elif recurrence_data:
+                target.recurrence_type = recurrence_data.get("type")
+                target.recurrence_value = recurrence_data.get("value")
+                target.recurrence_weekdays = recurrence_data.get("weekdays")
+                target.recurrence_monthdays = recurrence_data.get("monthdays")
+                target.recurrence_use_last_day = recurrence_data.get(
+                    "use_last_day", False)
+                target.next_generation_date = None
+
+            # NEW: event_date. Если не EVENT — обнуляем;
+            # если EVENT и дата пришла — присваиваем.
+            if priority != TaskPriority.EVENT:
+                target.event_date = None
+            elif event_date:
+                target.event_date = event_date
+
         elif deadline_datetime:
             # Приоритет не меняется, но дату обновили явно.
             target.deadline_datetime = deadline_datetime
