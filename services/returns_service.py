@@ -3,442 +3,413 @@ from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper
-from utils.kiz_utils import KizUtils
+from utils.filename_utils import FilenameUtils
 from utils.sales_file_generator import SalesFileGenerator
-
+from utils.report_readers import (
+    ReturnsSourceReportReader, ReturnsKizReader, ReturnsTransferReader,
+)
 
 class ReturnsPreparationService:
-    """Сервис подготовки: фильтрует исходный файл возвратов и создаёт рабочий файл."""
+    """Сервис подготовки возвратов.
 
-    def __init__(self, log_manager=None):
-        self.log_manager = log_manager
+    Роль:
+        Готовит рабочую папку задачи, копирует исходный файл
+        возвратов и создаёт отфильтрованный «Возвраты_{date}.xlsx»,
+        в котором остаются только строки с компаниями из списка
+        продавцов. Разбор Excel — в ReturnsSourceReportReader
+        (utils/report_readers.py). Сервис отвечает за:
+            - TaskContext и LoggerV2;
+            - копирование исходника (через FileHelper, долг);
+            - запись .xlsx из headers и rows, полученных от reader'а;
+            - логирование статистики.
 
-    def prepare(self, target_dir, source_file, sellers=None, log_callback=None):
-        if log_callback is None:
-            log_callback = print
+    Публичный API:
+        prepare(target_dir, source_file, sellers=None).
+    """
 
-        # NEW: source для префикса [source] в task-логе.
+    def __init__(self, log_manager_v2) -> None:
+        """Конструктор.
+
+        Вход:
+            log_manager_v2 — LogManagerV2, фабрика логгеров V2.
+
+        Роль: сохраняет ссылку. Логгер создаётся в начале prepare,
+              когда уже известна рабочая папка.
+        """
+        self._log_manager_v2 = log_manager_v2
+
+    def prepare(self, target_dir, source_file,
+                sellers=None) -> None:
+        """Запускает подготовку.
+
+        Вход:
+            target_dir — корневая папка задачи.
+            source_file — путь к исходному файлу возвратов.
+            sellers — список Seller. None → пустой список.
+
+        Выход: нет.
+
+        Роль:
+            Создаёт TaskContext (только пути и дата), затем
+            LoggerV2 с именем файла log_подготовка.txt. Копирует
+            исходник, читает его через reader, пишет результат
+            в reports_dir/Возвраты_{date}.xlsx.
+        """
+        if sellers is None:
+            sellers = []
+
+        # TaskContext — только пути и дата. Логирование — через LoggerV2.
         ctx = TaskContext(
             target_dir,
             "Возвраты_{date}",
-            "log_возвраты.txt",
-            log_callback=log_callback,
-            log_manager=self.log_manager,
-            source="ReturnsPreparationService.returns_service",
+            "log_подготовка.txt",
             subfolders=["Логи", "Отчёты", "Продажи"],
         )
-        ctx.log(f"=== Обработка возвратов начата {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
-        ctx.log(f"Исходный файл: {source_file}")
-        ctx.log(f"Рабочая папка: {ctx.work_folder}")
 
-        source_path = FileHelper.ensure_file_exists(ctx, source_file, "исходный файл")
+        # Логгер V2 с историческим именем файла.
+        logger = self._log_manager_v2.create_logger_v2(
+            source="ReturnsPreparationService.returns_service",
+            domain="returns",
+            work_folder=ctx.logs_dir,
+            log_filename="log_подготовка.txt",
+        )
+
+        logger.report(
+            f"=== Обработка возвратов начата "
+            f"{ctx.today.strftime('%d.%m.%Y %H:%M')} ==="
+        )
+        logger.report(f"Исходный файл: {source_file}")
+        logger.report(f"Рабочая папка: {ctx.work_folder}")
+
+        # ensure_file_exists требует ctx — FileHelper пишет через
+        # ctx.log. Это долг, но так было и раньше.
+        source_path = FileHelper.ensure_file_exists(
+            ctx, source_file, "исходный файл"
+        )
         if source_path is None:
+            return
+
+        # Копия исходника в рабочую папку — тоже через FileHelper
+        # (долг). Используем FilenameUtils вместо ctx.format_filename.
+        copy_name = FilenameUtils.format_with_extension(
+            "Исходные данные возвратов {date}", ctx.date_str
+        )
+        copy_dest = ctx.reports_dir / copy_name
+        if not FileHelper.copy_file_with_log(
+            source_path, copy_dest, ctx,
+            description="исходный файл", overwrite=True,
+        ):
+            # FileHelper уже написал причину в ctx.log.
             return
 
         allowed_companies = TextUtils.get_allowed_companies(sellers)
 
-        if not self._copy_source_file(ctx, source_path):
-            return
-
-        # NEW: _filter_returns теперь возвращает 5 значений — добавился
-        # set уникальных компаний, прошедших фильтр (passed_companies).
-        (rows_copied, rows_skipped, unknown_companies, status_counts,
-         passed_companies) = self._filter_returns(
-            ctx, source_path, allowed_companies
+        # Reader возвращает заголовки, отфильтрованные строки и статистику.
+        data = ReturnsSourceReportReader.read(
+            source_path, allowed_companies, logger
         )
 
-        # NEW: агрегат по исходному файлу на уровне INFO.
-        # Всего строк = те, что прошли + те, что отсеялись по компании.
-        ctx.info(f"Всего строк в исходном файле: {rows_copied + rows_skipped}")
-        ctx.info(f"Уникальных компаний после фильтрации: {len(passed_companies)}")
-
-        if unknown_companies:
-            ctx.log_statistics(
-                "Компании из столбца L, не соответствующие ни одному продавцу (с количеством строк):",
-                unknown_companies,
-            )
-        else:
-            ctx.info("Компаний вне списка не обнаружено.")
-
-        ctx.log("Обработка возвратов завершена.\n")
-
-    # ---------- Приватные методы ----------
-
-    def _copy_source_file(self, ctx: TaskContext, source_path: Path) -> bool:
-        """Копирует исходный файл в рабочую папку (с перезаписью)."""
-        copy_name = ctx.format_filename("Исходные данные возвратов {date}")
-        copy_dest = ctx.reports_dir  / copy_name
-        return FileHelper.copy_file_with_log(
-            source_path, copy_dest, ctx,
-            description="исходный файл",
-            overwrite=True
+        # Запись нового файла — ответственность сервиса.
+        result_name = FilenameUtils.format_with_extension(
+            "Возвраты_{date}", ctx.date_str
         )
-
-    def _filter_returns(self, ctx: TaskContext, source_path: Path, allowed_companies: set):
-        """Читает исходный файл, отбирает строки по разрешённым компаниям.
-
-        Возвращает кортеж:
-            (rows_copied, rows_skipped, unknown_companies,
-             status_counts, passed_companies)
-
-        passed_companies — set уникальных значений столбца L, прошедших
-        фильтр. Нужен для итогового INFO «Уникальных компаний после фильтрации».
-        """
-        wb_src = ExcelHelper.open_workbook_with_ctx(
-            source_path, ctx, description="исходный файл",
-            read_only=True, data_only=True
-        )
-        if wb_src is None:
-            return 0, 0, {}, {}, set()
-        sheet_src = wb_src.active
-
-        # Столбцы для копирования (индексы 1-based)
-        columns_to_keep = ['B', 'D', 'F', 'G', 'H', 'L']
-        col_indices = [2, 4, 6, 7, 8, 12]
-
-        # Собираем заголовки
-        header_row = []
-        try:
-            for col_letter in columns_to_keep:
-                header_value = sheet_src[f"{col_letter}1"].value
-                header_row.append(header_value)
-        except Exception as e:
-            # NEW: WARNING — заголовки не прочитались, работаем с пустым списком.
-            ctx.warning(f"Ошибка при чтении заголовков: {e}")
-            header_row = []
-
-        # Создаём новую книгу с заголовками
-        wb_new, ws_new = ExcelHelper.create_workbook_with_headers(
-            headers=header_row,
-            sheet_name="Возвраты",
-            write_only=True
-        )
-
-        rows_copied = 0
-        rows_skipped = 0
-        unknown_companies = {}
-        status_counts = {}
-        # NEW: уникальные компании, прошедшие фильтр.
-        passed_companies = set()
-
-        def filter_condition(row):
-            nonlocal rows_skipped
-            cell_L_val = row[11] if len(row) > 11 else None
-            cell_L_str = str(cell_L_val).strip() if cell_L_val is not None else ""
-
-            if not allowed_companies:
-                # Если фильтров нет — считаем, что все компании «прошли».
-                if cell_L_str:
-                    passed_companies.add(cell_L_str)
-                return True
-
-            check_val = TextUtils.normalize(cell_L_str)
-            if check_val in allowed_companies:
-                # NEW: запоминаем уникальные компании, прошедшие фильтр.
-                if cell_L_str:
-                    passed_companies.add(cell_L_str)
-                return True
-
-            if cell_L_str:
-                unknown_companies[cell_L_str] = unknown_companies.get(cell_L_str, 0) + 1
-            rows_skipped += 1
-            return False
-
-        rows_copied = ExcelHelper.copy_filtered_rows(
-            source_sheet=sheet_src,
-            target_sheet=ws_new,
-            columns_to_keep=col_indices,
-            condition=filter_condition,
-            start_row=2,
-            # Исходный столбец D (4-й) содержит статус возврата.
-            status_col_idx=4,
-            status_counts=status_counts
-        )
-
-        result_name = ctx.format_filename("Возвраты_{date}")
         result_path = ctx.reports_dir / result_name
         try:
+            wb_new, ws_new = ExcelHelper.create_workbook_with_headers(
+                headers=data.headers or [],
+                sheet_name="Возвраты",
+                write_only=False,
+            )
+            for row_values in data.rows:
+                ws_new.append(row_values)
             wb_new.save(result_path)
-            ctx.log(f"Создан файл с возвратами: {result_name}")
-            ctx.log(f"Скопировано строк: {rows_copied}")
-            ctx.log(f"Пропущено строк (не совпала компания): {rows_skipped}")
-            ctx.log_statistics("Статистика по статусам (скопированные строки):", status_counts)
+            wb_new.close()
+            logger.report(f"Создан файл с возвратами: {result_name}")
         except Exception as e:
-            # NEW: ERROR — файл не сохранился, это уже не warning.
-            ctx.error(f"Ошибка сохранения файла: {e}")
+            logger.critical(
+                f"Ошибка сохранения файла {result_name}: {e}",
+                can_influence=False,
+            )
+            return
 
-        wb_src.close()
-        wb_new.close()
+        # Агрегаты.
+        stats = data.stats
+        logger.report(f"Скопировано строк: {stats.copied}")
+        logger.report(
+            f"Пропущено строк (не совпала компания): {stats.skipped}"
+        )
 
-        return rows_copied, rows_skipped, unknown_companies, status_counts, passed_companies
+        # Статистика по статусам скопированных строк.
+        if stats.status_counts:
+            logger.report("Статистика по статусам (скопированные строки):")
+            for status, count in sorted(
+                stats.status_counts.items(), key=lambda x: x[0].lower()
+            ):
+                logger.report(f"   {status}: {count}")
+
+        # Итоги — на уровне info.
+        logger.info(
+            f"Всего строк в исходном файле: "
+            f"{stats.copied + stats.skipped}"
+        )
+        logger.info(
+            f"Уникальных компаний после фильтрации: "
+            f"{len(stats.passed_companies)}"
+        )
+
+        if stats.unknown_companies:
+            logger.info(
+                "Компании из столбца L, не соответствующие ни одному "
+                "продавцу (с количеством строк):"
+            )
+            for company, count in sorted(
+                stats.unknown_companies.items(), key=lambda x: x[0].lower()
+            ):
+                logger.info(f"   {company}: {count}")
+        else:
+            logger.info("Компаний вне списка не обнаружено.")
+
+        logger.report("Обработка возвратов завершена.\n")
 
 
 class KizExportService:
-    """Сервис выгрузки КИЗов для возврата с валидацией и очисткой."""
+    """Сервис выгрузки КИЗов для возврата.
 
-    def __init__(self, kiz_validator, log_manager=None):
+    Роль:
+        Для каждой компании, встретившейся в «Возвраты_{date}.xlsx»
+        со статусом «ВЫБЫЛ», пишет .txt-файл со списком полных
+        КИЗов. Валидация КИЗов и обновление used_kiz.json — в
+        ReturnsKizReader (utils/report_readers.py). Сервис
+        отвечает за:
+            - TaskContext и LoggerV2;
+            - поиск файла возвратов в reports_dir;
+            - вызов reader'а (batch-контекст внутри reader'а);
+            - запись .txt одним open на компанию;
+            - логирование агрегатов.
+
+    Публичный API:
+        export(target_dir).
+    """
+
+    def __init__(self, kiz_validator, log_manager_v2) -> None:
+        """Конструктор.
+
+        Вход:
+            kiz_validator — KizValidator.
+            log_manager_v2 — LogManagerV2.
+
+        Роль: сохраняет ссылки. Логгер создаётся в начале export.
+        """
         self.kiz_validator = kiz_validator
-        self.log_manager = log_manager
+        self._log_manager_v2 = log_manager_v2
 
-    def export(self, target_dir, log_callback=None):
+    def export(self, target_dir) -> None:
+        """Запускает выгрузку КИЗов для возврата.
+
+        Вход:
+            target_dir — корневая папка задачи.
+
+        Выход: нет.
+
+        Роль:
+            Создаёт TaskContext и LoggerV2, находит
+            Возвраты_{date}.xlsx в reports_dir, вызывает reader,
+            пишет .txt-файлы по компаниям, логирует агрегаты.
+        """
         ctx = TaskContext(
             target_dir,
             "Возвраты_{date}",
-            "log_возвраты.txt",
-            log_callback=log_callback,
-            log_manager=self.log_manager,
-            source="ReturnsPreparationService.returns_service",
+            "log_выгрузка_кизов.txt",
             subfolders=["Логи", "Отчёты", "Продажи"],
         )
-        source_file = ctx.reports_dir / ctx.format_filename("Возвраты_{date}")
-        source_file = FileHelper.ensure_file_exists(ctx, source_file, "файл возвратов")
+
+        # Логгер V2. Source исправлен на KizExportService.
+        logger = self._log_manager_v2.create_logger_v2(
+            source="KizExportService.returns_service",
+            domain="returns",
+            work_folder=ctx.logs_dir,
+            log_filename="log_выгрузка_кизов.txt",
+        )
+
+        logger.report(
+            "=== Выгрузка КИЗов для возврата "
+            "(с валидацией и очисткой) ==="
+        )
+
+        source_file = ctx.reports_dir / FilenameUtils.format_with_extension(
+            "Возвраты_{date}", ctx.date_str
+        )
+        source_file = FileHelper.ensure_file_exists(
+            ctx, source_file, "файл возвратов"
+        )
         if source_file is None:
             return
 
-        ctx.log(f"=== Выгрузка КИЗов для возврата (с валидацией и очисткой) ===")
         self.kiz_validator.load()
 
-        wb = ExcelHelper.open_workbook_with_ctx(
-            source_file, ctx, description="файл возвратов",
-            read_only=True, data_only=True
+        data = ReturnsKizReader.read(source_file, self.kiz_validator, logger)
+
+        # Запись .txt — по одному open на компанию.
+        logger.report("Сохранение текстовых файлов с КИЗами:")
+        if data.full_kizs_by_company:
+            for company, kiz_list in sorted(
+                data.full_kizs_by_company.items(),
+                key=lambda x: x[0].lower(),
+            ):
+                txt_path = ctx.work_folder / f"{company}.txt"
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    for kiz in kiz_list:
+                        f.write(kiz + "\n")
+                logger.report(
+                    f"  {company}: сохранено {len(kiz_list)} КИЗов "
+                    f"в {txt_path.name}"
+                )
+        else:
+            logger.report(
+                "  Не найдено ни одного КИЗа, прошедшего валидацию "
+                "(со статусом ВЫБЫЛ)."
+            )
+
+        # Агрегаты.
+        total_returns = (
+            data.returns_updated_in_base + data.returns_not_in_base
         )
-        if wb is None:
-            return
+        logger.info(
+            f"Возвраты: обработано {total_returns} "
+            f"({data.returns_updated_in_base} обновлено в базе, "
+            f"{data.returns_not_in_base} отсутствует в базе — "
+            f"запись не создана)."
+        )
 
-        try:
-            sheet = wb.active
-            counters = {}
-            returns_updated_in_base = 0  # КИЗ был в базе — обновили returned_date
-            returns_not_in_base = 0
+        kiz_stats = data.kiz_stats or {}
+        logger.info(
+            f"Обработка КИЗов: успешно {kiz_stats.get('processed', 0)}, "
+            f"отброшено коротких {kiz_stats.get('dropped_short', 0)}, "
+            f"без '01' {kiz_stats.get('dropped_no_01', 0)}, "
+            f"транслитерировано {kiz_stats.get('transliterated', 0)}."
+        )
 
-            # NEW: включаем сбор статистики KizUtils. Все вызовы clean_kiz_full
-            # и clean_kiz_for_storage в этом блоке будут инкрементить счётчики.
-            KizUtils.start_stats()
-
-            with self.kiz_validator.batch():
-                for row in sheet.iter_rows(min_row=2, values_only=True):
-                    try:
-                        if len(row) < 6:
-                            continue
-                        raw_kiz = row[0]
-                        status = row[1]
-                        company = row[5]
-
-                        if status is None or str(status).strip().upper() != "ВЫБЫЛ":
-                            continue
-                        if raw_kiz is None or company is None:
-                            continue
-
-                        # NEW: передаём ctx.logger — детальные сообщения уйдут
-                        # в debug.txt при включённом debug.
-                        full_cleaned_list = KizUtils.clean_kiz_full(raw_kiz, logger=None)
-                        if not full_cleaned_list:
-                            ctx.log(f"⚠️ Некорректный КИЗ (очистка не дала результатов): {str(raw_kiz)[:50]}...")
-                            continue
-
-                        company_str = str(company).strip()
-                        safe_company = TextUtils.sanitize_filename(company_str)
-
-                        for full_kiz in full_cleaned_list:
-                            storage_list = KizUtils.clean_kiz_for_storage(full_kiz, logger=None)
-                            if not storage_list:
-                                continue
-                            storage_kiz = storage_list[0]
-                            existing_before = self.kiz_validator.storage.get(storage_kiz)
-
-                            if self.kiz_validator.validate_for_return(storage_kiz):
-                                # Всегда True по новой логике; оставляем проверку для читаемости.
-                                if existing_before is None:
-                                    returns_not_in_base += 1
-                                else:
-                                    returns_updated_in_base += 1
-                                # Запись .txt — как раньше.
-                                txt_path = ctx.work_folder / f"{safe_company}.txt"
-                                with open(txt_path, "a", encoding="utf-8") as f:
-                                    f.write(full_kiz + "\n")
-                                counters[safe_company] = counters.get(safe_company, 0) + 1
-                    except Exception as e:
-                        # NEW: WARNING — ошибка одной строки не должна валить всю задачу.
-                        ctx.warning(f"Ошибка обработки КИЗа: {e}")
-                        continue
-
-                # Итоги — ПОСЛЕ цикла for, но внутри with batch.
-                ctx.log("Результаты выгрузки КИЗов для возврата")
-                ctx.log("=" * 50)
-                if counters:
-                    for comp, cnt in sorted(counters.items(), key=lambda x: x[0].lower()):
-                        ctx.log(f"{comp}: {cnt} КИЗов")
-                else:
-                    ctx.log("Не найдено ни одного КИЗа, прошедшего валидацию (со статусом ВЫБЫЛ).")
-                ctx.log("---Выгрузка завершена.---\n")
-                ctx.log("=" * 50 + "\n")
-
-            # NEW: после выхода из батча забираем статистику и логируем агрегат.
-            stats = KizUtils.pop_stats()
-            ctx.info(
-                f"Обработка КИЗов: успешно {stats['processed']}\n"
-                f"Транслитерировано {stats['transliterated']}, \n"
-                f"Без '01' {stats['dropped_no_01']}, \n"
-                f"Отброшено коротких {stats['dropped_short']}.\n"
-
-
-            )
-            total_returns = returns_updated_in_base + returns_not_in_base
-            ctx.info(
-                f"Возвраты: обработано {total_returns} \n"
-                f"({returns_updated_in_base} обновлено в базе, \n"
-                f"{returns_not_in_base} отсутствует в базе — запись не создана).\n"
-            )
-
-        except Exception as e:
-            # Сбрасываем статистику, чтобы следующая сессия началась с чистого
-            # состояния. Значение нам здесь не нужно — логируем ошибку.
-            KizUtils.pop_stats()
-            ctx.error(f"Ошибка выгрузки КИЗов: {e}")
-        finally:
-            if wb:
-                wb.close()
+        logger.report("---Выгрузка завершена.---\n")
 
 
 class KizTransferService:
-    """Сервис подготовки КИЗов для передачи между продавцами."""
+    """Сервис подготовки КИЗов для передачи между продавцами.
 
-    def __init__(self, log_manager=None):
-        self.log_manager = log_manager
+    Роль:
+        Формирует файлы продаж по «Возвраты_{date}.xlsx»: для каждой
+        строки, где бренд принадлежит одному продавцу, а владелец —
+        другому, создаёт запись в файле передачи. Разбор файла и все
+        проверки строк — в ReturnsTransferReader
+        (utils/report_readers.py). Сервис отвечает за:
+            - TaskContext и LoggerV2;
+            - поиск «Возвраты_{date}.xlsx» в reports_dir;
+            - вызов reader'а;
+            - прогон готовых строк через SalesFileGenerator;
+            - удаление пустых файлов и логирование итогов.
 
-    def prepare_transfer(self, target_dir, sellers, log_callback=None):
-        # NEW: source для префикса [source].
+    Публичный API:
+        prepare_transfer(target_dir, sellers).
+    """
+
+    def __init__(self, log_manager_v2) -> None:
+        """Конструктор.
+
+        Вход:
+            log_manager_v2 — LogManagerV2.
+
+        Роль: сохраняет ссылку. Логгер создаётся в начале
+              prepare_transfer.
+        """
+        self._log_manager_v2 = log_manager_v2
+
+    def prepare_transfer(self, target_dir, sellers) -> None:
+        """Запускает подготовку передач КИЗов.
+
+        Вход:
+            target_dir — корневая папка задачи.
+            sellers — список Seller.
+
+        Выход: нет.
+
+        Роль:
+            Создаёт TaskContext и LoggerV2 с именем файла
+            log_продажи.txt (историческое имя сохранено).
+            SalesFileGenerator создаётся с logger=logger:
+            отладочные сообщения уйдут в debug.txt.
+        """
         ctx = TaskContext(
             target_dir,
             "Возвраты_{date}",
-            "log_передачи_КИЗов.txt",
-            log_callback=log_callback,
-            log_manager=self.log_manager,
-            source="KizTransferService.returns_service",
+            "log_продажи.txt",
             subfolders=["Логи", "Отчёты", "Продажи"],
         )
-        source_file = ctx.reports_dir / ctx.format_filename("Возвраты_{date}")
-        source_file = FileHelper.ensure_file_exists(ctx, source_file, "файл возвратов")
+
+        # Логгер V2 с историческим именем файла.
+        logger = self._log_manager_v2.create_logger_v2(
+            source="KizTransferService.returns_service",
+            domain="returns",
+            work_folder=ctx.logs_dir,
+            log_filename="log_продажи.txt",
+        )
+
+        logger.report(
+            f"=== Подготовка передач КИЗов начата "
+            f"{ctx.today.strftime('%d.%m.%Y %H:%M')} ==="
+        )
+
+        source_file = ctx.reports_dir / FilenameUtils.format_with_extension(
+            "Возвраты_{date}", ctx.date_str
+        )
+        source_file = FileHelper.ensure_file_exists(
+            ctx, source_file, "файл возвратов"
+        )
         if source_file is None:
             return
 
-        ctx.log(f"=== Подготовка передач КИЗов начата {ctx.today.strftime('%d.%m.%Y %H:%M')} ===")
+        # Генератор продаж — с логгером V2, чтобы debug-сообщения
+        # не терялись.
+        sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
 
-        company_to_seller = TextUtils.build_key_mapping(
-            sellers,
-            key_extractor=lambda s: s.company,
-            log_func=None
-        )
-        key_to_seller = TextUtils.build_key_mapping(
-            sellers,
-            key_extractor=lambda s: s.get_brand_keys(),
-            log_func=ctx.log
-        )
+        # Reader возвращает готовые строки передач и агрегаты.
+        data = ReturnsTransferReader.read(source_file, sellers, logger)
 
-        wb_src = ExcelHelper.open_workbook_with_ctx(
-            source_file, ctx, description="исходный файл",
-            read_only=True, data_only=True
-        )
-        if wb_src is None:
-            return
-
-        try:
-            sheet_src = wb_src.active
-            # NEW: прокидываем logger — отладочные сообщения уйдут в debug.txt.
-            sales_gen = SalesFileGenerator(ctx.sales_dir, logger=None)
-            KizUtils.start_stats()
-
-            # NEW: счётчики для итогового INFO.
-            total_rows = 0
-            unique_brands = set()
-
-            for row_idx, row in enumerate(sheet_src.iter_rows(min_row=2, values_only=True), start=2):
-                if len(row) < 6:
-                    continue
-                total_rows += 1
-                kiz = row[0]                # столбец A
-                product_name = row[2]       # столбец C – данные/название товара
-                brand = row[3]              # столбец D – бренд
-                owner_company = row[5]      # столбец F – компания-владелец КИЗа
-
-                # NEW: собираем уникальные бренды (для итогового INFO).
-                if brand:
-                    unique_brands.add(str(brand).strip())
-
-                if not kiz:
-                    ctx.log(f"Строка {row_idx}: пустой КИЗ – пропущена")
-                    continue
-
-                if not owner_company or not brand:
-                    continue
-
-                brand_key = TextUtils.normalize(brand)
-                seller_brand = key_to_seller.get(brand_key)
-
-                if seller_brand is None:
-                    ctx.log(f"Строка {row_idx}: ключ бренда '{brand}' не найден – пропущена")
-                    continue
-
-                owner_seller = TextUtils.find_seller_by_company(owner_company, list(company_to_seller.values()))
-                if owner_seller is None:
-                    ctx.log(f"Строка {row_idx}: владелец '{owner_company}' не найден – пропущена")
-                    continue
-
-                if owner_seller == seller_brand:
-                    continue
-
-                has_brand = any(TextUtils.normalize(key) == brand_key
-                                for brand_obj in owner_seller.brands
-                                for key in brand_obj.keys)
-                if has_brand:
-                    ctx.log(f"Строка {row_idx}: бренд '{brand}' уже есть у {owner_seller.name} – пропущена")
-                    continue
-
-                sales_gen.add_sale_row(
-                    from_seller_name=owner_seller.name,
-                    to_seller_name=seller_brand.name,
-                    raw_kiz=kiz if kiz is not None else "",
-                    owner_company=seller_brand,
-                    to_seller_inn=seller_brand.inn,
-                    brand=brand,
-                    product_name=product_name if product_name is not None else ""
-                )
-
-            # NEW: агрегат по строкам и брендам — INFO.
-            ctx.info(f"Всего строк: {total_rows}")
-            ctx.info(f"Уникальных брендов: {len(unique_brands)}")
-
-            # Статистика KizUtils — после цикла, до логов по файлам.
-            stats = KizUtils.pop_stats()
-            ctx.info(
-                f"Обработка КИЗов: успешно {stats['processed']}, "
-                f"отброшено коротких {stats['dropped_short']}, "
-                f"без '01' {stats['dropped_no_01']}, "
-                f"транслитерировано {stats['transliterated']}."
+        # Прогон готовых строк через генератор — без дополнительных
+        # проверок: всё уже проверено в reader'е.
+        for transfer in data.rows:
+            sales_gen.add_sale_row(
+                from_seller_name=transfer.from_seller_name,
+                to_seller_name=transfer.to_seller_name,
+                to_seller_inn=transfer.to_seller_inn,
+                product_name=transfer.product_name,
+                raw_kiz=transfer.raw_kiz,
+                # REPLACE: раньше передавался seller_brand (Seller),
+                # что противоречило контракту параметра owner_company.
+                # Теперь передаём исходную строку владельца.
+                owner_company=transfer.owner_company_str,
+                brand=transfer.brand,
             )
 
-            # Удаляем пустые файлы
-            ctx.log("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
-            removed = sales_gen.remove_empty_files()
-            for file_path in sales_gen.get_created_files():
-                ctx.log(f"  Файл сохранён: {file_path.name}")
+        # Агрегаты по строкам и брендам.
+        logger.report(f"Всего строк: {data.total_rows}")
+        logger.report(f"Уникальных брендов: {len(data.unique_brands)}")
 
-            if removed:
-                ctx.log(f"  Удалено пустых файлов: {removed}")
+        # Удаление пустых файлов и лог по созданным.
+        logger.report("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
+        removed = sales_gen.remove_empty_files()
+        for file_path in sales_gen.get_created_files():
+            logger.report(f"  Файл сохранён: {file_path.name}")
+        if removed:
+            logger.report(f"  Удалено пустых файлов: {removed}")
 
-            # Логируем статистику
-            ctx.log("\n--- СТАТИСТИКА ПРОДАЖ ---")
-            stats = sales_gen.get_stats()
-            if stats:
-                for (from_seller, to_seller), count in sorted(stats.items()):
-                    ctx.log(f"  {from_seller} → {to_seller}: {count} КИЗов")
-            else:
-                ctx.log("  Нет строк для передачи между продавцами")
+        # Статистика по направлениям передач.
+        logger.report("\n--- СТАТИСТИКА ПРОДАЖ ---")
+        sales_stats = sales_gen.get_stats()
+        if sales_stats:
+            for (from_seller, to_seller), count in sorted(sales_stats.items()):
+                logger.report(
+                    f"  {from_seller} → {to_seller}: {count} КИЗов"
+                )
+        else:
+            logger.report("  Нет строк для передачи между продавцами")
 
-            ctx.log("Подготовка передач завершена.\n")
-
-        except Exception as e:
-            KizUtils.pop_stats()
-            ctx.error(f"Ошибка подготовки передач КИЗов: {e}")
-        finally:
-            wb_src.close()
+        logger.report("Подготовка передач завершена.\n")

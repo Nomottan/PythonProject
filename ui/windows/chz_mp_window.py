@@ -63,7 +63,7 @@ class ChzMPWindow(QMainWindow):
                              как раньше, но без логирования.
         """
         super().__init__(parent)
-
+        self._price_response: int | None = None
         self.log_manager_v2 = log_manager_v2
 
         self.logger = None
@@ -265,13 +265,34 @@ class ChzMPWindow(QMainWindow):
         self.target_dir = new_path
         self.parent().main_config.set("target_dir", new_path)
         self.status_display.clear()
-        self.status_display.append("Целевая папка обновлена.")
+        self.status_display.clear()
+        self.set_status("Целевая папка обновлена.")
+        self.set_info("Целевая папка обновлена.")
         self.btn_export_kiz.setEnabled(False)
         self.btn_filter_prefinal.setEnabled(False)
         self.btn_generate_sales.setEnabled(False)
         self.btn_finalize_prices.setEnabled(False)
 
     # ---------- Общая обвязка шагов пайплайна ----------
+    def set_status(self, msg: str) -> None:
+        """Обновляет короткое сообщение в статусной строке.
+
+        Вход: msg — текст.
+        Выход: нет.
+        Роль: единая точка обновления status_label. Вызывается
+              из StatusHandler через active_child.set_status.
+        """
+        self.status_label.setText(msg)
+
+    def set_info(self, msg: str) -> None:
+        """Дописывает сообщение в прокручиваемый лог.
+
+        Вход: msg — текст.
+        Выход: нет.
+        Роль: единая точка записи в status_display. Вызывается
+              из InfoUIHandler через active_child.set_info.
+        """
+        self.status_display.append(msg)
 
     def _precheck_target_dir(self) -> bool:
         """Проверяет, что выбрана целевая папка.
@@ -287,7 +308,7 @@ class ChzMPWindow(QMainWindow):
                 обработчике.
         """
         if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+            self.set_status("Сначала выберите целевую папку")
             return False
         return True
 
@@ -319,11 +340,9 @@ class ChzMPWindow(QMainWindow):
                          target_dir и sellers добавляются здесь
                          автоматически. Дополнительно каждый шаг может
                          передать свои (fbs_files/mp_files/saved_prices).
-                start_message — текст для status_display в начале шага.
-                finish_message — текст для status_display при успехе.
-                step_name — префикс для сообщений в logger окна, например
-                            "on_prepare". Нужен, чтобы debug-логи
-                            различались между шагами.
+                start_message — текст для статуса в начале шага.
+                finish_message — текст для статуса при успехе.
+                step_name — префикс для сообщений в logger окна.
                 enable_after — виджет QPushButton, который нужно включить
                                после успешного завершения. None — если
                                включать нечего (последний шаг пайплайна).
@@ -331,18 +350,18 @@ class ChzMPWindow(QMainWindow):
             Выход: нет.
 
             Роль:
-                Единая обвязка пяти шагов: очистка и заполнение
-                status_display, колбэки on_finished/on_error, вызов
-                ThreadFactory с фиксированным списком блокируемых
-                кнопок. Тело каждого публичного обработчика теперь —
-                создание сервиса + вызов этого метода.
+                Единая обвязка пяти шагов: запись короткого сообщения
+                в status_label и подробного — в status_display, колбэки
+                on_finished/on_error, вызов ThreadFactory с фиксированным
+                списком блокируемых кнопок.
         """
-        self.status_display.clear()
-        self.status_display.append(start_message)
+        self.set_status(start_message)
+        self.set_info(start_message)
 
         def on_finished():
             """Вызывается в UI-потоке после успешного завершения шага."""
-            self.status_display.append(finish_message)
+            self.set_status(finish_message)
+            self.set_info(finish_message)
             if enable_after is not None:
                 enable_after.setEnabled(True)
             if self.logger:
@@ -353,11 +372,14 @@ class ChzMPWindow(QMainWindow):
 
             Вход: e — пойманное исключение.
             """
-            self.status_display.append(f"{finish_message.rstrip('.')} — ошибка: {e}")
+            # REPLACE: было только self.status_display.append(...) —
+            # стало двойное через set_status/set_info.
+            self.set_status(f"Ошибка на шаге {step_name}: {e}")
+            self.set_info(f"Ошибка на шаге {step_name}: {e}")
             if self.logger:
                 self.logger.critical(
                     f"Ошибка в {step_name}: {e}", can_influence=False,
-                    )
+                )
 
         # Собираем финальные kwargs: target_dir и sellers — общие
         # для всех шагов. Доп. параметры шага не должны их перекрывать.
@@ -575,7 +597,7 @@ class ChzMPWindow(QMainWindow):
         Роль: диалог синхронный, потока нет. Ошибка — в critical.
         """
         if not self.target_dir:
-            self.status_display.append("Сначала выберите целевую папку")
+            self.set_status("Сначала выберите целевую папку")
             return
         window = PricesEditWindow(
             self,
@@ -584,72 +606,69 @@ class ChzMPWindow(QMainWindow):
         )
         window.exec()
 
-        # ---------- Диалог средней цены ----------
+    def _request_average_price(self, seller_name: str) -> int | None:
+        """Callback от FinalizePricesService: спросить цену у пользователя.
 
-        def _request_average_price(self, seller_name: str) -> int | None:
-            """Callback от FinalizePricesService: спросить цену у пользователя.
+        Вход:
+            seller_name — имя продавца (для текста диалога).
 
-            Вход:
-                seller_name — имя продавца (для текста диалога).
+        Выход:
+            int — цена, введённая пользователем; None — отмена.
 
-            Выход:
-                int — цена, введённая пользователем; None — отмена.
+        Роль:
+            Вызывается из фонового потока сервиса. Если текущий
+            поток — главный (UI), открывает диалог напрямую.
+            Иначе — через QMetaObject.invokeMethod с
+            BlockingQueuedConnection: фон ждёт, пока главный поток
+            выполнит слот _show_price_dialog_slot, в котором
+            открывается диалог и результат пишется в self._price_response.
+        """
+        # Сброс предыдущего ответа — чтобы случайно не вернуть
+        # цену из прошлого вызова.
+        self._price_response = None
 
-            Роль:
-                Вызывается из фонового потока сервиса. Если текущий
-                поток — главный (UI), открывает диалог напрямую.
-                Иначе — через QMetaObject.invokeMethod с
-                BlockingQueuedConnection: фон ждёт, пока главный поток
-                выполнит слот _show_price_dialog_slot, в котором
-                открывается диалог и результат пишется в self._price_response.
-            """
-            # Сброс предыдущего ответа — чтобы случайно не вернуть
-            # цену из прошлого вызова.
+        app = QApplication.instance()
+        if app is None:
+            # Qt не запущен — сервис работает вне UI, диалог
+            # показать не можем. Возвращаем None: сервис пропустит
+            # продавца, как если бы пользователь отменил.
+            return None
+
+        if QThread.currentThread() == app.thread():
+            # Мы уже в UI-потоке — открываем напрямую.
+            self._show_price_dialog_slot(seller_name)
+        else:
+            # Фоновый поток — переключаемся в главный через
+            # BlockingQueuedConnection. Слот выполнится в главном
+            # потоке, а мы дождёмся его завершения.
+            QMetaObject.invokeMethod(
+                self,
+                "_show_price_dialog_slot",
+                Qt.BlockingQueuedConnection,
+                Q_ARG(str, seller_name),
+            )
+        return self._price_response
+
+    @Slot(str)
+    def _show_price_dialog_slot(self, seller_name: str) -> None:
+        """Открывает диалог ввода средней цены в UI-потоке.
+
+        Вход:
+            seller_name — имя продавца.
+
+        Выход: нет.
+
+        Роль:
+            Выполняется в главном потоке. Открывает
+            AveragePriceInputDialog, ждёт результата через .exec()
+            (не .exec_() — тот deprecated), сохраняет цену
+            в self._price_response.
+        """
+        dialog = AveragePriceInputDialog(self, seller_name)
+        if dialog.exec():
+            self._price_response = dialog.get_price()
+        else:
             self._price_response = None
-
-            app = QApplication.instance()
-            if app is None:
-                # Qt не запущен — сервис работает вне UI, диалог
-                # показать не можем. Возвращаем None: сервис пропустит
-                # продавца, как если бы пользователь отменил.
-                return None
-
-            if QThread.currentThread() == app.thread():
-                # Мы уже в UI-потоке — открываем напрямую.
-                self._show_price_dialog_slot(seller_name)
-            else:
-                # Фоновый поток — переключаемся в главный через
-                # BlockingQueuedConnection. Слот выполнится в главном
-                # потоке, а мы дождёмся его завершения.
-                QMetaObject.invokeMethod(
-                    self,
-                    "_show_price_dialog_slot",
-                    Qt.BlockingQueuedConnection,
-                    Q_ARG(str, seller_name),
-                )
-            return self._price_response
-
-        @Slot(str)
-        def _show_price_dialog_slot(self, seller_name: str) -> None:
-            """Открывает диалог ввода средней цены в UI-потоке.
-
-            Вход:
-                seller_name — имя продавца.
-
-            Выход: нет.
-
-            Роль:
-                Выполняется в главном потоке. Открывает
-                AveragePriceInputDialog, ждёт результата через .exec()
-                (не .exec_() — тот deprecated), сохраняет цену
-                в self._price_response. Parent — self (окно), чтобы
-                диалог центрировался относительно окна и был модальным.
-            """
-            dialog = AveragePriceInputDialog(self, seller_name)
-            if dialog.exec():
-                self._price_response = dialog.get_price()
-            else:
-                self._price_response = None
 
     @log_button_action("btn_accumulate_sales", "Ошибка в on_accumulate_sales: {e}")
     def on_accumulate_sales(self):

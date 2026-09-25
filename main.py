@@ -263,8 +263,10 @@ class MainWindow(QMainWindow):
     )
     def open_returns_window(self):
         if self.returns_window is None or not self.returns_window.isVisible():
-            # ReturnsWindow получает старый log_manager — не меняем.
-            self.returns_window = ReturnsWindow(self, self.log_manager)
+            self.returns_window = ReturnsWindow(self, self.log_manager_v2)
+            self.returns_window.destroyed.connect(
+                lambda: setattr(self, "returns_window", None)
+            )
             WindowFactory.show_child_window(self, self.returns_window)
             self.logger.debug("open_returns_window: окно создано заново")
         else:

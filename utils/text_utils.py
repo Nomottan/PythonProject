@@ -1,4 +1,8 @@
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.subservices.logging import LoggerV2
 
 class TextUtils:
     _KEYBOARD_MAP = {
@@ -48,7 +52,25 @@ class TextUtils:
         return safe.strip() or "неизвестная_компания"
 
     @staticmethod
-    def build_key_mapping(items, key_extractor, log_func=None):
+    def build_key_mapping(items, key_extractor, log_func=None,
+                          logger: "LoggerV2 | None" = None):
+        """Строит словарь {нормализованный ключ: объект}.
+
+        Вход:
+            items — список объектов (Seller, Brand и т.п.).
+            key_extractor — callable(item) -> str | list[str].
+                            Возвращает ключ или список ключей.
+
+        Выход:
+            dict {нормализованный ключ: первый объект, у которого
+            этот ключ встретился}.
+
+        Роль:
+            Единая точка построения маппингов «ключ → сущность»
+            для продавцов и брендов. Дубликаты не перезаписывают
+            первое значение — приоритет у того объекта, который
+            раньше в items.
+        """
         mapping = {}
         for item in items:
             keys = key_extractor(item)
@@ -63,11 +85,16 @@ class TextUtils:
                 if normalized not in mapping:
                     mapping[normalized] = item
                 else:
-                    if log_func:
-                        log_func(
-                            f"⚠️ Ключ '{key}' уже привязан к объекту '{mapping[normalized]}'. "
-                            f"Игнорируем дубликат у '{item}'."
-                        )
+                    msg = (
+                        f"Ключ '{key}' уже привязан к объекту "
+                        f"'{mapping[normalized]}'. Игнорируем "
+                        f"дубликат у '{item}'."
+                    )
+                    # Приоритет: новый логгер, затем legacy-колбэк.
+                    if logger is not None:
+                        logger.warning(msg)
+                    elif log_func is not None:
+                        log_func(msg)
         return mapping
 
     @staticmethod
