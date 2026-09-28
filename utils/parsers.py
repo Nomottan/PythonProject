@@ -407,3 +407,139 @@ class ReturnsRow:
             brand=_to_str(row[3]),
             owner_company=_to_str(row[5]),
         )
+
+@dataclass
+class ProductFeatures:
+    """Результат разбора наименования товара.
+
+    Поля:
+        keywords — множество ключевых слов (в нижнем регистре) с
+                   добавленными count (строкой) и brand.lower().
+        brand — найденный бренд (как он записан в brands_set) или None.
+        count — количество упаковки, извлечённое из текста, или None.
+
+    Роль:
+        Заменяет нетипизированный dict {'keywords': ..., 'brand': ...,
+        'count': ...}, который раньше возвращал
+        DataLoader._extract_features. Позволяет типизировать
+        ридеры и избежать обращения к dict по строковым ключам.
+    """
+    keywords: set[str]
+    brand: Optional[str]
+    count: Optional[int]
+
+class ProductNameParser(BaseParser):
+    """Парсер наименований товаров для сравнения поставок.
+
+    Роль:
+        Единая точка разбора строки наименования в ProductFeatures.
+        Возвращает keywords, brand и count. Логика симметрична для
+        листа поставки и сборного файла — поэтому вынесена сюда.
+
+    Константы класса:
+        _COUNT_PATTERN — регулярка «число + единица упаковки»
+                         (шт, капс, таб и т.п.).
+        _WORD_PATTERN — регулярка токена-слова (буквы, цифры,
+                        дефисы и апострофы внутри).
+        _STOP_WORDS — служебные слова, которые не попадают в
+                      ключевые слова.
+    """
+
+    _COUNT_PATTERN = re.compile(
+        r'(\d+)\s*(?:штук|шт|капс|капсул|капсулы|таб|таблеток|таблетки|'
+        r'vcaps|tabs|caps|softgels|sgels|loz|tablets|capsules)',
+        re.IGNORECASE,
+    )
+
+    _WORD_PATTERN = re.compile(
+        r'[a-zа-я0-9]+(?:[-’][a-zа-я0-9]+)*',
+        re.IGNORECASE,
+    )
+
+    _STOP_WORDS = {
+        'бад', 'к', 'пище', 'dietary', 'supplement',
+        'with', 'plus', 'and', 'for', 'the',
+    }
+
+    @staticmethod
+    def extract(text: str, brands_set: set[str] | None = None) -> ProductFeatures:
+        """Разбирает наименование товара на ключевые слова, бренд и количество.
+
+        Вход:
+            text — строка наименования из ячейки Excel.
+            brands_set — множество ключей брендов (в нижнем регистре);
+                         None или пустое — бренд не ищем.
+
+        Выход:
+            ProductFeatures(keywords, brand, count). Пустая строка
+            или None на входе дают ProductFeatures(set(), None, None).
+
+        Роль:
+            Точный перенос DataLoader._extract_features. Порядок шагов:
+              1. Извлечь количество упаковки регуляркой, удалить его
+                 из текста.
+              2. Найти первую пару круглых скобок с латиницей —
+                 работать с ней, иначе с исходным текстом.
+              3. Определить бренд как самый длинный ключ из
+                 brands_set, который является префиксом base_text
+                 (с пробелом или точным равенством), обрезать префикс.
+              4. Токенизировать остаток, отфильтровать стоп-слова и
+                 короткие токены, добавить count и brand.lower()
+                 в keywords.
+        """
+        if not text:
+            return ProductFeatures(keywords=set(), brand=None, count=None)
+
+        text = str(text).strip()
+
+        # 1. Количество упаковки.
+        count: Optional[int] = None
+        count_match = ProductNameParser._COUNT_PATTERN.search(text)
+        if count_match:
+            count = int(count_match.group(1))
+            text = ProductNameParser._COUNT_PATTERN.sub('', text)
+
+        # 2. Английская часть в круглых скобках, если есть.
+        english_part: Optional[str] = None
+        parens = re.findall(r'\(([^)]*)\)', text)
+        for p in parens:
+            if re.search(r'[a-zA-Z]', p):
+                english_part = p
+                break
+
+        base_text = english_part if english_part else text
+        base_text = re.sub(r'\s+', ' ', base_text).strip()
+
+        # 3. Бренд — самый длинный префикс из brands_set.
+        brand: Optional[str] = None
+        if brands_set:
+            base_lower = base_text.lower()
+            sorted_keys = sorted(brands_set, key=len, reverse=True)
+            for key in sorted_keys:
+                if base_lower.startswith(key + ' ') or base_lower == key:
+                    brand = key
+                    if base_lower.startswith(key + ' '):
+                        base_text = base_text[len(key) + 1:].strip()
+                    else:
+                        base_text = ""
+                    break
+
+        # 4. Ключевые слова из остатка.
+        keywords: set[str] = set()
+        for word in ProductNameParser._WORD_PATTERN.findall(base_text.lower()):
+            if len(word) < 2:
+                continue
+            if word in ProductNameParser._STOP_WORDS:
+                continue
+            if word.isdigit():
+                continue
+            keywords.add(word)
+
+        # count и brand идут в keywords — это часть контракта
+        # исходной логики, этапы сравнения на них опираются.
+        if count is not None:
+            keywords.add(str(count))
+        if brand:
+            keywords.add(brand.lower())
+
+        return ProductFeatures(keywords=keywords, brand=brand, count=count)

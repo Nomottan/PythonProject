@@ -107,6 +107,111 @@ class ExcelHelper:
         return wb, ws
 
     @staticmethod
+    def find_header_row_and_columns(sheet, header_variants: dict,
+                                    max_rows: int = 15,
+                                    max_cols: int = 20) -> tuple:
+        """Ищет строку с заголовками и соответствие «поле → индекс столбца».
+
+        Вход:
+            sheet — лист openpyxl (или адаптер XlsReader/CsvReader).
+            header_variants — dict {поле: [варианты заголовков]}.
+            max_rows — сколько первых строк сканировать.
+            max_cols — сколько первых столбцов сканировать.
+
+        Выход:
+            (row_index, columns_dict) — 1-based номер строки и
+            dict {поле: 0-based индекс столбца}.
+            (None, None) — если строка не найдена.
+
+        Роль:
+            Точный перенос DataLoader._find_header_row_and_columns.
+            Правила:
+              - Ранний выход, если в строке нашлись name + shk
+                или name + count.
+              - Иначе запоминается лучшая строка по score
+                (число найденных полей).
+              - Порог: best_score >= 2 и наличие name в лучшей
+                строке. Иначе — (None, None).
+        """
+        all_variants = {}
+        for field, variants in header_variants.items():
+            for v in variants:
+                all_variants[v.lower().strip()] = field
+
+        best_score = 0
+        best_row = None
+        best_columns = {}
+
+        for row_idx in range(1, min(sheet.max_row, max_rows) + 1):
+            header_row = list(sheet.iter_rows(
+                min_row=row_idx, max_row=row_idx, values_only=True
+            ))[0]
+            if not header_row:
+                continue
+            header_row = header_row[:max_cols]
+
+            found_columns = {}
+            score = 0
+            for col_idx, cell in enumerate(header_row):
+                if cell is None:
+                    continue
+                cell_clean = str(cell).strip().lower()
+                if cell_clean in all_variants:
+                    field = all_variants[cell_clean]
+                    if field not in found_columns:
+                        found_columns[field] = col_idx
+                        score += 1
+
+            if 'name' in found_columns and 'shk' in found_columns:
+                return row_idx, found_columns
+            if 'name' in found_columns and 'count' in found_columns:
+                return row_idx, found_columns
+
+            if score > best_score:
+                best_score = score
+                best_row = row_idx
+                best_columns = found_columns
+
+        if best_row is None or best_score < 2:
+            return None, None
+        if 'name' not in best_columns:
+            return None, None
+        return best_row, best_columns
+
+    @staticmethod
+    def create_report_workbook(headers, rows,
+                               sheet_name: str = "Сравнение") -> tuple:
+        """Создаёт workbook с одним листом, заголовками и строками.
+
+        Вход:
+            headers — список заголовков. None или пустой — шапка
+                      не пишется.
+            rows — итерируемое строк для записи. Каждая строка —
+                   список значений.
+            sheet_name — имя листа.
+
+        Выход:
+            (wb, ws) — открытый Workbook и его активный лист.
+            Сохранение и close — ответственность вызывающего.
+
+        Роль:
+            Убирает ручное «Workbook → title → append headers →
+            append rows» из сервисов. Используется ReportGenerator
+            (Excel-отчёт сравнения) и ConsolidatedSupplyBuilder
+            (Сборный_поставок_{date}.xlsx).
+        """
+        wb = Workbook()
+        ws = wb.active
+        ws.title = sheet_name
+
+        if headers:
+            ws.append(headers)
+        for row in rows:
+            ws.append(row)
+
+        return wb, ws
+
+    @staticmethod
     def append_headers(worksheet, headers):
         worksheet.append(headers)
 

@@ -314,12 +314,13 @@ class MainWindow(QMainWindow):
     def open_compare_window(self):
         if self.compare_window is None or not self.compare_window.isVisible():
             self.compare_window = CompareWindow(
-                self, mappings_storage=self.compare_mappings_storage,
+                self,
+                mappings_storage=self.compare_mappings_storage,
+                log_manager_v2=self.log_manager_v2,
             )
             WindowFactory.show_child_window(self, self.compare_window)
             self.logger.debug("open_compare_window: окно создано заново")
         else:
-            # REPLACE: было self.brands_window.raise_() — опечатка.
             self.compare_window.raise_()
             self.compare_window.activateWindow()
             self.logger.debug("open_compare_window: окно активировано")

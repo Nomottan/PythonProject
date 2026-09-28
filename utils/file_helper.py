@@ -10,10 +10,6 @@ class FileHelper:
             ctx.log(f"Файл уже существует: {dst_path.name}")
             return False
         try:
-            # NEW: гарантируем, что папка назначения существует.
-            # Нужно, потому что dst теперь указывает в подпапки
-            # (Отчёты/, Обработка/, Продажи/), которые могут быть
-            # ещё не созданы при первом копировании.
             dst_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_path, dst_path)
             ctx.log(f"Скопирован {description}: {dst_path.name}")
