@@ -24,7 +24,10 @@ from utils.filename_utils import FilenameUtils
 from utils.parsers import PreFinalRow
 from utils.price_utils import AveragePriceResolver
 from utils.price_filler import PriceFiller
-from utils.report_readers import ChzMpReportReader, MpReportReader
+from utils.report_readers import (
+    ChzMpReportReader, WBReportReader, OZONReportReader,
+    MpReportTypeDetector,
+)
 from utils.sales_file_generator import SalesFileGenerator
 from utils.fbs_buferprices import FbsBufferPrices
 from services.kiz_validator import ValidationResult
@@ -101,50 +104,113 @@ class PreparationService:
                 )
             dst = ctx.reports_dir / new_name
             FileHelper.copy_file_with_log(
-                src_path, dst, ctx,
+                src_path, dst, logger,
                 description="ЧЗ МП",
                 overwrite=False,
             )
 
     def _copy_mp_files(self, ctx: TaskContext, logger, mp_files,
                        sellers) -> None:
-        """Копирует отчёты МП в подпапку Отчёты/."""
+        """Копирует отчёты МП в подпапку Отчёты/.
+
+        REPLACE: определяем тип отчёта (WB / Ozon) по первому
+        листу и формируем имя по шаблону Отчёт_WB_... или
+        Отчёт_OZON_.... Старый шаблон ОТЧЁТ МП ПО ... не
+        поддерживается. Неопознанные и неоткрывающиеся файлы
+        копируются как «Неопознанный отчёт {stem} {date}.xlsx».
+        """
         if not mp_files:
             return
-        seller_counters: dict[str, int] = {}
+        seller_counters: dict = {}
         for src in mp_files:
             src_path = Path(src)
+
+            wb = ExcelHelper.open_workbook_safe(
+                src_path, read_only=True, data_only=True,
+            )
+            if wb is None:
+                logger.warning(f"Не удалось открыть {src_path.name}")
+                dst = ctx.reports_dir / FilenameUtils.format_with_extension(
+                    f"Неопознанный отчёт {src_path.stem} {{date}}",
+                    ctx.date_str,
+                )
+                FileHelper.copy_file_with_log(
+                    src_path, dst, logger,
+                    description="неопознанный отчёт", overwrite=False,
+                )
+                continue
+
+            # Битый dimension — не копируем вообще.
+            if ExcelHelper._is_dimension_broken(wb):
+                wb.close()
+                logger.critical(
+                    f"Файл {src_path.name} имеет битый dimension – "
+                    f"пропущен",
+                    can_influence=False,
+                )
+                continue
+
+            report_type = MpReportTypeDetector.detect(wb)
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+            # Тип не распознан — копируем как неопознанный.
+            if report_type is None:
+                logger.warning(
+                    f"Не удалось определить тип отчёта: {src_path.name}"
+                )
+                dst = ctx.reports_dir / FilenameUtils.format_with_extension(
+                    f"Неопознанный отчёт {src_path.stem} {{date}}",
+                    ctx.date_str,
+                )
+                FileHelper.copy_file_with_log(
+                    src_path, dst, logger,
+                    description="неопознанный отчёт", overwrite=False,
+                )
+                continue
+
+            # Логируем тип.
+            type_label = "WB" if report_type == "wb" else "Ozon"
+            logger.report(
+                f"Определён тип отчёта: {type_label} ({src_path.name})"
+            )
+
+            # Продавца ищем по имени файла.
             fname_lower = src_path.stem.lower()
             found_seller = TextUtils.find_seller_by_file_name(
                 fname_lower, sellers
             )
 
+            # Ключ счётчика — (seller или stem, тип).
             if found_seller:
-                seller_counters[found_seller.name] = (
-                    seller_counters.get(found_seller.name, 0) + 1
-                )
-                idx = seller_counters[found_seller.name]
-                template = f"ОТЧЁТ МП ПО {found_seller.name} {{date}}"
-                if idx == 1:
-                    new_name = FilenameUtils.format_with_extension(
-                        template, ctx.date_str
-                    )
-                else:
-                    new_name = FilenameUtils.format_with_extension(
-                        template, ctx.date_str, index=idx
-                    )
+                seller_key = found_seller.name
             else:
-                new_name = src_path.name
-                # REPLACE: было ctx.log — стало logger.report.
-                logger.report(
-                    f"Не удалось определить продавца для: {src_path.name}"
+                seller_key = src_path.stem
+            counter_key = (seller_key, report_type)
+
+            idx = seller_counters.get(counter_key, 0) + 1
+            seller_counters[counter_key] = idx
+
+            if report_type == "wb":
+                template = f"Отчёт_WB_{seller_key} {{date}}"
+            else:
+                template = f"Отчёт_OZON_{seller_key} {{date}}"
+
+            if idx == 1:
+                new_name = FilenameUtils.format_with_extension(
+                    template, ctx.date_str,
+                )
+            else:
+                new_name = FilenameUtils.format_with_extension(
+                    template, ctx.date_str, index=idx,
                 )
 
             dst = ctx.reports_dir / new_name
             FileHelper.copy_file_with_log(
-                src_path, dst, ctx,
-                description="отчёт",
-                overwrite=False,
+                src_path, dst, logger,
+                description="отчёт", overwrite=False,
             )
 
 class ExportKizService:
@@ -282,7 +348,29 @@ class ExportKizService:
                         can_influence=False,
                     )
                     continue
-
+                # --- 3. Обработка Ozon-отчётов ---
+            ozon_files = FileHelper.find_files_by_pattern(
+                ctx.reports_dir, "Отчёт_OZON_*.xlsx"
+            )
+            for ozon_path in ozon_files:
+                try:
+                    data = OZONReportReader.read(
+                        report_path=ozon_path,
+                        sellers=sellers,
+                        kiz_validator=self.kiz_validator,
+                        logger=logger,
+                    )
+                    if data is None:
+                        continue
+                    kiz_by_seller[data.seller.name].update(data.full_kizs)
+                    prices_by_seller[data.seller.name].update(data.prices)
+                except Exception as e:
+                    logger.critical(
+                        f"Ошибка обработки файла {Path(ozon_path).name}: "
+                        f"{e}",
+                        can_influence=False,
+                    )
+                    continue
         # ------------------------------------------------------------
         # 3. Сохранение цен из отчётов МП — вне батча.
         # ------------------------------------------------------------

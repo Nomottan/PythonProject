@@ -18,7 +18,7 @@ class PlannerTaskStorage(ListJsonStorage):
           определяет только преобразование моделей в JSON и обратно.
     """
 
-    def __init__(self, file_path, log_manager=None) -> None:
+    def __init__(self, file_path, log_manager_v2=None) -> None:
         """Конструктор.
 
         Вход:
@@ -29,7 +29,7 @@ class PlannerTaskStorage(ListJsonStorage):
               загрузит файл и вызовет _on_load.
         """
         super().__init__(
-            file_path, log_manager,
+            file_path, log_manager_v2,
             source="PlannerTaskStorage.planner_task_storage",
         )
 

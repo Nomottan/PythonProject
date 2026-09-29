@@ -5,6 +5,15 @@
 PlannerWindow и PlannerArchiveWindow: скролл, tasks_layout, цвета,
 билдеры строк, _reload_tasks, _build_task_row, таймер автообновления,
 closeEvent.
+
+Роль в программе:
+    Оба окна планировщика — наследники. Логгер V2 создаётся в
+    базовом __init__, если передан log_manager_v2 и задан
+    LOGGER_SOURCE у наследника.
+
+Переезд: раньше файл лежал в ui/windows/, теперь в ui/base/ —
+базовый класс логически относится к ui.base наравне с
+BaseEditDialog и BaseServiceWindow. Старый путь удалён.
 """
 
 from PySide6.QtWidgets import (
@@ -18,12 +27,14 @@ from ui.factories.factories import (
 )
 from models.planner_task import TaskPriority
 
+
 class _BasePlannerListWindow(QMainWindow):
     """Базовое окно со списком задач.
 
     Общая часть для PlannerWindow и PlannerArchiveWindow.
 
     Наследники определяют:
+        LOGGER_SOURCE / LOGGER_DOMAIN — идентификация для LoggerV2.
         TASK_TYPE_COLUMNS — список колонок.
         _get_tasks() — источник данных.
         При необходимости расширяют COLUMN_BUILDERS.
@@ -36,9 +47,13 @@ class _BasePlannerListWindow(QMainWindow):
     ACCENT_SHIFT = 25
     ACCENT_ALPHA = 0.7
 
+    # NEW: идентификация для LoggerV2. Наследники переопределяют.
+    LOGGER_SOURCE = None
+    LOGGER_DOMAIN = None
+
     PRIORITY_COLORS = {
-        "Событие": (240, 240, 40, 0.85),  # NEW
-        "Регулярная": (80, 160, 220, 0.85),  # NEW: было пропущено в старом словаре
+        "Событие": (240, 240, 40, 0.85),
+        "Регулярная": (80, 160, 220, 0.85),
         "Дедлайн": (220, 130, 60, 0.85),
         "Высокий": (180, 70, 70, 0.85),
         "Средний": (180, 150, 70, 0.85),
@@ -50,9 +65,9 @@ class _BasePlannerListWindow(QMainWindow):
         "Выполнена": (100, 150, 100, 0.85),
         "Отменена": (120, 120, 120, 0.85),
         "Просрочено": (200, 70, 70, 0.85),
-        "Истекло": (200, 70, 70, 0.85),  # NEW
-        "Пауза": (150, 130, 70, 0.85),  # NEW: если ещё не добавил
-        "Ожидание": (100, 100, 150, 0.85),  # NEW: если ещё не добавил
+        "Истекло": (200, 70, 70, 0.85),
+        "Пауза": (150, 130, 70, 0.85),
+        "Ожидание": (100, 100, 150, 0.85),
     }
 
     # Нейтральный цвет для неизвестных значений.
@@ -67,22 +82,37 @@ class _BasePlannerListWindow(QMainWindow):
         "specifications": "_build_specifications",
     }
 
-    def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8)):
+    def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8),
+                 log_manager_v2=None):
         """Конструктор.
 
         Вход:
             parent — родительское окно.
             title — заголовок окна.
             bg_color — цвет фона. Передаётся в WindowFactory и в скролл.
+            log_manager_v2 — LogManagerV2 или None. Если задан и
+                             LOGGER_SOURCE у наследника — создаётся
+                             self.logger.
 
         Роль: строит общий каркас (заголовок, крестик, скролл,
               tasks_layout), запускает таймер автообновления.
+
+        REPLACE: добавлены log_manager_v2 и создание self.logger.
         """
         super().__init__(parent)
         self.bg_color = bg_color
 
-        # NEW: акцентный цвет для названий задач и даты — вычисляется
-        # от фона окна. Не хардкодим (95, 80, 65) в билдерах.
+        # NEW: логгер V2.
+        self.log_manager_v2 = log_manager_v2
+        self.logger = None
+        if log_manager_v2 is not None and self.LOGGER_SOURCE is not None:
+            self.logger = log_manager_v2.create_logger_v2(
+                source=self.LOGGER_SOURCE,
+                domain=self.LOGGER_DOMAIN,
+            )
+
+        # Акцентный цвет для названий задач и даты — вычисляется
+        # от фона окна.
         self._accent_bg = self._calc_accent_color(bg_color)
         self._accent_text = BaseWidgetFactory.calc_text_color(self._accent_bg)
 
@@ -129,11 +159,9 @@ class _BasePlannerListWindow(QMainWindow):
         Выход: кортеж (r+shift, g+shift, b+shift, alpha).
 
         Роль: используется для фона названия задачи и даты, чтобы
-              они визуально отделялись от основного фона. Сдвиг и alpha
-              — в ACCENT_SHIFT / ACCENT_ALPHA, легко менять централизованно.
+              они визуально отделялись от основного фона.
         """
         if not isinstance(bg_color, (tuple, list)) or len(bg_color) < 3:
-            # Fallback — если что-то нестандартное.
             return (95, 80, 65, cls.ACCENT_ALPHA)
         r, g, b = bg_color[:3]
 
@@ -202,7 +230,6 @@ class _BasePlannerListWindow(QMainWindow):
         Вход: task — PlannerTask.
         Выход: QPushButton с названием.
         Роль: клик открывает NotificationDialog с описанием.
-              Фон кнопки — self._accent_bg (вычислен от фона окна).
         """
         btn = ButtonFactory.create_button(
             self,
@@ -218,7 +245,6 @@ class _BasePlannerListWindow(QMainWindow):
         btn.setMaximumWidth(300)
         btn.setToolTip(task.title)
         btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        # Замыкаем task через параметр по умолчанию.
         btn.clicked.connect(
             lambda checked=False, t=task: self._on_title_clicked(t)
         )
@@ -243,10 +269,7 @@ class _BasePlannerListWindow(QMainWindow):
         )
 
     def _build_date(self, task):
-        """Дата создания задачи — лейбл с акцентным фоном.
-
-        Фон и текст вычисляются от bg_color окна, а не хардкодятся.
-        """
+        """Дата создания задачи — лейбл с акцентным фоном."""
         return LabelFactory.create_label(
             self,
             text=task.created_date,
@@ -327,7 +350,14 @@ class _BasePlannerListWindow(QMainWindow):
         pass
 
     def closeEvent(self, event):
-        """Останавливает таймер и завершает работу окна."""
+        """Останавливает таймер и завершает работу окна.
+
+        REPLACE: добавлен debug-лог при закрытии.
+        """
+        if self.logger is not None:
+            self.logger.debug(
+                f"{type(self).__name__}: closeEvent получен"
+            )
         if hasattr(self, "_timer"):
             self._timer.stop()
         self.cleanup()

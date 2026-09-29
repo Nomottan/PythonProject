@@ -35,15 +35,24 @@ class SellersWindow(QMainWindow):
         сохранение в config.json — в save_and_close при закрытии окна.
     """
 
-    def __init__(self, parent=None):
+    LOGGER_SOURCE = "SellersWindow.sellers_window"
+    LOGGER_DOMAIN = "sellers_brands"
+
+    def __init__(self, parent=None, log_manager_v2=None):
+        super().__init__(parent)
         """Конструктор.
 
         Вход: parent — MainWindow.
         """
-        super().__init__(parent)
 
         self.main_window = parent
-
+        self.log_manager_v2 = log_manager_v2
+        self.logger = None
+        if log_manager_v2 is not None:
+            self.logger = log_manager_v2.create_logger_v2(
+                source=self.LOGGER_SOURCE,
+                domain=self.LOGGER_DOMAIN,
+            )
         # Читаем бренды и продавцов через сервис.
         brands = parent.sellers_brands_service.get_brands_objects()
         brands_dict = {b.name: b for b in brands}
@@ -185,14 +194,16 @@ class SellersWindow(QMainWindow):
         line_edit.setFocus()
 
     def _edit_company(self, seller: Seller) -> None:
-        """Открывает диалог редактирования компании."""
-        dialog = CompanyDialog(self, seller)
+        dialog = CompanyDialog(
+            self, seller, log_manager_v2=self.log_manager_v2,
+        )
         dialog.show()
 
     def _edit_brands(self, seller: Seller) -> None:
-        """Открывает диалог с чек-листом брендов."""
         brands = self.main_window.sellers_brands_service.get_brands_objects()
-        dialog = BrandChecklistDialog(self, seller, brands)
+        dialog = BrandChecklistDialog(
+            self, seller, brands, log_manager_v2=self.log_manager_v2,
+        )
         dialog.show()
 
     def _edit_keys(self, seller: Seller) -> None:
@@ -218,13 +229,15 @@ class SellersWindow(QMainWindow):
             self._add_seller_row(seller)
 
     def save_and_close(self) -> None:
-        """Сохраняет продавцов в config.json и закрывает окно."""
         try:
             self.main_window.sellers_brands_service.set_sellers_objects(self.sellers)
             self.main_window.update_buttons_state()
         except Exception as e:
-            import sys
-            sys.stderr.write(f"[SellersWindow] Ошибка сохранения: {e}\n")
+            if self.logger is not None:
+                self.logger.critical(
+                    f"Ошибка сохранения продавцов: {e}",
+                    can_influence=False,
+                )
         finally:
             self.close()
 
@@ -240,7 +253,10 @@ class CompanyDialog(BaseEditDialog):
         в _build_content. Сохранение — по закрытию через on_close.
     """
 
-    def __init__(self, parent, seller: Seller):
+    LOGGER_SOURCE = "CompanyDialog.sellers_window"
+    LOGGER_DOMAIN = "sellers_brands"
+
+    def __init__(self, parent, seller: Seller, log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -249,18 +265,14 @@ class CompanyDialog(BaseEditDialog):
         """
         self.seller = seller
         super().__init__(
-            parent=parent,
-            title="Компания",
+            parent=parent, title="Компания",
             bg_color=(40, 30, 50, 0.95),
-            close_button=False,
-            ok_cancel=False,
-            draggable=False,
-            close_on_click_outside=True,
-            modal=True,
-            center=True,
+            close_button=False, ok_cancel=False,
+            draggable=False, close_on_click_outside=True,
+            modal=True, center=True,
             on_close=self._save_and_close,
-            width=400,
-            height=350,
+            width=400, height=350,
+            log_manager_v2=log_manager_v2,
         )
         self.setAttribute(Qt.WA_DeleteOnClose, True)
 
@@ -329,7 +341,11 @@ class BrandChecklistDialog(BaseEditDialog):
         «добавить/удалить бренд» — в _collect_result.
     """
 
-    def __init__(self, parent, seller: Seller, all_brands: list):
+    LOGGER_SOURCE = "BrandChecklistDialog.sellers_window"
+    LOGGER_DOMAIN = "sellers_brands"
+
+    def __init__(self, parent, seller: Seller, all_brands: list,
+                 log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -344,17 +360,13 @@ class BrandChecklistDialog(BaseEditDialog):
         self.checkboxes = []  # список (QCheckBox, Brand)
         self.bg_color = (40, 30, 50, 0.95)
         super().__init__(
-            parent=parent,
-            title=f"Бренды — {seller.name}",
-            bg_color= self.bg_color,
-            close_button=True,
-            ok_cancel=True,
-            draggable=True,
-            close_on_click_outside=True,
-            modal=True,
-            center=True,
-            width=400,
-            height=450,
+            parent=parent, title=f"Бренды — {seller.name}",
+            bg_color=self.bg_color,
+            close_button=True, ok_cancel=True,
+            draggable=True, close_on_click_outside=True,
+            modal=True, center=True,
+            width=400, height=450,
+            log_manager_v2=log_manager_v2,
         )
         self.setAttribute(Qt.WA_DeleteOnClose, True)
 

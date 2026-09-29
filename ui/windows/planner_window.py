@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QTimer
 from ui.factories.factories import WindowFactory, ButtonFactory
 from ui.windows.planner_task_dialogs import NewTaskDialog
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
-from ui.windows.planner_base_window import _BasePlannerListWindow
+from ui.base.planner_base_window import _BasePlannerListWindow
 
 class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
@@ -32,7 +32,11 @@ class PlannerWindow(_BasePlannerListWindow):
         "actions": "_build_actions",
     }
 
-    def __init__(self, parent=None, planner_service=None, archive_service=None):
+    LOGGER_SOURCE = "PlannerWindow.planner_window"
+    LOGGER_DOMAIN = "planner"
+
+    def __init__(self, parent=None, planner_service=None,
+                 archive_service=None, log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -48,6 +52,7 @@ class PlannerWindow(_BasePlannerListWindow):
 
         super().__init__(
             parent, "Планировщик", bg_color=(70, 60, 50, 0.95),
+            log_manager_v2=log_manager_v2,
         )
 
         # Нижняя панель: «Новая задача» + «Архив» + растяжка.
@@ -160,7 +165,9 @@ class PlannerWindow(_BasePlannerListWindow):
         """
         from ui.windows.planner_archive_window import PlannerArchiveWindow
         self._archive_window = PlannerArchiveWindow(
-            self, archive_service=self.archive_service
+            self,
+            archive_service=self.archive_service,
+            log_manager_v2=self.log_manager_v2,
         )
         self._archive_window.setWindowModality(Qt.WindowModal)
         WindowFactory.show_child_window(self, self._archive_window, cover_parent=True)

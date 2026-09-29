@@ -26,7 +26,8 @@ class BaseTaskDialog(BaseEditDialog):
                  bg_color=(64, 48, 66, 0.8), width=400, height=350,
                  close_button=True, ok_cancel=True,
                  draggable=False, close_on_click_outside=False,
-                 modal=True, center=True, on_close=None):
+                 modal=True, center=True, on_close=None,
+                 log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -42,6 +43,8 @@ class BaseTaskDialog(BaseEditDialog):
             modal — модальность.
             center — центрировать.
             on_close — callback при закрытии.
+            log_manager_v2 — LogManagerV2 или None. Проксируется
+                             в BaseEditDialog.
 
         Роль: сохраняет self._task, проксирует остальное в BaseEditDialog.
         """
@@ -52,4 +55,5 @@ class BaseTaskDialog(BaseEditDialog):
             ok_cancel=ok_cancel, draggable=draggable,
             close_on_click_outside=close_on_click_outside,
             modal=modal, center=center, on_close=on_close,
+            log_manager_v2=log_manager_v2,
         )

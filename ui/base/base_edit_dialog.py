@@ -36,10 +36,14 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
     Метод setup_dialog_frame доступен наследникам через миксин.
     """
 
+    LOGGER_SOURCE = None
+    LOGGER_DOMAIN = None
+
     def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8),
                  width=400, height=350, close_button=True, ok_cancel=True,
                  draggable=False, close_on_click_outside=False,
-                 modal=True, center=True, on_close=None):
+                 modal=True, center=True, on_close=None,
+                 log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -54,13 +58,23 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
             modal — модальность.
             center — центрировать относительно parent.
             on_close — callback при закрытии.
+            log_manager_v2 — LogManagerV2 или None. Если задан и
+                             LOGGER_SOURCE у наследника — создаётся
+                             self.logger.
 
         Роль: вызывает setup_dialog_frame (из DialogSetupMixin),
               получает content_layout и передаёт его в _build_content.
         """
         super().__init__(parent)
-        # Результат _collect_result. По умолчанию None.
         self._result = None
+
+        self.log_manager_v2 = log_manager_v2
+        self.logger = None
+        if log_manager_v2 is not None and self.LOGGER_SOURCE is not None:
+            self.logger = log_manager_v2.create_logger_v2(
+                source=self.LOGGER_SOURCE,
+                domain=self.LOGGER_DOMAIN,
+            )
 
         # Настраиваем каркас и получаем layout для контента.
         content_layout = self.setup_dialog_frame(

@@ -17,11 +17,31 @@ class PlannerService(QObject):
     tasks_changed = Signal()
 
     def __init__(self, storage: PlannerTaskStorage,
-                 archive_storage=None, log_manager=None):
+                 archive_storage=None, log_manager_v2=None):
+        """Конструктор.
+
+        Вход:
+            storage — PlannerTaskStorage (активные задачи).
+            archive_storage — PlannerArchiveStorage или None.
+            log_manager_v2 — LogManagerV2 или None. Если передан —
+                             создаётся self._logger с source
+                             "PlannerService" и domain "planner".
+
+        Роль: сохраняет ссылки на storage и создаёт логгер.
+              Пока явных вызовов logger в методах сервиса нет —
+              логгер создан для будущих сообщений и для
+              единообразия с остальными сервисами.
+        """
         super().__init__()
         self._storage = storage
         self._archive_storage = archive_storage
-        self._log_manager = log_manager
+        self._log_manager_v2 = log_manager_v2
+        self._logger = None
+        if log_manager_v2 is not None:
+            self._logger = log_manager_v2.create_logger_v2(
+                source="PlannerService",
+                domain="planner",
+            )
 
     def get_tasks(self) -> list[PlannerTask]:
         """Возвращает список задач, отсортированный по task_id убыв (новые сверху)."""

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from PySide6.QtCore import Qt
 from ui.factories.button_factory import ButtonFactory
 from ui.windows.message_dialog import MessageDialog
-from ui.windows.planner_base_window import _BasePlannerListWindow
+from ui.base.planner_base_window import _BasePlannerListWindow
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
 from ui.windows.planner_task_dialogs import (
     DeadlineEditDialog, PlannerRecurrenceEditDialog,
@@ -27,8 +27,9 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         обесцвеченного фона и отсутствия нижних кнопок.
     """
 
-    # 70% обесцвечивания от PlannerWindow.bg_color = (70, 60, 50):
-    # avg = 60; r = 70*0.3 + 60*0.7 = 63, g = 60, b = 57.
+    LOGGER_SOURCE = "PlannerArchiveWindow.planner_archive_window"
+    LOGGER_DOMAIN = "planner"
+
     ARCHIVE_BG_COLOR = (63, 60, 57, 0.95)
 
     # Колонки архива: действия (↺, ✕), название, приоритет, статус, дата.
@@ -42,7 +43,8 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         "actions": "_build_actions",
     }
 
-    def __init__(self, parent=None, archive_service=None):
+    def __init__(self, parent=None, archive_service=None,
+                 log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -56,7 +58,10 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         if archive_service is None:
             raise ValueError("archive_service обязателен")
         self.service = archive_service
-        super().__init__(parent, "Архив", bg_color=self.ARCHIVE_BG_COLOR)
+        super().__init__(
+            parent, "Архив", bg_color=self.ARCHIVE_BG_COLOR,
+            log_manager_v2=log_manager_v2,
+        )
         #очистка от старых экземпляров
         self.service.delete_old_instances(days=30)
         # Первая загрузка задач архива.

@@ -24,7 +24,7 @@ class CompareMappingsStorage(DictJsonStorage):
     _JSON_INDENT = 4
     _JSON_SORT_KEYS = False
 
-    def __init__(self, path_manager, log_manager=None) -> None:
+    def __init__(self, path_manager, log_manager_v2=None) -> None:
         """Конструктор.
 
         Вход:
@@ -32,7 +32,7 @@ class CompareMappingsStorage(DictJsonStorage):
             log_manager — LogManager для логирования.
         """
         super().__init__(
-            path_manager.mappings_file, log_manager,
+            path_manager.mappings_file, log_manager_v2,
             source="CompareMappingsStorage.compare_mappings",
         )
 

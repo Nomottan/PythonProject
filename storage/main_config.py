@@ -23,7 +23,7 @@ class MainConfig(ConfigJsonStorage):
     _JSON_INDENT = 4
     _JSON_SORT_KEYS = False
 
-    def __init__(self, path_manager, log_manager=None) -> None:
+    def __init__(self, path_manager, log_manager_v2=None) -> None:
         """Конструктор.
 
         Вход:
@@ -34,7 +34,7 @@ class MainConfig(ConfigJsonStorage):
               не хардкодить "Data/config.json" в двух местах.
         """
         super().__init__(
-            path_manager.config_file, log_manager,
+            path_manager.config_file, log_manager_v2,
             source="MainConfig.main_config",
         )
 

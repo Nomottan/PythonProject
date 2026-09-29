@@ -5,6 +5,9 @@
 Публичный API сохранён без изменений — вся прикладная семантика
 (полная перезапись записи, формат дат, логика очистки) воспроизведена
 один в один.
+
+Логирование — через LoggerV2. Публичные каналы debug/info/warning/error
+оставлены для KizValidator: он транслирует свои сообщения в хранилище.
 """
 
 from datetime import datetime, timedelta
@@ -28,11 +31,9 @@ class KizStorage(DictJsonStorage):
     Поля:
         _data: dict[str, dict] — данные в памяти.
         _batcher: Batcher — менеджер отложенной записи.
-        _log_path: Optional[Path] — путь к старому логу (легаси).
-        _log_callback: Callable — легаси-колбэк.
 
     Публичный API: get, get_all, add_or_update, clear, batch, save,
-    clean_old_entries, set_log_path.
+    clean_old_entries, debug, info, warning, error.
     """
 
     # Порог промежуточного сохранения внутри батча. При долгом прогоне
@@ -40,26 +41,25 @@ class KizStorage(DictJsonStorage):
     BATCH_SAVE_THRESHOLD = 250
     _JSON_INDENT = None
     _JSON_SORT_KEYS = True
-    def __init__(self, file_path, log_callback=None, log_manager=None) -> None:
+
+    def __init__(self, file_path, log_manager_v2=None) -> None:
         """Конструктор.
 
         Вход:
             file_path — путь к used_kiz.json.
-            log_callback — легаси-колбэк (msg) -> None. Оставлен
-                           для обратной совместимости.
-            log_manager — LogManager. Если передан — создаём Logger
-                          с source="KizStorage.fbs_kiz_storage".
+            log_manager_v2 — LogManagerV2. Если передан — создаём
+                             LoggerV2 с source="KizStorage.fbs_kiz_storage".
 
-        Роль: сохраняет путь и каналы логирования, создаёт Batcher
-              поверх _do_save, загружает файл через базовый класс.
+        Роль: сохраняет путь, создаёт Batcher поверх _do_save,
+              загружает файл через базовый класс.
+
+        REPLACE: было log_manager (V1) + log_callback + _log_path.
+                 Стало log_manager_v2 (V2). Легаси-каналы удалены —
+                 они не нужны, LoggerV2 сам распределяет по errors.txt
+                 и UI.
         """
-        # Легаси-канал до super().__init__ — иначе _log_warning
-        # во время загрузки его не увидит.
-        self._log_callback = log_callback or (lambda msg: None)
-        self._log_path: Optional[Path] = None
-
         super().__init__(
-            file_path, log_manager,
+            file_path, log_manager_v2,
             source="KizStorage.fbs_kiz_storage",
         )
         # Batcher поверх метода _do_save. Порог 250 — как в оригинале.
@@ -77,68 +77,49 @@ class KizStorage(DictJsonStorage):
         """Пишем self._data как есть."""
         return self._data
 
-    # ---------- Легаси-совместимость ----------
-
-    def set_log_path(self, work_dir) -> None:
-        """Устанавливает путь к старому логу kiz_validation.log.
-
-        Вход: work_dir — рабочая папка задачи.
-        Выход: нет.
-
-        Роль: сохранён для обратной совместимости с sells_fbs_service.py.
-              При активном LogManager этот путь не используется —
-              записи идут через errors.txt и UI. Если LogManager
-              не передан — fallback-логирование пойдёт в этот файл.
-        """
-        self._log_path = Path(work_dir) / "kiz_validation.log"
-
-    def _log(self, message: str) -> None:
-        """Легаси-fallback логирования.
-
-        Вход: message — текст.
-        Роль: используется только если LogManager не передан.
-              Пишет в kiz_validation.log (если путь задан) и в колбэк.
-        """
-        import sys
-        if self._log_path is not None:
-            try:
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-                with open(self._log_path, "a", encoding="utf-8") as f:
-                    f.write(f"[{timestamp}] {message}\n")
-            except Exception as error:
-                sys.stderr.write(
-                    f"[KizStorage] Не удалось записать в {self._log_path}: {error}\n"
-                )
-        try:
-            self._log_callback(message)
-        except Exception as error:
-            sys.stderr.write(f"[KizStorage] Ошибка log_callback: {error}\n")
+    # ---------- Публичные каналы логирования ----------
 
     def debug(self, message: str) -> None:
-        """Отладочное сообщение. В fallback-режиме игнорируется."""
+        """Отладочное сообщение.
+
+        Вход: message — текст.
+        Роль: канал для KizValidator. При отсутствии логгера — no-op.
+        """
         if self._logger is not None:
             self._logger.debug(message)
 
     def info(self, message: str) -> None:
-        """Информационное сообщение."""
+        """Информационное сообщение.
+
+        Вход: message — текст.
+        Роль: канал для KizValidator — сводные сообщения о валидации.
+        """
         if self._logger is not None:
             self._logger.info(message)
-        else:
-            self._log(message)
 
     def warning(self, message: str) -> None:
-        """Предупреждение."""
+        """Предупреждение.
+
+        Вход: message — текст.
+        Роль: канал для KizValidator — некритичные аномалии
+              (битая дата, отсутствие записи).
+        """
         if self._logger is not None:
             self._logger.warning(message)
-        else:
-            self._log(f"[WARNING] {message}")
 
     def error(self, message: str) -> None:
-        """Ошибка."""
+        """Ошибка.
+
+        Вход: message — текст.
+        Роль: канал для KizValidator.
+
+        REPLACE: было self._logger.error(message) — стало
+        critical(can_influence=False). В V2 error-канала нет:
+        «критично, пользователь не может повлиять» — это
+        NotificationDialog + errors.txt.
+        """
         if self._logger is not None:
-            self._logger.error(message)
-        else:
-            self._log(f"[ERROR] {message}")
+            self._logger.critical(message, can_influence=False)
 
     # ---------- Батчинг ----------
 

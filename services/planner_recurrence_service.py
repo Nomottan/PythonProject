@@ -21,9 +21,24 @@ class PlannerRecurrenceService:
         Вызывается при запуске приложения и по таймеру.
     """
 
-    def __init__(self, planner_service: PlannerService, log_manager=None):
+    def __init__(self, planner_service: PlannerService,
+                 log_manager_v2=None):
+        """Конструктор.
+
+        Вход:
+            planner_service — PlannerService для чтения/записи задач.
+            log_manager_v2 — LogManagerV2 или None.
+
+        Роль: сохраняет ссылку на сервис и создаёт логгер.
+        """
         self._service = planner_service
-        self._log_manager = log_manager
+        self._log_manager_v2 = log_manager_v2
+        self._logger = None
+        if log_manager_v2 is not None:
+            self._logger = log_manager_v2.create_logger_v2(
+                source="PlannerRecurrenceService",
+                domain="planner",
+            )
 
     # ---------- Основной цикл ----------
 

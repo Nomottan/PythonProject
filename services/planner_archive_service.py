@@ -14,7 +14,7 @@ class PlannerArchiveService:
     """
 
     def __init__(self, archive_storage: PlannerArchiveStorage,
-                 active_storage: PlannerTaskStorage, log_manager=None,
+                 active_storage: PlannerTaskStorage, log_manager_v2=None,
                  planner_service=None):
         """Конструктор.
 
@@ -28,8 +28,14 @@ class PlannerArchiveService:
         """
         self._archive_storage = archive_storage
         self._active_storage = active_storage
-        self._log_manager = log_manager
+        self._log_manager = log_manager_v2
         self._planner_service = planner_service
+        self._logger = None
+        if log_manager_v2 is not None:
+            self._logger = log_manager_v2.create_logger_v2(
+                source="PlannerArchiveService",
+                domain="planner",
+            )
 
     def get_archive_tasks(self) -> list[PlannerTask]:
         """Все задачи из архива, отсортированные по task_id убыв."""

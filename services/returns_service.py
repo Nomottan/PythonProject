@@ -84,7 +84,7 @@ class ReturnsPreparationService:
         # ensure_file_exists требует ctx — FileHelper пишет через
         # ctx.log. Это долг, но так было и раньше.
         source_path = FileHelper.ensure_file_exists(
-            ctx, source_file, "исходный файл"
+            logger, source_file, "исходный файл"
         )
         if source_path is None:
             return
@@ -96,7 +96,7 @@ class ReturnsPreparationService:
         )
         copy_dest = ctx.reports_dir / copy_name
         if not FileHelper.copy_file_with_log(
-            source_path, copy_dest, ctx,
+            source_path, copy_dest, logger,
             description="исходный файл", overwrite=True,
         ):
             # FileHelper уже написал причину в ctx.log.
@@ -240,7 +240,7 @@ class KizExportService:
             "Возвраты_{date}", ctx.date_str
         )
         source_file = FileHelper.ensure_file_exists(
-            ctx, source_file, "файл возвратов"
+            logger, source_file, "файл возвратов"
         )
         if source_file is None:
             return
@@ -361,7 +361,7 @@ class KizTransferService:
             "Возвраты_{date}", ctx.date_str
         )
         source_file = FileHelper.ensure_file_exists(
-            ctx, source_file, "файл возвратов"
+            logger, source_file, "файл возвратов"
         )
         if source_file is None:
             return

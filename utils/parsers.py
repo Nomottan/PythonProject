@@ -103,6 +103,31 @@ class DateParser(BaseParser):
         except (ValueError, TypeError):
             return None
 
+    @staticmethod
+    def parse_iso_datetime(text: str) -> Optional[datetime]:
+        """Разбирает ISO-дату из Ozon-отчёта.
+
+        Вход:
+            text — строка вида "2026-09-01 12:20:00" или
+                   "2026-09-01 12:20".
+
+        Выход:
+            datetime или None при несоответствии формату.
+
+        Роль:
+            Единая точка разбора ISO-дат Ozon. Пробует сначала
+            формат с секундами, потом без. Пустая строка → None.
+        """
+        if not text:
+            return None
+        cleaned = str(text).strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
+
 
 class NumberParser(BaseParser):
     """Парсер чисел из строк с разделителями.

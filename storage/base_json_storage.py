@@ -54,7 +54,8 @@ class BaseJsonStorage:
     _JSON_INDENT = 2
     _JSON_SORT_KEYS = False
 
-    def __init__(self, file_path, log_manager=None, source: str = "") -> None:
+    def __init__(self, file_path, log_manager_v2=None, source: str = "",
+                 domain: str = "storage") -> None:
         """Конструктор.
 
         Вход:
@@ -70,11 +71,9 @@ class BaseJsonStorage:
         """
         self._file_path: Path = Path(file_path)
         self._logger = None
-        if log_manager is not None and source:
-            # work_folder=None: пишем только в errors.txt и UI,
-            # не плодим отдельный лог-файл на каждое хранилище.
-            self._logger = log_manager.create_logger(
-                source=source, work_folder=None,
+        if log_manager_v2 is not None and source:
+            self._logger = log_manager_v2.create_logger_v2(
+                source=source, domain=domain,
             )
         # _data инициализируется в load() — на этапе __init__ мы ещё
         # не знаем, есть ли файл и валиден ли он.
@@ -138,8 +137,8 @@ class BaseJsonStorage:
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                "w", dir=self._file_path.parent, delete=False,
-                suffix=".tmp", encoding="utf-8",
+                    "w", dir=self._file_path.parent, delete=False,
+                    suffix=".tmp", encoding="utf-8",
             ) as f:
                 tmp_path = f.name
                 json.dump(
@@ -213,8 +212,9 @@ class BaseJsonStorage:
         Вход: message — текст сообщения.
         Роль: единая точка логирования ошибок.
         """
+
         if self._logger is not None:
-            self._logger.error(message)
+            self._logger.critical(message, can_influence=False)
         else:
             sys.stderr.write(f"[{type(self).__name__}] ERROR: {message}\n")
 

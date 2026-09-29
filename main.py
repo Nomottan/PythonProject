@@ -1,7 +1,25 @@
+"""
+Точка входа приложения «Помощник».
+
+Содержит MainWindow — главное окно с кнопками запуска сервисных
+окон (Продавцы, Бренды, ЧЗ МП, Возвраты, Сравнение, Планировщик),
+мини-планировщиком и таймерами.
+
+Роль в программе:
+    Создаёт все storage и сервисы, инициализирует LogManagerV2,
+    открывает дочерние окна. Все логи — через LoggerV2.
+    utils.log_system (V1) удалён, старый LogManager здесь не
+    используется.
+"""
+
+import json
 import sys
+from pathlib import Path
+
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
                                QVBoxLayout, QHBoxLayout)
 from PySide6.QtCore import QTimer, Qt
+
 from ui.windows import (
     ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
     StringListDialog, PlannerWindow
@@ -10,7 +28,6 @@ from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from ui.widgets.planner_quick_view import PlannerQuickView
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
-from utils.log_system import LogManager
 from utils.log_tools.decorators import log_button_action
 from services.subservices.logging import LogManagerV2
 from services.kiz_validator import KizValidator
@@ -44,27 +61,21 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        # --- Пути и старое логирование ---
+        # --- Пути ---
         self.paths = PathManager()
-        self.log_manager = LogManager()
 
-        # --- Конфиг + сервис продавцов/брендов ---
-        self.main_config = MainConfig(self.paths, self.log_manager)
-        self.sellers_brands_service = SellersBrandsService(self.main_config)
-
-        # --- Хранилище сопоставлений (для CompareWindow) ---
-        self.compare_mappings_storage = CompareMappingsStorage(
-            self.paths, self.log_manager,
-        )
-
-        # --- Теги активности дочерних окон ---
-        # REPLACE: active_child объявлен ДО LogManagerV2 — getter
-        # ссылается на атрибут, поэтому он должен существовать.
+        # --- Тег активности дочерних окон ---
+        # Объявлен ДО LogManagerV2 — getter ссылается на атрибут,
+        # поэтому он должен существовать.
         self.active_child = None
 
-        # NEW: новая система логирования LoggerV2.
-        # Параллельно со старой, старую не отключаем.
-        debug_enabled = self.main_config.get("debug_enabled", False)
+        # --- debug_enabled из config.json напрямую ---
+        # main_config создаётся ниже, а его конструктор уже требует
+        # log_manager_v2. Порядок разрывается чтением конфига
+        # через json.load до создания менеджера логов.
+        debug_enabled = self._read_debug_enabled()
+
+        # --- Новая система логирования LoggerV2 ---
         self.log_manager_v2 = LogManagerV2(
             debug_enabled=debug_enabled,
             paths=self.paths,
@@ -75,9 +86,22 @@ class MainWindow(QMainWindow):
             domain="main",
         )
 
-        # NEW: счётчик тиков on_timer — для периодического debug.
+        # Счётчик тиков on_timer — для периодического debug.
         # Срабатывает раз в 600 тиков (600 * 100 мс = 60 сек).
         self._timer_tick_count = 0
+
+        # --- Конфиг + сервис продавцов/брендов ---
+        self.main_config = MainConfig(
+            self.paths, log_manager_v2=self.log_manager_v2,
+        )
+        self.sellers_brands_service = SellersBrandsService(
+            self.main_config, log_manager_v2=self.log_manager_v2,
+        )
+
+        # --- Хранилище сопоставлений (для CompareWindow) ---
+        self.compare_mappings_storage = CompareMappingsStorage(
+            self.paths, log_manager_v2=self.log_manager_v2,
+        )
 
         # --- Теги активности дочерних окон ---
         self.chz_mp_window = None
@@ -90,45 +114,43 @@ class MainWindow(QMainWindow):
         # --- KizStorage (used_kiz.json) ---
         self.kiz_storage = KizStorage(
             self.paths.get_data_file("used_kiz.json"),
-            log_manager=self.log_manager,
+            log_manager_v2=self.log_manager_v2,
         )
         self.kiz_validator = KizValidator(self.kiz_storage)
 
         # --- Planner storages ---
         self.planner_storage = PlannerTaskStorage(
             self.paths.get_data_file("planner_tasks.json"),
-            log_manager=self.log_manager,
+            log_manager_v2=self.log_manager_v2,
         )
         # --- Archive storages ---
         self.planner_archive_storage = PlannerArchiveStorage(
             self.paths.get_data_file("planner_archive.json"),
-            log_manager=self.log_manager,
+            log_manager_v2=self.log_manager_v2,
         )
         # --- Вызов сервиса планировщика ---
         self.planner_service = PlannerService(
             self.planner_storage,
             archive_storage=self.planner_archive_storage,
-            log_manager=self.log_manager,
+            log_manager_v2=self.log_manager_v2,
         )
         # --- Вызов сервиса архива планировщика ---
         self.planner_archive_service = PlannerArchiveService(
             self.planner_archive_storage,
             self.planner_storage,
-            log_manager=self.log_manager,
+            log_manager_v2=self.log_manager_v2,
             planner_service=self.planner_service,
         )
-        # NEW: сервис генерации экземпляров регулярных задач.
+        # --- Сервис генерации экземпляров регулярных задач ---
         self.planner_recurrence_service = PlannerRecurrenceService(
             self.planner_service,
-            log_manager=self.log_manager,
+            log_manager_v2=self.log_manager_v2,
         )
 
-        # --- Стартовый порядок обслуживания планировщика---
-        # 1. Архивируем «вчерашние» экземпляры — генерация увидит
-        #    актуальное состояние storage.
-        # 2. Архивируем прошедшие события — они не должны участвовать
-        #    в активации.
-        # 3. Активируем сегодняшние события — они появятся в мини-планировщике.
+        # --- Стартовый порядок обслуживания планировщика ---
+        # 1. Архивируем «вчерашние» экземпляры.
+        # 2. Архивируем прошедшие события.
+        # 3. Активируем сегодняшние события.
         # 4. Генерируем экземпляры регулярных задач.
         self.planner_service.archive_stale_instances()
         self.planner_service.expire_past_events()
@@ -174,7 +196,7 @@ class MainWindow(QMainWindow):
 
         ButtonFactory.create_buttons_from_config(self, _main_button_configs, _main_handlers)
 
-        # Кнопка даты/времени (правая верхняя) — сделать неактивной
+        # Кнопка даты/времени (правая верхняя)
         self.datetime_btn = ButtonFactory.create_datetime_button(self, self.open_datetime_window)
 
         # ============================================================
@@ -186,7 +208,6 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
-        # Верхняя область: левая колонка (Продавцы, Бренды), правая — кнопка даты
         left_col = LayoutFactory.create_column(
             self,
             self.btn_sellers,
@@ -210,7 +231,6 @@ class MainWindow(QMainWindow):
         )
         main_layout.addWidget(quick_row)
 
-        # Центральная колонка с основными кнопками
         center_col = LayoutFactory.create_column(
             self,
             self.btn_chz_mp,
@@ -225,6 +245,31 @@ class MainWindow(QMainWindow):
         main_layout.addStretch(1)
 
         self.update_buttons_state()
+
+    # ============================================================
+    # 1.1. ЧТЕНИЕ DEBUG_ENABLED ИЗ CONFIG.JSON
+    # ============================================================
+    def _read_debug_enabled(self) -> bool:
+        """Читает debug_enabled из config.json без MainConfig.
+
+        Вход: нет.
+        Выход: bool — значение ключа debug_enabled или False.
+
+        Роль:
+            Порядок инициализации разорван: LogManagerV2 нужен раньше
+            MainConfig, а debug_enabled хранится в конфиге. Читаем
+            файл напрямую через PathManager.config_file. Битый файл
+            или отсутствующий ключ трактуются как False — приложение
+            работает без debug.
+        """
+        config_path = self.paths.config_file
+        if not config_path.exists():
+            return False
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                return json.load(f).get("debug_enabled", False)
+        except Exception:
+            return False
 
     # ============================================================
     # 4. МЕТОДЫ УПРАВЛЕНИЯ СОСТОЯНИЕМ
@@ -255,7 +300,8 @@ class MainWindow(QMainWindow):
         else:
             self.chz_mp_window.raise_()
             self.chz_mp_window.activateWindow()
-            self.logger.debug("open_chz_mp_wi   ndow: окно активировано")
+            # REPLACE: было "open_chz_mp_wi   ndow" — опечатка.
+            self.logger.debug("open_chz_mp_window: окно активировано")
 
     @log_button_action(
         "open_returns_window",
@@ -263,7 +309,9 @@ class MainWindow(QMainWindow):
     )
     def open_returns_window(self):
         if self.returns_window is None or not self.returns_window.isVisible():
-            self.returns_window = ReturnsWindow(self, self.log_manager_v2)
+            self.returns_window = ReturnsWindow(
+                self, log_manager_v2=self.log_manager_v2,
+            )
             self.returns_window.destroyed.connect(
                 lambda: setattr(self, "returns_window", None)
             )
@@ -280,7 +328,11 @@ class MainWindow(QMainWindow):
     )
     def open_sellers_window(self):
         if self.sellers_window is None or not self.sellers_window.isVisible():
-            self.sellers_window = SellersWindow(self)
+            # REPLACE: добавлен log_manager_v2 — SellersWindow
+            # создаёт свой LoggerV2.
+            self.sellers_window = SellersWindow(
+                self, log_manager_v2=self.log_manager_v2,
+            )
             WindowFactory.show_child_window(self, self.sellers_window)
             self.logger.debug("open_sellers_window: окно создано заново")
         else:
@@ -299,7 +351,9 @@ class MainWindow(QMainWindow):
     )
     def open_brands_window(self):
         if self.brands_window is None or not self.brands_window.isVisible():
-            self.brands_window = BrandsWindow(self)
+            self.brands_window = BrandsWindow(
+                self, log_manager_v2=self.log_manager_v2,
+            )
             WindowFactory.show_child_window(self, self.brands_window)
             self.logger.debug("open_brands_window: окно создано заново")
         else:
@@ -338,10 +392,12 @@ class MainWindow(QMainWindow):
     )
     def open_datetime_window(self):
         if self.planner_window is None or not self.planner_window.isVisible():
+            # REPLACE: добавлен log_manager_v2.
             self.planner_window = PlannerWindow(
                 self,
                 planner_service=self.planner_service,
                 archive_service=self.planner_archive_service,
+                log_manager_v2=self.log_manager_v2,
             )
             WindowFactory.show_child_window(self, self.planner_window)
             self.logger.debug("open_datetime_window: окно создано заново")
@@ -376,7 +432,6 @@ class MainWindow(QMainWindow):
               интервале 100 мс) пишет debug «таймер работает».
               Ошибки не пробрасываются — critical и продолжаем.
         """
-        # NEW: счётчик для периодического debug.
         self._timer_tick_count += 1
         if self._timer_tick_count >= 600:
             self._timer_tick_count = 0
@@ -397,18 +452,14 @@ class MainWindow(QMainWindow):
 
         Роль: раз в 30 секунд приводит систему в актуальное состояние:
               1. expire_past_events — прошедшие события → архив (EXPIRED).
-              2. activate_due_events — сегодняшние события → ACTIVE,
-                 чтобы они появились в мини-планировщике в тот же день.
+              2. activate_due_events — сегодняшние события → ACTIVE.
               3. generate_due_instances — генерация экземпляров
                  регулярных задач.
 
-        Порядок важен и совпадает с порядком в __init__: сначала
-        архивируем «вчерашнее», потом активируем «сегодняшнее»,
-        потом генерируем новое. Иначе на границе дня возможна гонка:
-        генерация создаст экземпляр, а expire тут же его заархивирует.
+        Порядок важен: сначала «вчерашнее», потом «сегодняшнее»,
+        потом генерация. Иначе на границе дня возможна гонка.
 
-        При ошибке на любом шаге — critical и прерываем тик: следующий
-        шаг зависит от предыдущего.
+        При ошибке на любом шаге — critical и прерываем тик.
         """
         self.logger.debug("_on_recurrence_timer: старт")
         try:
@@ -429,6 +480,7 @@ class MainWindow(QMainWindow):
                 f"Ошибка в _on_recurrence_timer: {e}",
                 can_influence=False,
             )
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

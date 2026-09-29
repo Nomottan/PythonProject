@@ -26,7 +26,7 @@ from typing import List, Optional, TYPE_CHECKING
 from utils.excel_helper import ExcelHelper
 from utils.kiz_utils import KizUtils, KizOccurrences
 from utils.text_utils import TextUtils
-from utils.parsers import ReturnsRow
+from utils.parsers import ReturnsRow, DateParser
 from services.kiz_validator import KizValidator, ValidationResult
 
 if TYPE_CHECKING:
@@ -53,6 +53,32 @@ class ChzMpEntry:
     storage_kiz: str
     result: ValidationResult
 
+class MpReportTypeDetector:
+    """Определяет тип отчёта МП по имени первого листа.
+
+    Роль:
+        WB-отчёты имеют первый лист «Сборочные задания»,
+        Ozon-отчёты — «Отчет». Нормализация имени листа — через
+        TextUtils.normalize + замена «ё» → «е» (на случай опечаток
+        и раскладки). Иначе — None, файл копируется как неопознанный.
+    """
+
+    @staticmethod
+    def detect(wb) -> Optional[str]:
+        """Возвращает "wb", "ozon" или None.
+
+        Вход: wb — открытый openpyxl workbook.
+        Выход: тип отчёта или None.
+        Роль: единая точка определения типа по первому листу.
+        """
+        if not wb.sheetnames:
+            return None
+        first = TextUtils.normalize(wb.sheetnames[0]).replace("ё", "е")
+        if first == "отчет":
+            return "ozon"
+        if first == "сборочные задания":
+            return "wb"
+        return None
 
 @dataclass
 class MpReportData:
@@ -194,7 +220,7 @@ class ChzMpReportReader:
         return entries
 
 
-class MpReportReader:
+class WBReportReader:
     """Читатель отчётов МП.
 
     Роль:
@@ -228,7 +254,7 @@ class MpReportReader:
             внутри (finally), агрегат логируется через logger.info.
         """
         report_path = Path(report_path)
-        logger.report(f"Обработка отчёта МП: {report_path.name}")
+        logger.report(f"Обработка WB-отчёта: {report_path.name}")
 
         # Продавца ищем по имени файла (без расширения, в нижнем регистре).
         seller = TextUtils.find_seller_by_file_name(
@@ -424,6 +450,238 @@ class MpReportReader:
                 f"отброшено коротких {stats['dropped_short']}, "
                 f"без '01' {stats['dropped_no_01']}, "
                 f"транслитерировано {stats['transliterated']}."
+            )
+
+class OZONReportReader:
+    """Читатель Ozon-отчётов «Продажи маркированных товаров».
+
+    Роль:
+        Читает лист «Отчет» (fallback — wb.active), фильтрует
+        строки по Схема продажи == FBS и Тип чека == Продажа,
+        группирует КИЗы по storage_kiz (дедуп через простой
+        dict; KizOccurrences не используется — там другая
+        логика выбора по task_num). Возвращает MpReportData.
+    """
+
+    # Заголовки столбцов Ozon-отчёта.
+    HEADER_VARIANTS = {
+        "sale_date":  ["Дата фискализации"],
+        "check_type": ["Тип чека"],
+        "scheme":     ["Схема продажи"],
+        "kiz":        ["Код маркировки"],
+    }
+
+    # Fallback-индексы, если заголовки не нашлись.
+    # По образцу: 0=Дата фискализации, 2=Тип чека, 6=Схема продажи,
+    # 8=Код маркировки.
+    FALLBACK_COLUMNS = {
+        "sale_date": 0, "check_type": 2, "scheme": 6, "kiz": 8,
+    }
+
+    @staticmethod
+    def read(report_path, sellers, kiz_validator,
+             logger: "LoggerV2") -> Optional[MpReportData]:
+        """Читает один Ozon-отчёт.
+
+        Вход:
+            report_path — путь к файлу Ozon.
+            sellers — список Seller.
+            kiz_validator — KizValidator.
+            logger — LoggerV2.
+
+        Выход:
+            MpReportData или None, если файл не открылся, продавец
+            не определён или лист «Отчет» отсутствует.
+        """
+        report_path = Path(report_path)
+        logger.report(f"Обработка отчёта Ozon: {report_path.name}")
+
+        seller = TextUtils.find_seller_by_file_name(
+            report_path.stem.lower(), sellers
+        )
+        if seller is None:
+            logger.report(
+                "  Не удалось определить продавца – пропущен"
+            )
+            return None
+
+        wb = ExcelHelper.open_workbook_with_logger(
+            report_path, logger, description="отчёт Ozon",
+            read_only=True, data_only=True,
+        )
+        if wb is None:
+            return None
+
+        KizUtils.start_stats()
+        try:
+            if "Отчет" in wb.sheetnames:
+                sheet = wb["Отчет"]
+            else:
+                logger.report(
+                    "Лист 'Отчет' не найден – пропущен"
+                )
+                return None
+
+            header_row, columns = ExcelHelper.find_header_row_and_columns(
+                sheet, OZONReportReader.HEADER_VARIANTS,
+            )
+            if header_row is None or columns is None:
+                logger.warning(
+                    "Не удалось найти заголовки Ozon-отчёта по именам, "
+                    "использую фиксированные индексы (0, 2, 6, 8)"
+                )
+                header_row = 1
+                columns = dict(OZONReportReader.FALLBACK_COLUMNS)
+
+            col_sale_date = columns["sale_date"]
+            col_check_type = columns["check_type"]
+            col_scheme = columns["scheme"]
+            col_kiz = columns["kiz"]
+
+            # Дедуп: dict[storage_kiz] -> list[(full_kiz, datetime)].
+            occurrences: dict = {}
+            skipped_by_type: dict = {}
+
+            for row in sheet.iter_rows(min_row=header_row + 1,
+                                        values_only=True):
+                scheme = (
+                    str(row[col_scheme]).strip()
+                    if len(row) > col_scheme and row[col_scheme] is not None
+                    else ""
+                )
+                check_type = (
+                    str(row[col_check_type]).strip()
+                    if len(row) > col_check_type
+                       and row[col_check_type] is not None
+                    else ""
+                )
+
+                # Фильтр по схеме — независимая причина.
+                if scheme.upper() != "FBS":
+                    key = f"схема: {scheme or '(пусто)'}"
+                    skipped_by_type[key] = skipped_by_type.get(key, 0) + 1
+                    continue
+                # Фильтр по типу чека — независимая причина.
+                if check_type.upper() != "ПРОДАЖА":
+                    key = f"тип чека: {check_type or '(пусто)'}"
+                    skipped_by_type[key] = skipped_by_type.get(key, 0) + 1
+                    continue
+
+                raw_kiz = row[col_kiz] if len(row) > col_kiz else None
+                raw_date = (row[col_sale_date]
+                            if len(row) > col_sale_date else None)
+                if not raw_kiz or not raw_date:
+                    continue
+
+                storage_list = KizUtils.clean_kiz_for_storage(
+                    raw_kiz, logger=logger
+                )
+                full_list = KizUtils.clean_kiz_full(
+                    raw_kiz, logger=logger
+                )
+                if not storage_list or not full_list:
+                    continue
+                storage_kiz = storage_list[0]
+                full_kiz = full_list[0]
+
+                dt = DateParser.parse_iso_datetime(str(raw_date).strip())
+                if dt is None:
+                    logger.warning(
+                        f"Не удалось распарсить дату '{raw_date}' "
+                        f"для КИЗа {storage_kiz}. Использую сегодняшнюю."
+                    )
+                    dt = datetime.now()
+
+                occurrences.setdefault(storage_kiz, []).append(
+                    (full_kiz, dt)
+                )
+
+            # Дедуп: выбираем самое позднее вхождение. max берёт
+            # первый при равенстве — соответствует «при равенстве
+            # — первое».
+            picked: list = []
+            for storage_kiz, entries in occurrences.items():
+                best = max(entries, key=lambda e: e[1])
+                picked.append((storage_kiz, best[0], best[1]))
+            skipped_dup = sum(
+                len(v) - 1 for v in occurrences.values()
+            )
+
+            # Диагностика по типам.
+            if skipped_by_type:
+                logger.report("  Пропущено строк по типу:")
+                for key, count in sorted(
+                    skipped_by_type.items(), key=lambda x: x[0].lower()
+                ):
+                    logger.report(f"    '{key}': {count}")
+
+            # Валидация.
+            added = 0
+            skipped_no_return = 0
+            skipped_date_before_return = 0
+            full_kizs: set = set()
+
+            for storage_kiz, full_kiz, dt in picked:
+                sale_date_str = dt.strftime("%H:%M:%S %d.%m.%Y")
+                result = kiz_validator.validate_for_sale(
+                    storage_kiz, sale_date_str
+                )
+                if result == ValidationResult.ADDED:
+                    added += 1
+                    full_kizs.add(full_kiz)
+                elif result == ValidationResult.SKIPPED_NO_RETURN:
+                    skipped_no_return += 1
+                elif result == ValidationResult.SKIPPED_DATE_BEFORE_RETURN:
+                    skipped_date_before_return += 1
+
+            total_unique = (
+                added + skipped_no_return
+                + skipped_date_before_return + skipped_dup
+            )
+
+            logger.report("  Пропущено КИЗов:")
+            logger.report(
+                f"    нет в одном экземпляре (дубликаты в отчёте): "
+                f"{skipped_dup}"
+            )
+            logger.report(
+                f"    уже проданы без возврата: {skipped_no_return}"
+            )
+            logger.report(
+                f"    дата продажи раньше даты возврата: "
+                f"{skipped_date_before_return}"
+            )
+            logger.report(
+                f"    Итого уникальных КИЗов в отчёте: {total_unique}"
+            )
+            logger.report(
+                f"  Добавлено {added} записей для продавца "
+                f"'{seller.name}'"
+            )
+
+            return MpReportData(
+                seller=seller,
+                added=added,
+                prices={},
+                full_kizs=full_kizs,
+                skipped_dup=skipped_dup,
+                skipped_no_return=skipped_no_return,
+                skipped_date_before_return=skipped_date_before_return,
+                total_unique=total_unique,
+                skipped_by_type=skipped_by_type,
+            )
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+            stats = KizUtils.pop_stats()
+            logger.info(
+                f"Ozon {report_path.name}: успешно "
+                f"{stats['processed']}, отброшено коротких "
+                f"{stats['dropped_short']}, без '01' "
+                f"{stats['dropped_no_01']}, транслитерировано "
+                f"{stats['transliterated']}."
             )
 
 @dataclass
@@ -812,7 +1070,32 @@ class ReturnsTransferData:
     rows: list
     total_rows: int
     unique_brands: set
+class MpReportTypeDetector:
+    """Определяет тип отчёта МП по имени первого листа.
 
+    Роль:
+        WB-отчёты имеют первый лист «Сборочные задания»,
+        Ozon-отчёты — «Отчет». Нормализация имени листа — через
+        TextUtils.normalize + замена «ё» → «е» (на случай опечаток
+        и раскладки). Иначе — None, файл копируется как неопознанный.
+    """
+
+    @staticmethod
+    def detect(wb) -> Optional[str]:
+        """Возвращает "wb", "ozon" или None.
+
+        Вход: wb — открытый openpyxl workbook.
+        Выход: тип отчёта или None.
+        Роль: единая точка определения типа по первому листу.
+        """
+        if not wb.sheetnames:
+            return None
+        first = TextUtils.normalize(wb.sheetnames[0]).replace("ё", "е")
+        if first == "отчет":
+            return "ozon"
+        if first == "сборочные задания":
+            return "wb"
+        return None
 
 class ReturnsTransferReader:
     """Читатель файла возвратов для подготовки передач.

@@ -18,7 +18,7 @@ class PlannerArchiveStorage(ListJsonStorage):
           в логах. Поведение полностью наследуется.
     """
 
-    def __init__(self, file_path, log_manager=None) -> None:
+    def __init__(self, file_path, log_manager_v2=None) -> None:
         """Конструктор.
 
         Вход:
@@ -26,7 +26,7 @@ class PlannerArchiveStorage(ListJsonStorage):
             log_manager — LogManager для логирования.
         """
         super().__init__(
-            file_path, log_manager,
+            file_path, log_manager_v2,
             source="PlannerArchiveStorage.planner_archive_storage",
         )
 

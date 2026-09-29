@@ -43,14 +43,23 @@ class BrandsWindow(QMainWindow):
         parent.sellers_brands_service — прямых обращений к config
         здесь больше нет.
     """
+    LOGGER_SOURCE = "BrandsWindow.brands_window"
+    LOGGER_DOMAIN = "sellers_brands"
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, log_manager_v2=None):
         """Конструктор.
 
         Вход: parent — MainWindow.
         Роль: читает бренды и продавцов через сервис, строит сетку.
         """
         super().__init__(parent)
+        self.log_manager_v2 = log_manager_v2
+        self.logger = None
+        if log_manager_v2 is not None:
+            self.logger = log_manager_v2.create_logger_v2(
+                source=self.LOGGER_SOURCE,
+                domain=self.LOGGER_DOMAIN,
+            )
         self.main_window = parent
         self.bg_color = (30, 30, 30, 0.9)
 
@@ -150,6 +159,7 @@ class BrandsWindow(QMainWindow):
         )
         dialog = BrandEditDialog(
             self, brand, sellers, main_window=self.main_window,
+            log_manager_v2=self.log_manager_v2,
         )
         # После закрытия диалога — обновить сетку.
         original_close = dialog.closeEvent
@@ -178,6 +188,7 @@ class BrandsWindow(QMainWindow):
         )
         dialog = BrandEditDialog(
             self, new_brand, sellers, main_window=self.main_window,
+            log_manager_v2=self.log_manager_v2,
         )
         original_close = dialog.closeEvent
 
@@ -200,8 +211,11 @@ class BrandsWindow(QMainWindow):
         try:
             self.main_window.sellers_brands_service.set_brands_objects(self.brands)
         except Exception as e:
-            import sys
-            sys.stderr.write(f"[BrandsWindow] Ошибка сохранения: {e}\n")
+            if self.logger is not None:
+                self.logger.critical(
+                    f"Ошибка сохранения брендов: {e}",
+                    can_influence=False,
+                )
         finally:
             self.close()
 
@@ -227,8 +241,12 @@ class BrandEditDialog(BaseEditDialog):
         closeEvent, и из reject.
     """
 
+    LOGGER_SOURCE = "BrandEditDialog.brands_window"
+    LOGGER_DOMAIN = "sellers_brands"
+
     def __init__(self, parent=None, brand: Brand = None,
-                 sellers: list = None, main_window=None):
+                 sellers: list = None, main_window=None,
+                 log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -247,15 +265,12 @@ class BrandEditDialog(BaseEditDialog):
             parent=parent,
             title=f"Редактирование бренда: {brand.name}",
             bg_color=self.bg_color,
-            close_button=False,
-            ok_cancel=False,
-            draggable=True,
-            close_on_click_outside=True,
-            modal=True,
-            center=True,
+            close_button=False, ok_cancel=False,
+            draggable=True, close_on_click_outside=True,
+            modal=True, center=True,
             on_close=self._apply_changes,
-            width=550,
-            height=500,
+            width=550, height=500,
+            log_manager_v2=log_manager_v2,
         )
 
         self.setAttribute(Qt.WA_DeleteOnClose, True)
