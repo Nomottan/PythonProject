@@ -2,29 +2,32 @@
 Окно сравнения поставок.
 
 Назначение:
-    Пайплайн из шести шагов: подготовка (копия листа поставки +
-    сборный файл + загрузка), три этапа сопоставления, отчёт.
-    Каждый шаг — синхронный вызов метода CompareService; стадии
-    сами открывают диалоги через callback'и, сервис при этом не
-    знает про Qt.
+    Пайплайн из шести шагов: подготовка (копия листа + сборный
+    файл + загрузка), три этапа сопоставления, отчёт. Все шаги
+    идут в фоновом потоке через BaseServiceWindow._run_async_step.
+    Диалоги стадий открываются в UI-потоке через callbacks
+    CompareService с QMetaObject.invokeMethod + BlockingQueuedConnection.
 
 Роль в программе:
-    Открывается из MainWindow. Логгер окна создаётся в __init__,
-    пишет сообщения от UI (с source="CompareWindow.compare_window").
-    Логика прогона — в CompareService. Гейтинг кнопок — по self._state.
+    Открывается из MainWindow. Наследник BaseServiceWindow:
+    set_status/set_info/_precheck_target_dir/closeEvent/
+    on_accumulate_sales — унаследованы. Окно отвечает за раскладку,
+    gating через self._state и специфику callbacks.
 """
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt, QMetaObject, QThread, Slot
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QHBoxLayout, QVBoxLayout, QWidget,
 )
-from PySide6.QtCore import Qt
 
+from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, ListWidgetFactory, LayoutFactory,
-    WindowFactory, FileDialogFactory, StatusLogFactory,
+    ButtonFactory, LabelFactory, ListWidgetFactory,
+    LayoutFactory, FileDialogFactory,
 )
+from ui.styles import ColorCalculator
 from ui.widgets.path_selector import PathSelector
 from ui.windows.mappings_window import BrandMappingsWindow
 from ui.windows.compare_dialogs import (
@@ -34,26 +37,40 @@ from utils.log_tools.decorators import log_button_action
 from services.compare_service import CompareService
 
 
-class CompareWindow(QMainWindow):
+class CompareWindow(BaseServiceWindow):
     """Окно сравнения листа поставки с фактическими поставками.
 
     Роль:
         Ведёт пользователя по шагам: подготовка → этап 1 → этап 2 →
-        этап 3 → отчёт. Все шаги синхронные, в UI-потоке, потому
-        что стадии открывают диалоги. Логи шагов идут в status_display,
-        короткие подсказки — в status_label.
+        этап 3 → отчёт. Все шаги идут в фоне, стадии вызывают
+        callbacks окна; те через QMetaObject.invokeMethod с
+        BlockingQueuedConnection открывают диалог в UI-потоке.
 
-    Поля:
+    Атрибуты класса:
+        LOGGER_SOURCE / LOGGER_DOMAIN — идентификация для LoggerV2.
+        BG_COLOR — производный от (50, 50, 50) → (50, 80, 70, 0.95).
+        PIPELINE_BUTTONS — пять кнопок пайплайна.
+
+    Поля экземпляра:
         service — CompareService с callbacks.
-        logger — LoggerV2 окна или None.
-        _state — gating-флаги: prepared, stage1_done, stage2_done,
-                 stage3_done. Управляют доступностью кнопок между
-                 шагами.
+        _state — gating шагов: prepared, stage1_done, stage2_done,
+                 stage3_done.
+        _stageN_request / _stageN_response — обмен с UI-потоком
+                 для диалогов (Q_ARG с Python-объектами ненадёжен).
     """
 
-    # Кнопки, блокируемые на время выполнения шага пайплайна.
-    # btn_choose_file, btn_add_supply, btn_mappings — не входят:
-    # они не относятся к самому пайплайну.
+    LOGGER_SOURCE = "CompareWindow.compare_window"
+    LOGGER_DOMAIN = "compare"
+
+    # BG_COLOR: r, 2g-2(g//5), b+2(b//5) от (50,50,50) → (50, 80, 70).
+    # alpha — из дефолта ColorCalculator.derive (0.95).
+    BG_COLOR = ColorCalculator.derive(
+        (50, 50, 50),
+        r_fn=lambda r: r,
+        g_fn=lambda g: 2 * g - 2 * (g // 5),
+        b_fn=lambda b: b + 2 * (b // 5),
+    )
+
     PIPELINE_BUTTONS = (
         "btn_prepare",
         "btn_stage1",
@@ -68,36 +85,20 @@ class CompareWindow(QMainWindow):
 
         Вход:
             parent — MainWindow.
-            mappings_storage — CompareMappingsStorage из MainWindow,
-                               чтобы CompareService не создавал своё
-                               хранилище через PathManager.
+            mappings_storage — CompareMappingsStorage из MainWindow.
             log_manager_v2 — LogManagerV2 или None.
 
-        Роль: создаёт логгер окна, gating-состояние, сервис с
-              callback'ами, раскладку и подключает сигналы.
+        Роль: создаёт gating-состояние, сервис с callbacks,
+              раскладку.
         """
-        super().__init__(parent)
-        self.main_window = parent
+        super().__init__(
+            parent,
+            title="Сравнение поставок",
+            log_manager_v2=log_manager_v2,
+        )
 
-        # LoggerV2 окна — для собственных сообщений (без work_folder:
-        # файловый канал пишут сервисы, у окна своей рабочей папки нет).
-        self.log_manager_v2 = log_manager_v2
-        self.logger = None
-        if log_manager_v2 is not None:
-            self.logger = log_manager_v2.create_logger_v2(
-                source="CompareWindow.compare_window",
-                domain="compare",
-            )
-        if self.logger:
-            self.logger.debug("CompareWindow.__init__: старт")
-
-        # Переменные состояния.
-        self.target_dir = parent.main_config.get("target_dir", None)
-        self.supply_file = None
-        self.supply_files = []
-        self.bg_color = (50, 80, 70, 0.95)
-
-        # Gating-состояние шагов.
+        # Специфичное состояние окна.
+        self.supply_file = None            # один файл листа поставки
         self._state = {
             "prepared":    False,
             "stage1_done": False,
@@ -105,7 +106,15 @@ class CompareWindow(QMainWindow):
             "stage3_done": False,
         }
 
-        # brands_set — набор ключей брендов из конфига.
+        # Обмен с UI-потоком для диалогов стадий.
+        self._stage1_request = None
+        self._stage1_response = None
+        self._stage2_request = None
+        self._stage2_response = False
+        self._stage3_request = None
+        self._stage3_response = (None, False)
+
+        # brands_set — ключи брендов из конфига.
         brands = parent.sellers_brands_service.get_brands_objects()
         brands_set = set()
         for b in brands:
@@ -113,8 +122,7 @@ class CompareWindow(QMainWindow):
             for key in b.keys:
                 brands_set.add(key.lower())
 
-        # Сервис с callback'ами. Диалоги окно открывает само —
-        # сервис только сообщает, когда нужен ввод.
+        # Сервис с callbacks.
         self.service = CompareService(
             log_manager_v2=log_manager_v2,
             brands_set=brands_set,
@@ -124,24 +132,20 @@ class CompareWindow(QMainWindow):
             stage3_selector=self._select_stage3,
         )
 
-        # Настройка окна.
-        main_layout = WindowFactory.setup_child_window(
-            self, "Сравнение поставок",
-            bg_color=self.bg_color,
-        )
-
         # ============================================================
         # ЭЛЕМЕНТЫ
         # ============================================================
         self.instruction_label = LabelFactory.create_label(
             self,
-            text="Подготовка к сравнению поставок\n"
-                 "Шаг 1: Выберите папку для сохранения результатов\n"
-                 "Шаг 2: Выберите файл листа поставки (один Excel-файл)\n"
-                 "Шаг 3: Добавьте файлы с фактическими поставками (можно несколько)\n"
-                 "Шаг 4: Нажмите 'Подготовить для работы' – данные будут загружены\n"
-                 "Шаг 5: Последовательно выполняйте этапы 1→2→3\n"
-                 "Шаг 6: Сформируйте отчёт",
+            text=(
+                "Подготовка к сравнению поставок\n"
+                "Шаг 1: Выберите папку для сохранения результатов\n"
+                "Шаг 2: Выберите файл листа поставки (один Excel-файл)\n"
+                "Шаг 3: Добавьте файлы с фактическими поставками (можно несколько)\n"
+                "Шаг 4: Нажмите 'Подготовить для работы' – данные будут загружены\n"
+                "Шаг 5: Последовательно выполняйте этапы 1→2→3\n"
+                "Шаг 6: Сформируйте отчёт"
+            ),
             bg_color=(0, 0, 0, 0),
             text_color="#c2c2c2",
             padding="0px",
@@ -149,7 +153,7 @@ class CompareWindow(QMainWindow):
             alignment=Qt.AlignCenter,
             word_wrap=True,
         )
-        main_layout.addWidget(self.instruction_label)
+        self.main_layout.addWidget(self.instruction_label)
 
         self.path_selector = PathSelector(
             self,
@@ -157,7 +161,7 @@ class CompareWindow(QMainWindow):
             dialog_title="Выберите папку для результатов",
         )
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
-        main_layout.addWidget(self.path_selector)
+        self.main_layout.addWidget(self.path_selector)
 
         # Строка выбора файла листа поставки.
         self.btn_choose_file = ButtonFactory.create_button(
@@ -175,13 +179,12 @@ class CompareWindow(QMainWindow):
             font_family="Consolas, monospace",
             font_size=10,
         )
-
         file_row = LayoutFactory.create_row(
             self, self.btn_choose_file, self.file_label, spacing=5,
         )
-        main_layout.addWidget(file_row)
+        self.main_layout.addWidget(file_row)
 
-        # Две колонки: слева кнопки, справа список файлов поставок.
+        # Две колонки: слева кнопки пайплайна, справа список файлов.
         columns_layout = QHBoxLayout()
         columns_layout.setSpacing(10)
 
@@ -248,11 +251,11 @@ class CompareWindow(QMainWindow):
         self.btn_add_supply.clicked.connect(self.select_supply_files)
         right_layout.addWidget(self.btn_add_supply)
 
-        self.list_supply = ListWidgetFactory.create_list_widget(
+        # FileListWidget — списки с крестиками.
+        self.list_supply = ListWidgetFactory.create_file_list_widget(
             self,
             fixed_width=220,
             fixed_height=200,
-            horizontal_scroll=False,
             bg_color=(30, 20, 35, 0.3),
             text_color="#d4d4d4",
             font_size=10,
@@ -262,7 +265,7 @@ class CompareWindow(QMainWindow):
 
         columns_layout.addWidget(left_widget)
         columns_layout.addWidget(right_widget)
-        main_layout.addLayout(columns_layout)
+        self.main_layout.addLayout(columns_layout)
 
         # Кнопка «Сохранённые сопоставления».
         self.btn_mappings = ButtonFactory.create_button(
@@ -273,69 +276,72 @@ class CompareWindow(QMainWindow):
         mappings_row = LayoutFactory.create_row(
             self, self.btn_mappings, alignment=Qt.AlignCenter,
         )
-        main_layout.addWidget(mappings_row)
+        self.main_layout.addWidget(mappings_row)
 
-        # Короткая подсказка (set_status).
-        self.status_label = LabelFactory.create_status_label(
-            self, "Выберите папку и файлы",
-        )
-        main_layout.addWidget(self.status_label)
-
-        # Прокручиваемый лог (set_info).
-        self.status_display = StatusLogFactory.create_status_log(
-            self, bg_color=self.bg_color,
-            min_height=100, max_height=200,
-        )
-        main_layout.addWidget(self.status_display)
+        # status_label и status_log — из базового класса.
+        self.main_layout.addWidget(self.status_label)
+        self.main_layout.addWidget(self.status_log)
 
         # Стартовое состояние кнопок.
         self._update_buttons_state()
-
         self.set_info("Окно сравнения поставок готово к работе.")
+
         if self.logger:
             self.logger.debug("CompareWindow.__init__: окно инициализировано")
 
     # ============================================================
-    # ПУБЛИЧНЫЕ КАНАЛЫ UI
+    # GATING
     # ============================================================
 
-    def set_status(self, msg: str) -> None:
-        """Обновляет короткое сообщение в статусной строке.
+    def _update_buttons_state(self) -> None:
+        """Включает/выключает кнопки по self._state.
 
-        Вход: msg — текст.
+        Вход: нет.
         Выход: нет.
-        Роль: единая точка обновления status_label. Вызывается
-              из StatusHandler через active_child.set_status.
+        Роль: btn_prepare — всегда; остальные — по gating-флагам.
         """
-        self.status_label.setText(msg)
+        st = self._state
+        self.btn_prepare.setEnabled(True)
+        self.btn_stage1.setEnabled(st["prepared"])
+        self.btn_stage2.setEnabled(st["stage1_done"])
+        self.btn_stage3.setEnabled(st["stage2_done"])
+        self.btn_report.setEnabled(st["stage3_done"])
 
-    def set_info(self, msg: str) -> None:
-        """Дописывает сообщение в прокручиваемый лог.
+    def _maybe_unlock_report(self) -> None:
+        """Разрешает отчёт, если сопоставлять больше нечего.
 
-        Вход: msg — текст.
+        Вход: нет.
         Выход: нет.
-        Роль: единая точка записи в status_display. Вызывается
-              из InfoUIHandler через active_child.set_info.
+        Роль: после этапов 1/2 может оказаться, что supply_items
+              или candidates пусты. Тогда флаг stage3_done
+              выставляется принудительно.
         """
-        self.status_display.append(msg)
+        if not self._state["prepared"]:
+            return
+        if not self.service.supply_items or not self.service.candidates:
+            self._state["stage3_done"] = True
+            self._update_buttons_state()
 
     # ============================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # ЦЕЛЕВАЯ ПАПКА — переопределение целиком
     # ============================================================
 
     def _on_target_dir_changed(self, new_path) -> None:
         """Обработка смены целевой папки.
 
         Вход: new_path — новый путь.
-        Роль: обновляет target_dir, пишет в main_config, сбрасывает
-              gating (папка новая — подготовка не выполнена).
+        Выход: нет.
+
+        Роль: переопределена (не через хук) — логика специфична:
+              без status_log.clear() и set_info, но со сбросом
+              gating-состояния.
         """
         if self.logger:
             self.logger.debug(
                 f"_on_target_dir_changed: новая папка {new_path}"
             )
         self.target_dir = new_path
-        self.parent().main_config.set("target_dir", new_path)
+        self.main_window.main_config.set("target_dir", new_path)
         self._state = {
             "prepared":    False,
             "stage1_done": False,
@@ -345,116 +351,46 @@ class CompareWindow(QMainWindow):
         self._update_buttons_state()
         self.set_status("Целевая папка обновлена.")
 
-    def _precheck_target_dir(self) -> bool:
-        """Проверяет, что выбрана целевая папка.
-
-        Вход: нет.
-        Выход:
-            True — папка выбрана.
-            False — папки нет, в status_label записано предупреждение.
-
-        Роль: единая точка проверки target_dir для всех шагов.
-        """
-        if not self.target_dir:
-            self.set_status("Сначала выберите целевую папку")
-            return False
-        return True
-
-    def _update_buttons_state(self) -> None:
-        """Включает/выключает кнопки по self._state.
-
-        Вход: нет.
-        Выход: нет.
-        Роль: применяет gating-правила:
-            btn_prepare    — всегда доступна.
-            btn_stage1     — после «prepared».
-            btn_stage2     — после «stage1_done».
-            btn_stage3     — после «stage2_done».
-            btn_report     — после «stage3_done».
-        """
-        st = self._state
-        self.btn_prepare.setEnabled(True)
-        self.btn_stage1.setEnabled(st["prepared"])
-        self.btn_stage2.setEnabled(st["stage1_done"])
-        self.btn_stage3.setEnabled(st["stage2_done"])
-        self.btn_report.setEnabled(st["stage3_done"])
-
-    def _set_pipeline_enabled(self, enabled: bool) -> None:
-        """Блокирует/разблокирует все PIPELINE_BUTTONS.
-
-        Вход: enabled — True — разблокировать по _state,
-                         False — заблокировать всё.
-        Выход: нет.
-        Роль: на время шага пайплайна все кнопки недоступны; после —
-              разблокируются согласно gating-состоянию.
-        """
-        if not enabled:
-            for name in self.PIPELINE_BUTTONS:
-                btn = getattr(self, name, None)
-                if btn is not None:
-                    btn.setEnabled(False)
-        else:
-            self._update_buttons_state()
-
-    def _run_pipeline_step(self, *, step_name: str, fn, start_message: str,
-                           finish_message: str, mark_key: str = None) -> None:
-        """Выполняет один шаг пайплайна.
-
-        Вход (все параметры именованные):
-            step_name — префикс для логов.
-            fn — callable без аргументов, тело шага.
-            start_message — текст в status_label/status_log в начале.
-            finish_message — текст при успехе.
-            mark_key — какой флаг в self._state выставить после
-                       успеха. None — ничего не выставлять.
-
-        Выход: нет.
-
-        Роль:
-            Единая обвязка шагов окна: блокировка кнопок, запись
-            короткого сообщения в status_label и подробного — в
-            status_display, лог об ошибке через logger.critical.
-            Шаг синхронный — стадии могут открывать диалоги.
-        """
-        self._set_pipeline_enabled(False)
-        self.set_status(start_message)
-        self.set_info(start_message)
-        try:
-            fn()
-            self.set_status(finish_message)
-            self.set_info(finish_message)
-            if self.logger:
-                self.logger.debug(f"{step_name}: шаг завершён")
-            if mark_key is not None:
-                self._state[mark_key] = True
-        except Exception as e:
-            self.set_status(f"Ошибка на шаге {step_name}: {e}")
-            self.set_info(f"Ошибка на шаге {step_name}: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в {step_name}: {e}", can_influence=False,
-                )
-        finally:
-            self._set_pipeline_enabled(True)
-
     # ============================================================
-    # CALLBACK'И ДЛЯ CompareService
+    # CALLBACKS ДЛЯ CompareService (потокобезопасные)
     # ============================================================
 
     def _review_stage1(self, pairs) -> list:
-        """Открывает Stage1ReviewDialog и возвращает флаги keep.
+        """Открывает Stage1ReviewDialog в UI-потоке.
 
         Вход: pairs — список (SupplyItem, Candidate).
         Выход: list[bool] — какие пары оставить.
-        Роль: вызывается из Stage1.run в UI-потоке.
+        Роль: если фоновый поток — invokeMethod с BlockingQueued;
+              если UI-поток — вызываем слот напрямую.
         """
-        dialog = Stage1ReviewDialog(self, pairs)
+        self._stage1_request = pairs
+        self._stage1_response = None
+
+        app = QApplication.instance()
+        if app is None:
+            return [True] * len(pairs)
+
+        if QThread.currentThread() == app.thread():
+            self._show_stage1_dialog_slot()
+        else:
+            QMetaObject.invokeMethod(
+                self, "_show_stage1_dialog_slot",
+                Qt.BlockingQueuedConnection,
+            )
+        if self._stage1_response is None:
+            return [True] * len(pairs)
+        return self._stage1_response
+
+    @Slot()
+    def _show_stage1_dialog_slot(self) -> None:
+        """Открывает Stage1ReviewDialog. Выполняется в UI-потоке."""
+        dialog = Stage1ReviewDialog(self, self._stage1_request)
         dialog.exec()
-        return dialog.get_keep_flags()
+        self._stage1_response = dialog.get_keep_flags()
 
     def _confirm_stage2(self, item, candidate, score: float,
                         remaining: int) -> bool:
-        """Открывает ConfirmMatchDialog и возвращает подтверждение.
+        """Открывает ConfirmMatchDialog в UI-потоке.
 
         Вход:
             item — SupplyItem.
@@ -464,6 +400,26 @@ class CompareWindow(QMainWindow):
 
         Выход: True — подтверждено, False — отклонено.
         """
+        self._stage2_request = (item, candidate, score, remaining)
+        self._stage2_response = False
+
+        app = QApplication.instance()
+        if app is None:
+            return True
+
+        if QThread.currentThread() == app.thread():
+            self._show_stage2_dialog_slot()
+        else:
+            QMetaObject.invokeMethod(
+                self, "_show_stage2_dialog_slot",
+                Qt.BlockingQueuedConnection,
+            )
+        return self._stage2_response
+
+    @Slot()
+    def _show_stage2_dialog_slot(self) -> None:
+        """Открывает ConfirmMatchDialog. Выполняется в UI-потоке."""
+        item, candidate, score, remaining = self._stage2_request
         dialog = ConfirmMatchDialog(
             self,
             {"name": item.name, "count": item.count},
@@ -472,23 +428,38 @@ class CompareWindow(QMainWindow):
             remaining,
         )
         dialog.exec()
-        return dialog.get_result() == "confirmed"
+        self._stage2_response = (dialog.get_result() == "confirmed")
 
     def _select_stage3(self, item, candidates, remaining: int) -> tuple:
-        """Открывает ManualMatchDialog и возвращает выбор пользователя.
+        """Открывает ManualMatchDialog в UI-потоке.
 
         Вход:
             item — SupplyItem.
             candidates — список доступных Candidate.
             remaining — сколько товаров в очереди.
 
-        Выход:
-            (selected_candidate_dict | None, skip_all: bool).
-
-        Роль: превращает Candidate в dict {'name', 'count'} для
-              диалога. Stage3.run сам найдёт Candidate по паре
-              name + count — так диалог не таскает модель через Qt.
+        Выход: (Candidate | None, skip_all: bool).
         """
+        self._stage3_request = (item, candidates, remaining)
+        self._stage3_response = (None, False)
+
+        app = QApplication.instance()
+        if app is None:
+            return (None, False)
+
+        if QThread.currentThread() == app.thread():
+            self._show_stage3_dialog_slot()
+        else:
+            QMetaObject.invokeMethod(
+                self, "_show_stage3_dialog_slot",
+                Qt.BlockingQueuedConnection,
+            )
+        return self._stage3_response
+
+    @Slot()
+    def _show_stage3_dialog_slot(self) -> None:
+        """Открывает ManualMatchDialog. Выполняется в UI-потоке."""
+        item, candidates, remaining = self._stage3_request
         candidates_for_dialog = [
             {"name": c.name, "count": c.count} for c in candidates
         ]
@@ -499,10 +470,23 @@ class CompareWindow(QMainWindow):
             remaining,
         )
         dialog.exec()
-        return dialog.get_result()
+        selected, skip_all = dialog.get_result()
+
+        if selected is None:
+            self._stage3_response = (None, skip_all)
+            return
+
+        # Найти объект Candidate по name + count среди исходных.
+        matched = None
+        for c in candidates:
+            if (c.name == selected["name"]
+                    and c.count == selected.get("count")):
+                matched = c
+                break
+        self._stage3_response = (matched, skip_all)
 
     # ============================================================
-    # ОБРАБОТЧИКИ ВЫБОРА ФАЙЛОВ
+    # ВЫБОР ФАЙЛОВ
     # ============================================================
 
     @log_button_action(
@@ -512,30 +496,21 @@ class CompareWindow(QMainWindow):
     def select_supply_file(self) -> None:
         """Открывает диалог выбора файла листа поставки.
 
-        Роль: сохраняет путь в self.supply_file, имя — в file_label,
-              папку — в main_config для следующего запуска.
+        Роль: тонкая обёртка над _select_single_file. Путь
+              сохраняется в self.supply_file через callback.
         """
-        start_dir = (
-            self.parent().main_config.get("last_compare_supply_dir", None)
-            or self.target_dir
-            or str(Path.home())
-        )
-        file_path = FileDialogFactory.open_file_dialog(
-            self, "Выберите Excel-файл листа поставки",
-            default_dir=start_dir,
+        self._select_single_file(
+            config_key="last_compare_supply_dir",
+            title="Выберите Excel-файл листа поставки",
             filter=FileDialogFactory.SUPPORTED_FILES_FILTER,
+            label_widget=self.file_label,
+            on_success=self._on_supply_file_selected,
         )
-        if file_path:
-            self.supply_file = file_path
-            self.file_label.setText(Path(file_path).name)
-            self.parent().main_config.set(
-                "last_compare_supply_dir", str(Path(file_path).parent),
-            )
-            self.set_info(f"Выбран файл поставки: {Path(file_path).name}")
-            if self.logger:
-                self.logger.debug(
-                    f"select_supply_file: выбран {Path(file_path).name}"
-                )
+
+    def _on_supply_file_selected(self, path: str) -> None:
+        """Сохраняет путь в self.supply_file и пишет в лог."""
+        self.supply_file = path
+        self.set_info(f"Выбран файл поставки: {Path(path).name}")
 
     @log_button_action(
         "btn_add_supply",
@@ -544,49 +519,26 @@ class CompareWindow(QMainWindow):
     def select_supply_files(self) -> None:
         """Открывает диалог выбора файлов поставок.
 
-        Роль: добавляет новые файлы к self.supply_files, дубликаты
-              (по строке пути) не добавляются.
+        Роль: тонкая обёртка над _select_multiple_files. Файлы
+              добавляются в list_supply через FileListWidget.add_file.
         """
-        start_dir = (
-            self.parent().main_config.get("last_compare_supplies_dir", None)
-            or self.target_dir
-            or str(Path.home())
-        )
-        files = FileDialogFactory.open_files_dialog(
-            self, "Выберите файлы с поставками",
-            default_dir=start_dir,
+        self._select_multiple_files(
+            config_key="last_compare_supplies_dir",
+            title="Выберите файлы с поставками",
             filter=FileDialogFactory.SUPPORTED_FILES_FILTER,
+            list_widget=self.list_supply,
+            on_success=lambda added: self.set_info(
+                f"Добавлено {len(added)} файлов поставок. "
+                f"Всего: {self.list_supply.count()}"
+            ),
         )
-        if files:
-            for f in files:
-                if f not in self.supply_files:
-                    self.supply_files.append(f)
-                    self.list_supply.addItem(Path(f).name)
-            first_file = Path(files[0])
-            self.parent().main_config.set(
-                "last_compare_supplies_dir", str(first_file.parent),
-            )
-            self.set_info(
-                f"Добавлено {len(files)} файлов поставок. "
-                f"Всего: {len(self.supply_files)}"
-            )
-            if self.logger:
-                self.logger.debug(
-                    f"select_supply_files: добавлено {len(files)}, "
-                    f"итого {len(self.supply_files)}"
-                )
 
     @log_button_action(
         "btn_mappings",
         "Ошибка при открытии окна сопоставлений: {e}",
     )
     def _open_mappings_window(self) -> None:
-        """Открывает окно сохранённых сопоставлений.
-
-        Роль: диалог синхронный, открывается модально. После
-              закрытия — ничего не пересчитывается: изменения
-              маппингов подхватятся при следующем run_stage1.
-        """
+        """Открывает окно сохранённых сопоставлений (синхронно)."""
         window = BrandMappingsWindow(
             parent=self,
             service=self.service,
@@ -595,51 +547,60 @@ class CompareWindow(QMainWindow):
         window.exec()
 
     # ============================================================
-    # ОБРАБОТЧИКИ КНОПОК ПАЙПЛАЙНА
+    # ОБРАБОТЧИКИ ПАЙПЛАЙНА
     # ============================================================
 
     @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
     def on_prepare(self) -> None:
-        """Шаг 1: подготовка — копия листа + сборный файл + загрузка."""
+        """Шаг 1: подготовка (копия листа + сборный + загрузка)."""
         if not self._precheck_target_dir():
             return
         if not self.supply_file:
             self.set_status("Сначала выберите файл листа поставки")
             return
-        if not self.supply_files:
+        supply_files = self.list_supply.get_files()
+        if not supply_files:
             self.set_status("Добавьте хотя бы один файл с поставками")
             return
 
-        self._run_pipeline_step(
-            step_name="on_prepare",
-            fn=self._prepare_fn,
+        # Захватываем Qt-данные в UI-потоке до запуска фонового шага.
+        self._run_async_step(
+            service=self.service,
+            target_method=self._prepare_pipeline,
+            kwargs={
+                "supply_file": self.supply_file,
+                "supply_files": supply_files,
+            },
             start_message="Идёт подготовка...",
-            finish_message="Подготовка завершена. Можно переходить к этапу 1.",
-            mark_key="prepared",
+            finish_message="Подготовка завершена.",
+            step_name="on_prepare",
+            on_success=self._after_prepare,
         )
 
-    def _prepare_fn(self) -> None:
-        """Тело шага подготовки.
+    def _prepare_pipeline(self, target_dir, sellers,
+                          supply_file, supply_files) -> None:
+        """Тело шага подготовки. Выполняется в фоновом потоке.
 
-        Роль: вызывает три операции сервиса последовательно.
-              Все сообщения идут в status_display через set_info —
-              тот же канал, что и раньше, только через публичный
-              метод, а не через self.log().
+        Вход:
+            target_dir — из _run_async_step.
+            sellers — из _run_async_step (не используется, но
+                      подпись обязательна по контракту).
+            supply_file — путь к листу поставки.
+            supply_files — список путей к файлам поставок.
+
+        Роль: три вызова сервиса подряд. Qt-виджеты не трогаются —
+              всё, что нужно, пришло в аргументах.
         """
-        copied_path = self.service.copy_supply_sheet(
-            self.supply_file, self.target_dir,
-        )
-        self.set_info(f"  Копия создана: {copied_path}")
-
-        consolidated_path = self.service.build_consolidated_supply(
-            self.supply_files, self.target_dir,
-        )
-        self.set_info(f"  Сборный файл создан: {consolidated_path}")
-
+        self.service.copy_supply_sheet(supply_file, target_dir)
+        self.service.build_consolidated_supply(supply_files, target_dir)
         self.service.load_data()
-        self.set_info(
-            f"  Загружено товаров: {len(self.service.supply_items)}, "
-            f"кандидатов: {len(self.service.candidates)}"
+
+    def _after_prepare(self) -> None:
+        """Вызывается в UI-потоке после успеха подготовки."""
+        self._state["prepared"] = True
+        self._update_buttons_state()
+        self.step_label.setText(
+            "Текущий шаг: Подготовка завершена. Нажмите Этап 1"
         )
 
     @log_button_action("btn_stage1", "Ошибка в on_stage1: {e}")
@@ -647,95 +608,109 @@ class CompareWindow(QMainWindow):
         """Шаг 2: этап 1 — жёсткая сверка."""
         if not self._precheck_target_dir():
             return
-        self._run_pipeline_step(
-            step_name="on_stage1",
-            fn=self.service.run_stage1,
+        self._run_async_step(
+            service=self.service,
+            target_method=self._stage1_pipeline,
+            kwargs={},
             start_message="Этап 1 — жёсткая сверка...",
             finish_message="Этап 1 завершён.",
-            mark_key="stage1_done",
+            step_name="on_stage1",
+            on_success=self._after_stage1,
         )
-        # Если после этапа 1 не осталось товаров или кандидатов —
-        # можно сразу формировать отчёт, минуя этапы 2 и 3.
+
+    def _stage1_pipeline(self, target_dir, sellers) -> None:
+        """Тело шага 1. Выполняется в фоновом потоке."""
+        self.service.run_stage1()
+
+    def _after_stage1(self) -> None:
+        """UI-поток после успеха этапа 1."""
+        self._state["stage1_done"] = True
+        self._update_buttons_state()
         self._maybe_unlock_report()
+        self.step_label.setText(
+            "Текущий шаг: Этап 1 завершён. Нажмите Этап 2"
+        )
 
     @log_button_action("btn_stage2", "Ошибка в on_stage2: {e}")
     def on_stage2(self) -> None:
         """Шаг 3: этап 2 — мягкая сверка."""
         if not self._precheck_target_dir():
             return
-        self._run_pipeline_step(
-            step_name="on_stage2",
-            fn=self.service.run_stage2,
+        self._run_async_step(
+            service=self.service,
+            target_method=self._stage2_pipeline,
+            kwargs={},
             start_message="Этап 2 — мягкая сверка...",
             finish_message="Этап 2 завершён.",
-            mark_key="stage2_done",
+            step_name="on_stage2",
+            on_success=self._after_stage2,
         )
+
+    def _stage2_pipeline(self, target_dir, sellers) -> None:
+        """Тело шага 2. Выполняется в фоновом потоке."""
+        self.service.run_stage2()
+
+    def _after_stage2(self) -> None:
+        """UI-поток после успеха этапа 2."""
+        self._state["stage2_done"] = True
+        self._update_buttons_state()
         self._maybe_unlock_report()
+        self.step_label.setText(
+            "Текущий шаг: Этап 2 завершён. Нажмите Этап 3"
+        )
 
     @log_button_action("btn_stage3", "Ошибка в on_stage3: {e}")
     def on_stage3(self) -> None:
         """Шаг 4: этап 3 — ручной выбор."""
         if not self._precheck_target_dir():
             return
-        self._run_pipeline_step(
-            step_name="on_stage3",
-            fn=self.service.run_stage3,
+        self._run_async_step(
+            service=self.service,
+            target_method=self._stage3_pipeline,
+            kwargs={},
             start_message="Этап 3 — ручной выбор...",
-            finish_message="Этап 3 завершён. Можно формировать отчёт.",
-            mark_key="stage3_done",
+            finish_message="Этап 3 завершён.",
+            step_name="on_stage3",
+            on_success=self._after_stage3,
         )
 
-    def _maybe_unlock_report(self) -> None:
-        """Разрешает отчёт, если сопоставлять больше нечего.
+    def _stage3_pipeline(self, target_dir, sellers) -> None:
+        """Тело шага 3. Выполняется в фоновом потоке."""
+        self.service.run_stage3()
 
-        Роль: после этапов 1 и 2 может оказаться, что supply_items
-              или candidates пусты. Тогда этапы 2/3 бессмысленны,
-              и логичнее сразу открыть кнопку «Сформировать отчёт».
-              Флаг stage3_done выставляется принудительно.
-        """
-        if not self._state["prepared"]:
-            return
-        if not self.service.supply_items or not self.service.candidates:
-            self._state["stage3_done"] = True
-            self._update_buttons_state()
+    def _after_stage3(self) -> None:
+        """UI-поток после успеха этапа 3."""
+        self._state["stage3_done"] = True
+        self._update_buttons_state()
+        self.step_label.setText(
+            "Текущий шаг: Все этапы завершены. Сформируйте отчёт"
+        )
 
     @log_button_action("btn_report", "Ошибка в on_generate_report: {e}")
     def on_generate_report(self) -> None:
         """Шаг 5: формирование отчёта и сохранение сопоставлений."""
         if not self._precheck_target_dir():
             return
-
-        def _fn() -> None:
-            self.service.generate_report(self.target_dir)
-            self.service.save_mappings()
-
-        self._run_pipeline_step(
-            step_name="on_generate_report",
-            fn=_fn,
+        self._run_async_step(
+            service=self.service,
+            target_method=self._generate_report_pipeline,
+            kwargs={},
             start_message="Формирование отчёта...",
             finish_message="Отчёт и сопоставления сохранены.",
-            mark_key=None,
+            step_name="on_generate_report",
+            on_success=None,
         )
+
+    def _generate_report_pipeline(self, target_dir, sellers) -> None:
+        """Тело шага отчёта. Выполняется в фоновом потоке."""
+        self.service.generate_report(target_dir)
+        self.service.save_mappings()
 
     # ============================================================
     # ЗАКРЫТИЕ ОКНА
     # ============================================================
 
     def cleanup(self) -> None:
-        """Сброс состояния окна (файлы, списки)."""
+        """Сброс состояния окна при закрытии."""
         self.supply_file = None
-        self.supply_files = []
-        self.list_supply.clear()
-
-    def closeEvent(self, event) -> None:
-        """Обработка закрытия окна.
-
-        Роль: чистит состояние, снимает active_child у родителя,
-              принимает событие.
-        """
-        if self.logger:
-            self.logger.debug("CompareWindow: closeEvent получен")
-        self.cleanup()
-        if self.parent() and hasattr(self.parent(), 'active_child'):
-            self.parent().active_child = None
-        event.accept()
+        self.list_supply.clear_files()

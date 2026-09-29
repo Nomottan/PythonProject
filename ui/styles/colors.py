@@ -298,3 +298,55 @@ class ColorCalculator:
             return 25, 25, 45
         r, g, b, _ = rgba
         return r, g, b
+
+    @staticmethod
+    def clamp(v: int) -> int:
+        """Ограничивает значение каналом цвета 0..255.
+
+        Вход: v — число (может быть float).
+        Выход: int в [0, 255].
+
+        Роль:
+            Единая точка ограничения канала. Заменяет локальные
+            def clamp(v) в ScrollbarStyle.palette,
+            StatusLog._calc_border, MessageDialog._calc_*.
+        """
+        return max(0, min(255, int(v)))
+
+    @staticmethod
+    def derive(base: tuple, r_fn, g_fn, b_fn, alpha=0.95) -> tuple:
+        """Строит производный цвет от базового по функциям каналов.
+
+        Вход:
+            base — кортеж (r, g, b) или (r, g, b, a). Берутся
+                   первые три канала.
+            r_fn, g_fn, b_fn — callable(channel) -> число. Каждая
+                               применяется к соответствующему
+                               каналу.
+            alpha — опциональная альфа (0..1). Если задана —
+                    результат становится 4-элементным кортежем
+                    (r, g, b, alpha). Если None — 3-элементным
+                    (r, g, b) для rgb(...).
+
+        Выход:
+            Кортеж (r', g', b') или (r', g', b', alpha).
+
+        Роль:
+            Единая точка вычисления производных цветов от фона —
+            например, BG_COLOR окон (ChzMPWindow, ReturnsWindow,
+            CompareWindow). Для окон альфа задаётся явно: без неё
+            центральный виджет получает rgb(...) и Qt показывает
+            окно прозрачнее, чем задумано.
+
+        REPLACE: добавлен параметр alpha. Без него поведение
+        прежнее — 3-элементный кортеж.
+        """
+        r, g, b = base[:3]
+        rgb = (
+            ColorCalculator.clamp(r_fn(r)),
+            ColorCalculator.clamp(g_fn(g)),
+            ColorCalculator.clamp(b_fn(b)),
+        )
+        if alpha is not None:
+            return (*rgb, alpha)
+        return rgb

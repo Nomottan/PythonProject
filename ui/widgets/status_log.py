@@ -7,7 +7,7 @@
 """
 
 from PySide6.QtWidgets import QTextEdit
-
+from ui.styles import ColorCalculator
 from ui.factories.base_factory import BaseWidgetFactory
 
 class StatusLog(QTextEdit):
@@ -123,8 +123,9 @@ class StatusLog(QTextEdit):
         Роль: +30 к каждому каналу — рамка светлее фона.
         """
         r, g, b = bg_color[:3]
-
-        def clamp(v):
-            return max(0, min(255, int(v)))
-
-        return (clamp(r + 30), clamp(g + 30), clamp(b + 30), 0.8)
+        return (
+            ColorCalculator.clamp(r + 30),
+            ColorCalculator.clamp(g + 30),
+            ColorCalculator.clamp(b + 30),
+            0.8,
+        )

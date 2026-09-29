@@ -605,6 +605,64 @@ class ExcelHelper:
         finally:
             new_wb.close()
 
+    @staticmethod
+    def copy_rows_by_column_value(src_path, dst_path, column_index,
+                                      allowed_values, append: bool = False
+                                      ) -> int:
+        """Копирует строки src в dst, отфильтрованные по значению столбца.
+
+        Вход:
+            src_path — путь к файлу-источнику.
+            dst_path — путь к целевому файлу.
+            column_index — 0-based индекс столбца для фильтра.
+            allowed_values — коллекция допустимых значений (обычно set).
+            append — True — дописать к существующему dst_path
+                     (заголовок не переписывается); False — создать
+                     новый файл с заголовком из src_path.
+
+        Выход:
+            int — число добавленных строк.
+
+        Роль:
+            Единая точка копирования отфильтрованных строк между
+            Excel-файлами. Раньше логика дублировалась в двух ветках
+            SalesAccumulatorService.accumulate (дописать / создать) —
+            вынесена сюда, чтобы сервис стал тонким оркестратором.
+            Строки, где ячейка column_index пустая, пропускаются.
+        """
+        wb_src = openpyxl.load_workbook(
+            Path(src_path), read_only=True, data_only=True,
+        )
+        try:
+            sheet_src = wb_src.active
+
+            if append:
+                wb_dst = openpyxl.load_workbook(Path(dst_path))
+                sheet_dst = wb_dst.active
+            else:
+                wb_dst = Workbook()
+                sheet_dst = wb_dst.active
+                header = list(sheet_src.iter_rows(
+                    min_row=1, max_row=1, values_only=True,
+                ))[0]
+                sheet_dst.append(header)
+
+            rows_added = 0
+            for row in sheet_src.iter_rows(min_row=2, values_only=True):
+                if len(row) > column_index:
+                    cell = row[column_index]
+                    if cell:
+                        value = str(cell).strip()
+                        if value in allowed_values:
+                            sheet_dst.append(row)
+                            rows_added += 1
+
+            wb_dst.save(Path(dst_path))
+            wb_dst.close()
+        finally:
+            wb_src.close()
+        return rows_added
+
 class CsvReader:
     """Адаптер для чтения CSV-файлов как Excel-листа."""
 

@@ -41,28 +41,33 @@ class ScrollbarStyle:
               - Hover — сдвиг в ту же сторону ещё на ±30.
               - Pressed — минус 1.5 × hover_offset от handle.
               - Track — тот же RGB, что handle, alpha 0.6.
+
+        REPLACE: локальный def clamp(v) удалён — используем
+        ColorCalculator.clamp.
         """
         r, g, b = ColorCalculator.extract_rgb(bg_color)
         avg = (r + g + b) // 3
         shift = 30 if avg <= 128 else -30
 
-        def clamp(v):
-            return max(0, min(255, int(v)))
-
-        handle = (clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.8)
+        handle = (
+            ColorCalculator.clamp(r + shift),
+            ColorCalculator.clamp(g + shift),
+            ColorCalculator.clamp(b + shift),
+            0.8,
+        )
 
         hover_offset = 30 if shift > 0 else -30
         handle_hover = (
-            clamp(r + shift + hover_offset),
-            clamp(g + shift + hover_offset),
-            clamp(b + shift + hover_offset),
+            ColorCalculator.clamp(r + shift + hover_offset),
+            ColorCalculator.clamp(g + shift + hover_offset),
+            ColorCalculator.clamp(b + shift + hover_offset),
             0.8,
         )
 
         handle_pressed = (
-            clamp(r + shift - hover_offset * 1.5),
-            clamp(g + shift - hover_offset * 1.5),
-            clamp(b + shift - hover_offset * 1.5),
+            ColorCalculator.clamp(int(r + shift - hover_offset * 1.5)),
+            ColorCalculator.clamp(int(g + shift - hover_offset * 1.5)),
+            ColorCalculator.clamp(int(b + shift - hover_offset * 1.5)),
             0.8,
         )
 

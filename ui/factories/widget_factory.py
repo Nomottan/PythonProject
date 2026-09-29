@@ -94,6 +94,45 @@ class ListWidgetFactory:
         return list_widget
 
     @staticmethod
+    def create_file_list_widget(parent, fixed_width=None, fixed_height=None,
+                                bg_color=(30, 20, 35, 0.3),
+                                text_color="#d4d4d4", border_radius=5,
+                                padding="0px", font_size=10,
+                                object_name=None):
+        """Создаёт FileListWidget — список файлов с крестиком.
+
+        Вход:
+            parent — родительский виджет.
+            fixed_width, fixed_height — размеры или None.
+            bg_color, text_color, border_radius, padding, font_size —
+                стиль (передаётся в FileListWidget).
+            object_name — objectName.
+
+        Выход: FileListWidget.
+
+        Роль: единая точка создания списка файлов с крестиками.
+              Локальный импорт FileListWidget из ui.widgets — чтобы
+              не тянуть его в шапку фабрики (циклы: widgets
+              реэкспортируется через ui.factories.factories, а
+              FileListWidget зависит от ui.styles, не от factories).
+        """
+        from ui.widgets.file_list_widget import FileListWidget
+        widget = FileListWidget(
+            parent=parent,
+            bg_color=bg_color,
+            text_color=text_color,
+            border_radius=border_radius,
+            padding=padding,
+            font_size=font_size,
+            object_name=object_name,
+        )
+        if fixed_width:
+            widget.setFixedWidth(fixed_width)
+        if fixed_height:
+            widget.setFixedHeight(fixed_height)
+        return widget
+
+    @staticmethod
     def create_scroll_area(parent, widget=None, bg_color=(25, 25, 45),
                            border="none", border_radius=0,
                            widget_resizable=True, object_name=None,

@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QEvent
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, BaseWidgetFactory
 )
+from ui.styles import ColorCalculator
 
 
 class _BaseMessageDialog(QDialog):
@@ -78,39 +79,62 @@ class _BaseMessageDialog(QDialog):
 
     @staticmethod
     def _calc_dialog_bg(parent_bg: tuple) -> tuple:
-        """Фон диалога: +60/−60 от родителя, alpha 0.95."""
+        """Фон диалога: +60/−60 от родителя, alpha 0.95.
+
+        REPLACE: локальный clamp удалён — используем
+        ColorCalculator.clamp.
+        """
         r, g, b = parent_bg[:3]
         avg = (r + g + b) // 3
         shift = 60 if avg <= 128 else -60
 
-        def clamp(v):
-            return max(0, min(255, v))
-
-        return clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.95
+        return (
+            ColorCalculator.clamp(r + shift),
+            ColorCalculator.clamp(g + shift),
+            ColorCalculator.clamp(b + shift),
+            0.95,
+        )
 
     @staticmethod
     def _calc_dialog_border(parent_bg: tuple) -> tuple:
-        """Обводка: красноватая, +40+20+20 / −20−40−40, alpha 0.9."""
+        """Обводка: красноватая, +40+20+20 / −20−40−40, alpha 0.9.
+
+        REPLACE: локальный clamp удалён — используем
+        ColorCalculator.clamp.
+        """
         r, g, b = parent_bg[:3]
         avg = (r + g + b) // 3
 
-        def clamp(v):
-            return max(0, min(255, v))
-
         if avg <= 128:
-            return (clamp(r + 40), clamp(g + 20), clamp(b + 20), 0.9)
-        return (clamp(r - 20), clamp(g - 40), clamp(b - 40), 0.9)
+            return (
+                ColorCalculator.clamp(r + 40),
+                ColorCalculator.clamp(g + 20),
+                ColorCalculator.clamp(b + 20),
+                0.9,
+            )
+        return (
+            ColorCalculator.clamp(r - 20),
+            ColorCalculator.clamp(g - 40),
+            ColorCalculator.clamp(b - 40),
+            0.9,
+        )
 
     def _calc_button_bg(self) -> tuple:
-        """Цвет кнопок — производный от фона диалога."""
+        """Цвет кнопок — производный от фона диалога.
+
+        REPLACE: локальный clamp удалён — используем
+        ColorCalculator.clamp.
+        """
         r, g, b = self._dialog_bg[:3]
         avg = (r + g + b) // 3
         shift = 25 if avg <= 128 else -25
 
-        def clamp(v):
-            return max(0, min(255, v))
-
-        return (clamp(r + shift), clamp(g + shift), clamp(b + shift), 0.9)
+        return (
+            ColorCalculator.clamp(r + shift),
+            ColorCalculator.clamp(g + shift),
+            ColorCalculator.clamp(b + shift),
+            0.9,
+        )
 
     # ---------- Сборка UI ----------
 

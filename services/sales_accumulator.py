@@ -1,23 +1,74 @@
+"""
+Сервис аккумуляции файлов продаж из двух папок в одну общую.
+
+Работает с новым форматом файлов продаж:
+  - Имя: "{от_кого} - {кому} : {ИНН}.xlsx" (содержит " - " и " _ ").
+  - Столбцы: Наименование продукта, КИЗ (31 символ), GTIN, Цена.
+
+Приоритет отдаётся файлам из ЧЗ_МП (Sells_FBS):
+  - если КИЗ присутствует в ЧЗ_МП, то строки из Возвратов с этим
+    КИЗом игнорируются.
+
+Роль в программе:
+    Тонкий оркестратор. Находит файлы через FileHelper, читает
+    КИЗы через SalesFileKizReader, копирует и фильтрует строки
+    через ExcelHelper, пишет детальный лог через
+    KizFilterDetailsWriter. Логгер V2 создаётся в начале
+    accumulate.
+
+    Вызывается из ChzMPWindow/ReturnsWindow по кнопке «Собрать
+    продажи» через ThreadFactory.run_in_thread.
+"""
+
 import shutil
-import openpyxl
 from pathlib import Path
 from datetime import date
+
 from utils.context import TaskContext
+from utils.file_helper import FileHelper
+from utils.excel_helper import ExcelHelper
+from utils.sales_file_readers import SalesFileKizReader
+from utils.txt_utils import KizFilterDetailsWriter
+
 
 class SalesAccumulatorService:
-    """
-    Сервис аккумуляции файлов продаж из двух папок в одну общую.
-    Работает с новым форматом файлов продаж:
-      - Имя: "{от_кого} - {кому} : {ИНН}.xlsx" (содержит " - " и " : ")
-      - Столбцы: Наименование продукта, КИЗ (31 символов), GTIN, Цена.
-    Приоритет отдаётся файлам из ЧЗ_МП (Sells_FBS):
-      - если КИЗ присутствует в ЧЗ_МП, то строки из Возвратов с этим КИЗом игнорируются.
+    """Сервис аккумуляции продаж.
+
+    Роль:
+        Копирует файлы продаж из ЧЗ_МП и Возвратов в общую папку
+        «Продажи_{date}». Файлы из ЧЗ_МП имеют приоритет: если КИЗ
+        уже есть в ЧЗ_МП, строки из Возвратов с этим КИЗом
+        отбрасываются.
+
+    Публичный API:
+        accumulate(target_dir).
     """
 
-    def accumulate(self, target_dir: str, first_folder: str, log_callback=None):
+    # Индекс столбца с КИЗом (0-based): [Наименование, КИЗ, GTIN, Цена].
+    KIZ_COLUMN_INDEX = 1
+
+    def __init__(self, log_manager_v2) -> None:
+        """Конструктор.
+
+        Вход:
+            log_manager_v2 — LogManagerV2, фабрика логгеров V2.
+
+        Роль: сохраняет ссылку. Логгеры создаются в начале
+              accumulate, когда известна рабочая папка.
         """
-        Аккумулирует файлы продаж из папок ЧЗ_МП и Возвраты в папку Продажи.
-        Параметр first_folder игнорируется (всегда сначала ЧЗ_МП, затем Возвраты).
+        self._log_manager_v2 = log_manager_v2
+
+    def accumulate(self, target_dir: str) -> None:
+        """Аккумулирует файлы продаж из ЧЗ_МП и Возвратов в одну папку.
+
+        Вход: target_dir — корневая папка задачи.
+        Выход: нет.
+
+        Роль:
+            Создаёт TaskContext (только пути) и LoggerV2. Сначала
+            обрабатывает ЧЗ_МП (приоритет), затем Возвраты с
+            фильтрацией по КИЗам из ЧЗ_МП. Ведёт детальный лог
+            фильтрации отдельным логгером.
         """
         today = date.today()
         date_str = f"{today.day}_{today.month}_{today.year}"
@@ -26,160 +77,152 @@ class SalesAccumulatorService:
         chz_folder = base_path / f"ЧЗ_МП_{date_str}" / "Продажи"
         returns_folder = base_path / f"Возвраты_{date_str}" / "Продажи"
 
+        # TaskContext — только пути. Логирование — через LoggerV2.
         ctx = TaskContext(
-            target_dir, "Продажи_{date}", "log_аккумуляция.txt", log_callback,
-            subfolders=["Логи"]
+            target_dir,
+            "Продажи_{date}",
+            "log_аккумуляция.txt",
+            subfolders=["Логи"],
         )
+        logger = self._log_manager_v2.create_logger_v2(
+            source="SalesAccumulatorService.sales_accumulator",
+            domain="sales",
+            work_folder=ctx.logs_dir,
+            log_filename="log_аккумуляция.txt",
+        )
+
         sales_folder = ctx.work_folder
-        ctx.log("=== АККУМУЛЯЦИЯ ПРОДАЖ (приоритет ЧЗ_МП) ===")
-        ctx.log(f"Рабочая папка: {sales_folder}")
+        logger.report("=== АККУМУЛЯЦИЯ ПРОДАЖ (приоритет ЧЗ_МП) ===")
+        logger.report(f"Рабочая папка: {sales_folder}")
 
-        # 1. Обработка ЧЗ_МП (первая, приоритетная)
-        chz_files = self._find_sales_files(chz_folder)
-        kiz_from_fbs = set()  # множество КИЗов из ЧЗ_МП
+        # ---- 1. ЧЗ_МП (первая, приоритетная) ----
+        kiz_from_fbs = self._process_chz(
+            chz_folder, sales_folder, logger,
+        )
 
-        ctx.log(f"\n--- ОБРАБОТКА ЧЗ_МП ---")
+        # ---- 2. Возвраты (фильтрация + детали) ----
+        details = self._process_returns(
+            returns_folder, sales_folder, kiz_from_fbs, logger,
+        )
+
+        # Детальный лог фильтрации КИЗов — отдельным логгером.
+        if details["files"]:
+            KizFilterDetailsWriter.write(
+                details, ctx.logs_dir, self._log_manager_v2,
+            )
+            logger.report(
+                "  Детальный лог фильтрации КИЗов сохранён в "
+                "log_фильтрация_КИЗов.txt"
+            )
+
+        logger.report("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
+
+    # ---------- Приватные методы-оркестраторы ----------
+
+    def _process_chz(self, chz_folder: Path, sales_folder: Path,
+                     logger) -> set:
+        """Обрабатывает файлы ЧЗ_МП: копирует и собирает КИЗы.
+
+        Вход:
+            chz_folder — папка «ЧЗ_МП_{date}/Продажи».
+            sales_folder — целевая папка аккумуляции.
+            logger — LoggerV2.
+
+        Выход:
+            set[str] — множество всех КИЗов из ЧЗ_МП.
+
+        Роль:
+            Копирует каждый файл без фильтрации (приоритетный
+            источник), собирает множество КИЗов для последующей
+            фильтрации Возвратов.
+        """
+        chz_files = FileHelper.find_sales_files(chz_folder)
+        kiz_from_fbs = set()
+
+        logger.report("\n--- ОБРАБОТКА ЧЗ_МП ---")
         for src_path in chz_files:
             dst_path = sales_folder / src_path.name
             shutil.copy2(src_path, dst_path)
-            kiz_set = self._collect_kiz_set(dst_path)
+            kiz_set = SalesFileKizReader.read(dst_path)
             kiz_from_fbs.update(kiz_set)
-            ctx.log(f"  Скопирован: {src_path.name} (КИЗов: {len(kiz_set)})")
+            logger.report(
+                f"  Скопирован: {src_path.name} "
+                f"(КИЗов: {len(kiz_set)})"
+            )
+        return kiz_from_fbs
 
-        # 2. Обработка Возвратов (с фильтрацией и сбором деталей)
-        returns_files = self._find_sales_files(returns_folder)
-        ctx.log(f"\n--- ОБРАБОТКА ВОЗВРАТОВ (фильтрация по КИЗам из ЧЗ_МП) ---")
+    def _process_returns(self, returns_folder: Path, sales_folder: Path,
+                         kiz_from_fbs: set, logger) -> dict:
+        """Обрабатывает файлы Возвратов с фильтрацией по КИЗам ЧЗ_МП.
+
+        Вход:
+            returns_folder — папка «Возвраты_{date}/Продажи».
+            sales_folder — целевая папка аккумуляции.
+            kiz_from_fbs — множество КИЗов из ЧЗ_МП.
+            logger — LoggerV2.
+
+        Выход:
+            dict {"kiz_from_fbs": set, "files": [...]} — данные для
+            детального лога фильтрации.
+
+        Роль:
+            Для каждого файла: считает КИЗы, отделяет дубликаты,
+            при необходимости вызывает ExcelHelper для записи
+            отфильтрованных строк. Собирает данные для лога.
+        """
+        returns_files = FileHelper.find_sales_files(returns_folder)
+        logger.report(
+            "\n--- ОБРАБОТКА ВОЗВРАТОВ "
+            "(фильтрация по КИЗам из ЧЗ_МП) ---"
+        )
 
         details = {
             "kiz_from_fbs": kiz_from_fbs,
-            "files": []
+            "files": [],
         }
 
         for src_path in returns_files:
             dst_path = sales_folder / src_path.name
-            src_kiz_set = self._collect_kiz_set(src_path)
-            duplicates_in_file = src_kiz_set & kiz_from_fbs
-            filtered_kiz = src_kiz_set - kiz_from_fbs
+            src_kiz_set = SalesFileKizReader.read(src_path)
+            duplicates = src_kiz_set & kiz_from_fbs
+            filtered = src_kiz_set - kiz_from_fbs
 
-            file_info = {
+            details["files"].append({
                 "name": src_path.name,
                 "total": len(src_kiz_set),
-                "duplicates": duplicates_in_file,
-                "filtered": filtered_kiz
-            }
-            details["files"].append(file_info)
+                "duplicates": duplicates,
+                "filtered": filtered,
+            })
 
-            if not filtered_kiz:
-                ctx.log(
-                    f"  Пропущен {src_path.name}: все КИЗы уже есть в ЧЗ_МП (всего {len(src_kiz_set)}, дубликатов {len(duplicates_in_file)})")
+            if not filtered:
+                logger.report(
+                    f"  Пропущен {src_path.name}: все КИЗы уже есть "
+                    f"в ЧЗ_МП (всего {len(src_kiz_set)}, "
+                    f"дубликатов {len(duplicates)})"
+                )
                 continue
 
-            # Дозапись или создание нового файла
-            if dst_path.exists():
-                # Дописываем строки в существующий файл
-                wb_dst = openpyxl.load_workbook(dst_path)
-                sheet_dst = wb_dst.active
-                wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
-                sheet_src = wb_src.active
-                rows_added = 0
-                for row in sheet_src.iter_rows(min_row=2, values_only=True):
-                    # КИЗ теперь во втором столбце (индекс 1)
-                    if len(row) >= 2 and row[1]:
-                        kiz = str(row[1]).strip()
-                        if kiz in filtered_kiz:
-                            sheet_dst.append(row)
-                            rows_added += 1
-                wb_dst.save(dst_path)
-                wb_dst.close()
-                wb_src.close()
-                ctx.log(
-                    f"  Дополнен {dst_path.name}: добавлено {rows_added} строк (всего КИЗов {len(src_kiz_set)}, из них добавлено {len(filtered_kiz)})")
+            rows_added = ExcelHelper.copy_rows_by_column_value(
+                src_path=src_path,
+                dst_path=dst_path,
+                column_index=self.KIZ_COLUMN_INDEX,
+                allowed_values=filtered,
+                append=dst_path.exists(),
+            )
+
+            if dst_path.exists() and rows_added >= 0:
+                # Файл был до этой итерации — дописывали.
+                action = "Дополнен"
             else:
-                # Создаём новый файл с заголовками и только отфильтрованными строками
-                wb_dst = openpyxl.Workbook()
-                sheet_dst = wb_dst.active
-                wb_src = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
-                sheet_src = wb_src.active
-                header = list(sheet_src.iter_rows(min_row=1, max_row=1, values_only=True))[0]
-                sheet_dst.append(header)
-                rows_added = 0
-                for row in sheet_src.iter_rows(min_row=2, values_only=True):
-                    if len(row) >= 2 and row[1]:
-                        kiz = str(row[1]).strip()
-                        if kiz in filtered_kiz:
-                            sheet_dst.append(row)
-                            rows_added += 1
-                wb_dst.save(dst_path)
-                wb_dst.close()
-                wb_src.close()
-                ctx.log(
-                    f"  Создан новый файл {dst_path.name}: добавлено {rows_added} строк (всего КИЗов {len(src_kiz_set)}, из них добавлено {len(filtered_kiz)})")
+                action = "Создан новый файл"
 
-        # Сохраняем детальный лог
-        if details["files"]:
-            log_path = ctx.logs_dir / "log_фильтрация_КИЗов.txt"
-            self._log_kiz_details(log_path, details, ctx)
+            # Различаем в логе: до вызова dst_path.exists() уже
+            # проверяли — но после append=True файл точно был.
+            # Логируем по факту: append определяли до вызова.
+            logger.report(
+                f"  {action} {dst_path.name}: добавлено "
+                f"{rows_added} строк (всего КИЗов {len(src_kiz_set)}, "
+                f"из них добавлено {len(filtered)})"
+            )
 
-        ctx.log("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
-
-    # ---------- Вспомогательные методы ----------
-
-    def _find_sales_files(self, folder: Path) -> list[Path]:
-        """
-        Возвращает все файлы продаж в папке (новый формат).
-        Отличительный признак: имя содержит " - " и " _ ".
-        """
-        if not folder.exists():
-            return []
-        return [f for f in folder.glob("*.xlsx") if " - " in f.stem and " _ " in f.stem]
-
-    def _collect_kiz_set(self, file_path: Path) -> set:
-        """
-        Читает КИЗы из второго столбца (индекс 1) и возвращает множество.
-        Структура нового файла: [Наименование, КИЗ, GTIN, Цена].
-        """
-        try:
-            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-            sheet = wb.active
-            kiz_set = set()
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                if len(row) >= 2 and row[1]:  # второй столбец
-                    kiz = str(row[1]).strip()
-                    if kiz:
-                        kiz_set.add(kiz)
-            wb.close()
-            return kiz_set
-        except Exception:
-            return set()
-
-    def _log_kiz_details(self, log_path: Path, details: dict, ctx):
-        """Сохраняет детальную информацию о фильтрации КИЗов для каждого файла возвратов."""
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write("=== ДЕТАЛИ ФИЛЬТРАЦИИ КИЗОВ ===\n\n")
-
-            f.write("КИЗы из ЧЗ_МП (приоритетные):\n")
-            if details["kiz_from_fbs"]:
-                for kiz in sorted(details["kiz_from_fbs"]):
-                    f.write(f"  {kiz}\n")
-            else:
-                f.write("  (нет)\n")
-            f.write("\n" + "=" * 60 + "\n\n")
-
-            for file_info in details["files"]:
-                f.write(f"Файл: {file_info['name']}\n")
-                f.write(f"  Всего КИЗов в файле: {file_info['total']}\n")
-                f.write(f"  Дубликаты (уже есть в ЧЗ_МП): {len(file_info['duplicates'])}\n")
-                if file_info['duplicates']:
-                    for kiz in sorted(file_info['duplicates']):
-                        f.write(f"    {kiz}\n")
-                else:
-                    f.write("    (нет)\n")
-                f.write(f"  Отфильтрованные (добавлены): {len(file_info['filtered'])}\n")
-                if file_info['filtered']:
-                    for kiz in sorted(file_info['filtered']):
-                        f.write(f"    {kiz}\n")
-                else:
-                    f.write("    (нет)\n")
-                f.write("\n" + "-" * 40 + "\n")
-
-        ctx.log(f"  Детальный лог фильтрации КИЗов сохранён в {log_path.name}")
+        return details

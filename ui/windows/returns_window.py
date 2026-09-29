@@ -3,47 +3,56 @@
 
 Назначение:
     Пайплайн из трёх шагов: подготовка (фильтрация исходного файла),
-    выгрузка КИЗов для возврата, подготовка КИЗов для передачи
-    между продавцами. Плюс отдельная операция — аккумуляция продаж
-    из Возвратов и ЧЗ_МП в одну папку.
+    выгрузка КИЗов для возврата, подготовка КИЗов для передачи между
+    продавцами. Плюс операция аккумуляции продаж — в базовом классе.
 
 Роль в программе:
-    Открывается из MainWindow. Сервисы возвратов получают
-    log_manager_v2 и создают LoggerV2 в начале публичного метода.
-    Окно ведёт свой логгер для собственных сообщений.
+    Открывается из MainWindow. Наследник BaseServiceWindow:
+    set_status/set_info/_precheck_target_dir/closeEvent/
+    on_accumulate_sales — унаследованы, окно отвечает только за
+    свою раскладку и обработчики шагов.
 """
 
-from pathlib import Path
-from PySide6.QtWidgets import (
-    QMainWindow, QVBoxLayout, QHBoxLayout,
-)
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
+from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
-    FileDialogFactory, ThreadFactory, WindowFactory, StatusLogFactory,
 )
+from ui.styles import ColorCalculator
 from ui.widgets.path_selector import PathSelector
 from services.returns_service import (
     ReturnsPreparationService, KizExportService, KizTransferService,
 )
-from services.sales_accumulator import SalesAccumulatorService
 from utils.log_tools.decorators import log_button_action
 
 
-class ReturnsWindow(QMainWindow):
+class ReturnsWindow(BaseServiceWindow):
     """Окно пайплайна возвратов.
 
     Роль:
         Объединяет три шага обработки возвратов. Каждый шаг —
         отдельный сервис, запускается в фоновом потоке через
-        ThreadFactory. Логи шагов идут в status_log; короткие
-        подсказки — в status_label.
+        BaseServiceWindow._run_async_step. Логи шагов идут в
+        status_log (унаследован); короткие подсказки — в
+        status_label (унаследован).
     """
 
-    # Кнопки, блокируемые на время фонового потока пайплайна.
-    # btn_accumulate сюда не входит: это отдельная операция,
-    # её во время шага блокировать не нужно.
+    LOGGER_SOURCE = "ReturnsWindow.returns_window"
+    LOGGER_DOMAIN = "returns"
+
+    # BG_COLOR вычисляется через ColorCalculator.derive от нейтрального
+    # (50,50,50): r+2(r//5), g+g//5, b+2(b//5) → (70, 60, 70).
+    BG_COLOR = ColorCalculator.derive(
+        (50, 50, 50),
+        r_fn=lambda r: r + 2 * (r // 5),
+        g_fn=lambda g: g + g // 5,
+        b_fn=lambda b: b + 2 * (b // 5),
+    )
+
+    # Кнопки, блокируемые на время шага пайплайна.
+    # btn_accumulate сюда не входит — это отдельная операция.
     PIPELINE_BUTTONS = (
         "btn_choose_file",
         "btn_prepare",
@@ -56,46 +65,36 @@ class ReturnsWindow(QMainWindow):
 
         Вход:
             parent — MainWindow.
-            log_manager_v2 — LogManagerV2 или None. Если None —
-                             logger остаётся None, окно работает
-                             без логирования.
+            log_manager_v2 — LogManagerV2 или None.
 
-        Роль: сохраняет менеджер логирования и создаёт логгер
-              окна. Настраивает раскладку и подключает сигналы.
+        Роль: строит раскладку и подключает сигналы. Логгер,
+              target_dir, status_label, status_log и main_layout
+              созданы базовым классом.
         """
-        super().__init__(parent)
-        self.log_manager_v2 = log_manager_v2
-        self.logger = None
-        if log_manager_v2 is not None:
-            self.logger = log_manager_v2.create_logger_v2(
-                source="ReturnsWindow.returns_window",
-                domain="returns",
-            )
-        if self.logger:
-            self.logger.debug("ReturnsWindow.__init__: старт")
-
-        self.target_dir = parent.main_config.get("target_dir", None)
-        self.source_file = None
-        self.bg_color = (70, 60, 70, 0.95)
-
-        main_layout = WindowFactory.setup_child_window(
-            self, "Подготовка возвратов в оборот",
-            bg_color=self.bg_color,
+        super().__init__(
+            parent,
+            title="Подготовка возвратов в оборот",
+            log_manager_v2=log_manager_v2,
         )
+
+        # Специфичное для окна состояние.
+        self.source_file = None
 
         # ---------- ЭЛЕМЕНТЫ ----------
         self.btn_choose_file = ButtonFactory.create_button(
-            self, "Выбрать файл", (120, 90, 120, 0.8)
+            self, "Выбрать файл", (120, 90, 120, 0.8),
         )
         self.btn_choose_file.clicked.connect(self.select_source_file)
 
         self.header_label = LabelFactory.create_label(
             self,
-            text="Подготовка возвратов\n"
+            text=(
+                "Подготовка возвратов\n"
                 "Подготовь файл, он должен быть определенного формата\n"
                 "Прогони коды через BestMark и сделай импорт в Excell\n"
                 "С этим файлом всё работать будет\n"
-                "Прежде чем продавать в ЭДО верни КИЗы в оборот",
+                "Прежде чем продавать в ЭДО верни КИЗы в оборот"
+            ),
             bg_color=(35, 50, 60, 0),
             text_color="#e0e0e0",
             padding="6px",
@@ -116,7 +115,6 @@ class ReturnsWindow(QMainWindow):
             font_size=10,
         )
 
-        # Виджет выбора пути.
         self.path_selector = PathSelector(
             self,
             initial_path=self.target_dir,
@@ -129,13 +127,6 @@ class ReturnsWindow(QMainWindow):
             padding="6px 12px", fixed_size=(180, 35),
         )
         self.btn_prepare.clicked.connect(self.on_prepare)
-
-        self.status_label = LabelFactory.create_status_label(
-            self, "Выберите файл и целевую папку"
-        )
-        self.status_log = StatusLogFactory.create_status_log(
-            self, min_height=100, max_height=200,
-        )
 
         self.btn_export_kiz = ButtonFactory.create_button(
             self, "Выгрузить КИЗы для возврата", (130, 50, 100),
@@ -161,7 +152,7 @@ class ReturnsWindow(QMainWindow):
         center_layout.addWidget(self.header_label)
 
         file_row = LayoutFactory.create_row(
-            self, self.btn_choose_file, self.file_label, spacing=5
+            self, self.btn_choose_file, self.file_label, spacing=5,
         )
         center_layout.addWidget(file_row)
 
@@ -171,15 +162,15 @@ class ReturnsWindow(QMainWindow):
         prepare_layout.addWidget(self.btn_prepare)
         center_layout.addLayout(prepare_layout)
 
+        # status_label — из базового класса.
         center_layout.addWidget(self.status_label)
 
         bottom_row = LayoutFactory.create_row(
-            self, self.btn_export_kiz, self.btn_prepare_transfer, spacing=20
+            self, self.btn_export_kiz, self.btn_prepare_transfer, spacing=20,
         )
         center_layout.addWidget(bottom_row)
 
-        # Лог статуса — там же, где в ChzMPWindow: после кнопок
-        # действий, до кнопки «Собрать продажи».
+        # status_log — из базового класса.
         center_layout.addWidget(self.status_log)
 
         center_layout.addStretch(1)
@@ -190,151 +181,45 @@ class ReturnsWindow(QMainWindow):
             self, "Собрать продажи", (60, 90, 120, 0.8),
             padding="8px 16px", fixed_size=(160, 35),
         )
+        # on_accumulate_sales унаследован от BaseServiceWindow.
         self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
         bottom_layout.addWidget(self.btn_accumulate)
         center_layout.addLayout(bottom_layout)
 
-        main_layout.addLayout(center_layout)
+        self.main_layout.addLayout(center_layout)
 
         if self.logger:
             self.logger.debug("ReturnsWindow.__init__: окно инициализировано")
 
     # ============================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # ХУКИ БАЗОВОГО КЛАССА
     # ============================================================
 
-    def set_status(self, msg: str) -> None:
-        """Обновляет короткое сообщение в статусной строке.
+    def _current_sellers(self) -> list:
+        """Возвращает список продавцов с брендами.
 
-        Вход: msg — текст.
+        Вход: нет.
+        Выход: list[Seller] с заполненными .brands.
+        Роль: переопределение базового — для возвратов нужны
+              продавцы с полной информацией о брендах.
+        """
+        return self.main_window.sellers_brands_service.get_sellers_with_brands()
+
+    def _on_target_dir_changed_hook(self) -> None:
+        """Сброс кнопок шагов 2–3 при смене папки.
+
+        Вход: нет.
         Выход: нет.
-        Роль: единая точка обновления status_label. Вызывается
-              из StatusHandler через active_child.set_status.
+        Роль: хук вызывается базовым _on_target_dir_changed после
+              очистки логов и обновления target_dir.
         """
-        self.status_label.setText(msg)
-
-    def set_info(self, msg: str) -> None:
-        """Дописывает сообщение в прокручиваемый лог.
-
-        Вход: msg — текст.
-        Выход: нет.
-        Роль: единая точка записи в status_log. Вызывается
-              из InfoUIHandler через active_child.set_info.
-        """
-        self.status_log.log(msg)
-
-    def _on_target_dir_changed(self, new_path) -> None:
-        """Обработка смены целевой папки.
-
-        Вход: new_path — новый путь.
-        Роль: обновляет target_dir, пишет в main_config,
-              сбрасывает кнопки шагов 2–3 до готовности.
-        """
-        if self.logger:
-            self.logger.debug(
-                f"_on_target_dir_changed: новая папка {new_path}"
-            )
-        self.target_dir = new_path
-        self.parent().main_config.set("target_dir", new_path)
-        self.set_status("Целевая папка обновлена.")
         self.btn_export_kiz.setEnabled(False)
         self.btn_prepare_transfer.setEnabled(False)
 
-    def _precheck_target_dir(self) -> bool:
-        """Проверяет, что выбрана целевая папка.
-
-        Вход: нет.
-        Выход:
-            True — папка выбрана.
-            False — папки нет, в status_label записано предупреждение.
-
-        Роль: единая точка проверки target_dir для трёх шагов
-              пайплайна.
-        """
-        if not self.target_dir:
-            self.set_status("Сначала выберите целевую папку")
-            return False
-        return True
-
-    def _current_sellers(self) -> list:
-        """Возвращает актуальный список продавцов.
-
-        Вход: нет.
-        Выход: список Seller с брендами.
-        Роль: единая точка получения sellers для шагов пайплайна.
-              Для возвратов используется get_sellers_with_brands —
-              продавцы с полной информацией о брендах.
-        """
-        return self.parent().sellers_brands_service.get_sellers_with_brands()
-
-    def _run_pipeline_step(self, *, service, target_method,
-                           kwargs: dict, start_message: str,
-                           finish_message: str, step_name: str,
-                           enable_after=None) -> None:
-        """Запускает шаг пайплайна в фоновом потоке.
-
-        Вход (все параметры именованные):
-            service — уже созданный экземпляр сервиса.
-            target_method — bound method сервиса.
-            kwargs — доп. именованные аргументы target_method.
-                     target_dir и sellers добавляются автоматически.
-            start_message — текст в status_label/status_log в начале.
-            finish_message — текст при успехе.
-            step_name — префикс для logger.debug/logger.critical.
-            enable_after — виджет QPushButton для включения после
-                           успеха. None — если включать нечего.
-
-        Выход: нет.
-
-        Роль:
-            Единая обвязка трёх шагов возвратов: запись в
-            status_label и status_log, колбэки on_finished/on_error,
-            вызов ThreadFactory с фиксированным списком
-            блокируемых кнопок.
-        """
-        # Двойная запись: короткое сообщение в статусную строку
-        # и подробное — в прокручиваемый лог.
-        self.set_status(start_message)
-        self.set_info(start_message)
-
-        def on_finished():
-            """Вызывается в UI-потоке после успешного завершения шага."""
-            self.set_status(finish_message)
-            self.set_info(finish_message)
-            if enable_after is not None:
-                enable_after.setEnabled(True)
-            if self.logger:
-                self.logger.debug(f"{step_name}: фоновый поток завершён")
-
-        def on_error(e):
-            """Вызывается в UI-потоке при исключении в фоновом потоке.
-
-            Вход: e — пойманное исключение.
-            Роль: короткое сообщение в status_label, подробное —
-                  в status_log, запись в errors.txt через
-                  logger.critical (как в ChzMPWindow).
-            """
-            self.set_status(f"Ошибка на шаге {step_name}: {e}")
-            self.set_info(f"Ошибка на шаге {step_name}: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в {step_name}: {e}", can_influence=False,
-                )
-
-        call_kwargs = {
-            "target_dir": self.target_dir,
-            "sellers": self._current_sellers(),
-        }
-        call_kwargs.update(kwargs)
-
-        ThreadFactory.create_thread(
-            parent=self,
-            buttons=list(self.PIPELINE_BUTTONS),
-            target_func=target_method,
-            kwargs=call_kwargs,
-            on_finished=on_finished,
-            error_callback=on_error,
-        )
+    def cleanup(self) -> None:
+        """Сброс состояния окна при закрытии."""
+        self.source_file = None
+        self.file_label.setText("Файл не выбран")
 
     # ============================================================
     # ОБРАБОТЧИКИ КНОПОК
@@ -344,33 +229,27 @@ class ReturnsWindow(QMainWindow):
         "btn_choose_file",
         "Ошибка при выборе файла возвратов: {e}",
     )
-    def select_source_file(self):
+    def select_source_file(self) -> None:
         """Открывает диалог выбора исходного файла возвратов.
 
-        Роль: выбранный файл сохраняется в self.source_file,
-              имя показывается в file_label, путь запоминается
-              в main_config для следующего запуска.
+        Роль: тонкая обёртка над _select_single_file. Путь
+              сохраняется в self.source_file через callback.
         """
-        start_dir = (
-            self.parent().main_config.get("last_returns_dir", None)
-            or self.target_dir
-            or str(Path.home())
-        )
-        file_path = FileDialogFactory.open_file_dialog(
-            self, "Выберите Excel-файл с возвратами",
-            default_dir=start_dir,
+        self._select_single_file(
+            config_key="last_returns_dir",
+            title="Выберите Excel-файл с возвратами",
             filter="Excel (*.xlsx)",
+            label_widget=self.file_label,
+            on_success=self._on_source_file_selected,
         )
-        if file_path:
-            self.source_file = file_path
-            self.file_label.setText(Path(file_path).name)
-            self.parent().main_config.set(
-                "last_returns_dir", str(Path(file_path).parent)
-            )
-            self.set_status("Файл выбран. Нажмите «Подготовка».")
+
+    def _on_source_file_selected(self, path: str) -> None:
+        """Сохраняет выбранный файл и подсказывает следующий шаг."""
+        self.source_file = path
+        self.set_status("Файл выбран. Нажмите «Подготовка».")
 
     @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
-    def on_prepare(self):
+    def on_prepare(self) -> None:
         """Шаг 1: подготовка — фильтрация исходного файла возвратов."""
         if not self._precheck_target_dir():
             return
@@ -384,7 +263,7 @@ class ReturnsWindow(QMainWindow):
                 "on_prepare: ReturnsPreparationService создан"
             )
 
-        self._run_pipeline_step(
+        self._run_async_step(
             service=service,
             target_method=service.prepare,
             kwargs={"source_file": self.source_file},
@@ -395,18 +274,18 @@ class ReturnsWindow(QMainWindow):
         )
 
     @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
-    def on_export_kiz(self):
+    def on_export_kiz(self) -> None:
         """Шаг 2: выгрузка КИЗов для возврата."""
         if not self._precheck_target_dir():
             return
 
         service = KizExportService(
-            self.parent().kiz_validator, self.log_manager_v2,
+            self.main_window.kiz_validator, self.log_manager_v2,
         )
         if self.logger:
             self.logger.debug("on_export_kiz: KizExportService создан")
 
-        self._run_pipeline_step(
+        self._run_async_step(
             service=service,
             target_method=service.export,
             kwargs={},
@@ -420,7 +299,7 @@ class ReturnsWindow(QMainWindow):
         "btn_prepare_transfer",
         "Ошибка в on_prepare_transfer: {e}",
     )
-    def on_prepare_transfer(self):
+    def on_prepare_transfer(self) -> None:
         """Шаг 3: подготовка КИЗов для передачи между продавцами."""
         if not self._precheck_target_dir():
             return
@@ -431,7 +310,7 @@ class ReturnsWindow(QMainWindow):
                 "on_prepare_transfer: KizTransferService создан"
             )
 
-        self._run_pipeline_step(
+        self._run_async_step(
             service=service,
             target_method=service.prepare_transfer,
             kwargs={},
@@ -440,72 +319,3 @@ class ReturnsWindow(QMainWindow):
             step_name="on_prepare_transfer",
             enable_after=None,
         )
-
-    @log_button_action(
-        "btn_accumulate_sales",
-        "Ошибка в on_accumulate_sales: {e}",
-    )
-    def on_accumulate_sales(self):
-        """Отдельная операция: аккумуляция продаж из ЧЗ_МП и Возвратов.
-
-        Роль: в отличие от трёх шагов пайплайна, запускается через
-              ThreadFactory.run_in_thread (без блокировки кнопок
-              пайплайна). Логи идут через set_status / set_info.
-        """
-        if not self.target_dir:
-            self.set_status("Сначала выберите целевую папку")
-            return
-
-        self.set_status("Аккумуляция продаж...")
-        self.set_info("Аккумуляция продаж...")
-        service = SalesAccumulatorService()
-        if self.logger:
-            self.logger.debug(
-                "on_accumulate_sales: SalesAccumulatorService создан"
-            )
-
-        def on_finished():
-            self.set_status("Аккумуляция завершена.")
-            self.set_info("Аккумуляция завершена.")
-            if self.logger:
-                self.logger.debug(
-                    "on_accumulate_sales: фоновый поток завершён"
-                )
-
-        def on_error(e):
-            self.set_status(f"Ошибка аккумуляции: {e}")
-            self.set_info(f"Ошибка аккумуляции: {e}")
-            if self.logger:
-                self.logger.critical(
-                    f"Ошибка в on_accumulate_sales: {e}",
-                    can_influence=False,
-                )
-
-        ThreadFactory.run_in_thread(
-            target_func=service.accumulate,
-            args=(self.target_dir, "returns"),
-            on_finished=on_finished,
-            error_callback=on_error,
-        )
-
-    # ============================================================
-    # ЗАВЕРШЕНИЕ
-    # ============================================================
-
-    def cleanup(self):
-        """Сброс состояния окна: файл, имя файла."""
-        self.source_file = None
-        self.file_label.setText("Файл не выбран")
-
-    def closeEvent(self, event):
-        """Обработка закрытия окна.
-
-        Роль: чистит состояние, снимает active_child у родителя,
-              принимает событие.
-        """
-        if self.logger:
-            self.logger.debug("ReturnsWindow: closeEvent получен")
-        self.cleanup()
-        if self.parent() and hasattr(self.parent(), 'active_child'):
-            self.parent().active_child = None
-        event.accept()
