@@ -1,2 +1,0 @@
-[] Ошибка подготовки передач КИЗов: SalesFileGenerator.__init__() got an unexpected keyword argument 'logger'
-[] Ошибка подготовки передач КИЗов: SalesFileGenerator.__init__() got an unexpected keyword argument 'logger'
