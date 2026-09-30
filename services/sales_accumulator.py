@@ -27,8 +27,7 @@ from datetime import date
 from utils.context import TaskContext
 from utils.file_helper import FileHelper
 from utils.excel_helper import ExcelHelper
-from utils.sales_file_readers import SalesFileKizReader
-from utils.txt_utils import KizFilterDetailsWriter
+from utils.sales_file_generator import SalesFileKizReader, KizFilterDetailsWriter
 
 
 class SalesAccumulatorService:

@@ -29,7 +29,7 @@ from typing import Optional
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
-from utils.txt_utils import CompareReportTxtWriter
+from utils.similarity_utils import CompareReportTxtWriter
 from utils.compare_readers import (
     SupplyItemsReader, CandidatesReader, ConsolidatedSupplyBuilder,
 )

@@ -20,7 +20,7 @@ from ui.factories.factories import (
     ListWidgetFactory, ButtonFactory, LayoutFactory,
 )
 from ui.widgets.editable_list_widget import EditableListWidget
-from utils.validation import ValidationNumb
+from utils.parsers import NumberParser
 from ui.base.base_edit_dialog import BaseEditDialog
 
 
@@ -174,7 +174,7 @@ class AveragePriceInputDialog(BaseEditDialog):
               вызывает accept → _validate.
         """
         text = self._input_edit.text().strip()
-        if not ValidationNumb.is_number(text):
+        if NumberParser.to_float(text) is None:
             current = self._label.text()
             if "Данные не подходят" not in current:
                 self._label.setText(
@@ -187,7 +187,7 @@ class AveragePriceInputDialog(BaseEditDialog):
 
     def _collect_result(self):
         """Возвращает введённую цену как int."""
-        return ValidationNumb.to_int(self._input_edit.text().strip())
+        return NumberParser.to_int(self._input_edit.text().strip())
 
     def get_price(self):
         """Возвращает введённую цену (после exec() == Accepted)."""
@@ -292,7 +292,7 @@ class PricesEditWindow(BaseEditDialog):
         updated_prices = {}
         for seller_name, edit in self.price_edits.items():
             text = edit.text().strip()
-            if text and ValidationNumb.is_number(text):
-                updated_prices[seller_name] = ValidationNumb.to_int(text)
+            if text and NumberParser.to_float(text) is not None:
+                updated_prices[seller_name] = NumberParser.to_int(text)
         self._main_config.set("seller_prices", updated_prices)
         return None

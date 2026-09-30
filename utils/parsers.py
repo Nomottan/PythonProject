@@ -218,72 +218,21 @@ class NumberParser(BaseParser):
             return False
         return isinstance(value, (int, float, Decimal))
 
-class FilenameParser(BaseParser):
-    """Парсер имён файлов.
-
-    Роль: из имени файла отчёта вытаскиваем имя продавца.
-          Формат имён нестабилен — берём всё до первого разделителя.
-    """
-
     @staticmethod
-    def parse_seller_name(filename: str) -> Optional[str]:
-        """Извлекает имя продавца из имени файла.
+    def round_up_to_multiple(value: int, multiple: int = 10) -> int:
+        """Округляет вверх до ближайшего кратного.
 
-        Вход: filename — например "ООО Ромашка_отчёт_2025.xlsx".
-        Выход: "ООО Ромашка" или None.
+        Вход:
+            value — исходное число.
+            multiple — шаг округления. По умолчанию 10.
 
-        Роль: имя продавца стоит первым, отделено одним из символов
-              "_", "-", "." или пробелом перед словом "отчёт".
-              Если ничего не нашли — возвращаем имя файла без
-              расширения, чтобы вызывающий код мог показать хоть
-              что-то.
+        Выход:
+            int — ближайшее кратное multiple, не меньше value.
+
+        Роль: перенос из ValidationNumb.round_up_to_multiple.
+              Используется в shared_dialogs.py.
         """
-        if not filename:
-            return None
-        # Убираем путь, если он есть.
-        name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        # Убираем расширение.
-        if "." in name:
-            name = name.rsplit(".", 1)[0]
-
-        # Пробуем разные разделители.
-        for sep in ("_", " - ", "-"):
-            if sep in name:
-                candidate = name.split(sep, 1)[0].strip()
-                if candidate:
-                    return candidate
-        # Fallback: возвращаем всё, что осталось.
-        return name.strip() or None
-
-
-class KizParser(BaseParser):
-    """Парсер и нормализатор КИЗов.
-
-    Роль: единая точка «чистки» кодов маркировки. КИЗы приходят
-          из разных источников с разным форматированием — здесь
-          приводим их к каноничному виду.
-    """
-
-    # Паттерн: оставляем только hex-символы и допустимые разделители.
-    _CLEAN_RE = re.compile(r"[^0-9a-fA-F]")
-
-    @staticmethod
-    def clean(text) -> Optional[str]:
-        """Очищает КИЗ до каноничного вида.
-
-        Вход: text — строка с КИЗом (может содержать пробелы,
-              дефисы, невидимые символы).
-        Выход: строка только из hex-символов в нижнем регистре
-               или None, если после очистки ничего не осталось.
-
-        Роль: КИЗ используется как ключ в хранилище. Все источники
-              должны давать одинаковый ключ для одного и того же
-              кода — поэтому чистим унифицированно.
-        """
-        if text is None:
-            return None
-        cleaned = KizParser._CLEAN_RE.sub("", str(text)).lower()
-        return cleaned or None
+        return ((value + multiple - 1) // multiple) * multiple
 
 @dataclass
 class PreFinalRow:

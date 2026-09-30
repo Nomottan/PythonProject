@@ -2,8 +2,7 @@ from pathlib import Path
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
-from utils.file_helper import FileHelper
-from utils.filename_utils import FilenameUtils
+from utils.file_helper import FileHelper, FilenameUtils
 from utils.sales_file_generator import SalesFileGenerator
 from utils.report_readers import (
     ReturnsSourceReportReader, ReturnsKizReader, ReturnsTransferReader,
@@ -171,7 +170,6 @@ class ReturnsPreparationService:
 
         logger.report("Обработка возвратов завершена.\n")
 
-
 class KizExportService:
     """Сервис выгрузки КИЗов для возврата.
 
@@ -290,7 +288,6 @@ class KizExportService:
         )
 
         logger.report("---Выгрузка завершена.---\n")
-
 
 class KizTransferService:
     """Сервис подготовки КИЗов для передачи между продавцами.

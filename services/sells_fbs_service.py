@@ -19,11 +19,9 @@ from pathlib import Path
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
-from utils.file_helper import FileHelper
-from utils.filename_utils import FilenameUtils
+from utils.file_helper import FileHelper, FilenameUtils
 from utils.parsers import PreFinalRow
-from utils.price_utils import AveragePriceResolver
-from utils.price_filler import PriceFiller
+from utils.price_utils import AveragePriceResolver, PriceFiller
 from utils.report_readers import (
     ChzMpReportReader, WBReportReader, OZONReportReader,
     MpReportTypeDetector,
@@ -218,8 +216,8 @@ class ExportKizService:
 
     Роль:
         Оркестратор чтения. Логика разбора Excel живёт в
-        ChzMpReportReader/MpReportReader (utils/report_readers.py).
-        Сервис отвечает только за:
+        ChzMpReportReader/WBReportReader/OZONReportReader
+        (utils/report_readers.py). Сервис отвечает только за:
             - выбор файлов в подпапке Отчёты/;
             - вызов ридеров и мерж результатов в kiz_by_seller
               и prices_by_seller;
@@ -229,7 +227,7 @@ class ExportKizService:
               KizStorage.
 
     Публичный API:
-        export(target_dir, sellers, log_callback).
+        export(target_dir, sellers).
     """
 
     def __init__(self, kiz_validator, log_manager_v2) -> None:
@@ -250,10 +248,6 @@ class ExportKizService:
         Вход:
             target_dir — корневая папка задачи.
             sellers — список Seller.
-            log_callback — устаревший параметр: сохранён для
-                           совместимости с текущим вызовом из
-                           ChzMPWindow. Игнорируется. Будет удалён
-                           в Порции 16 вместе с правкой окна.
 
         Выход: нет.
 
@@ -327,11 +321,11 @@ class ExportKizService:
             # 2. Обработка отчётов МП — через MpReportReader.
             # ------------------------------------------------------------
             mp_files = FileHelper.find_files_by_pattern(
-                ctx.reports_dir, "ОТЧЁТ МП ПО *.xlsx"
+                ctx.reports_dir, "Отчёт_WB_*.xlsx"
             )
             for mp_path in mp_files:
                 try:
-                    data = MpReportReader.read(
+                    data = WBReportReader.read(
                         report_path=mp_path,
                         sellers=sellers,
                         kiz_validator=self.kiz_validator,
@@ -348,7 +342,7 @@ class ExportKizService:
                         can_influence=False,
                     )
                     continue
-                # --- 3. Обработка Ozon-отчётов ---
+            # --- 3. Обработка Ozon-отчётов ---
             ozon_files = FileHelper.find_files_by_pattern(
                 ctx.reports_dir, "Отчёт_OZON_*.xlsx"
             )
@@ -668,7 +662,7 @@ class FinalizePricesService:
         price_requester, переданный из UI.
 
     Публичный API:
-        finalize(target_dir, sellers, saved_prices, log_callback).
+        finalize(target_dir, sellers, saved_prices).
     """
 
     def __init__(self, kiz_validator, log_manager_v2,
@@ -850,7 +844,7 @@ class FinalizePricesService:
 
             # ---- 4. Копирование в корень как ИТОГ. ----
             FileHelper.copy_file_with_log(
-                file_path, new_path, ctx,
+                file_path, new_path, logger,
                 description="итоговый файл", overwrite=True,
             )
             logger.report(f"Файл скопирован в корень: {new_path.name}")

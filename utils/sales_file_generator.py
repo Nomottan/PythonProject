@@ -1,6 +1,6 @@
-import random
+import random, openpyxl
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
 from utils.kiz_utils import KizUtils
@@ -145,3 +145,130 @@ class SalesFileGenerator:
         else:
             # Префикс [DEBUG] только в fallback — Logger сам знает про уровень.
             print(f"[DEBUG] {message}")
+
+class SalesFileKizReader:
+    """Читает КИЗы из файла продаж.
+
+    Роль:
+        Единая точка чтения КИЗов из второго столбца файла продаж.
+        Возвращает set[str]. Ошибки чтения не пробрасываются —
+        возвращается пустое множество (аккумуляция продолжается).
+    """
+
+    # Индекс столбца с КИЗом (0-based): [Наименование, КИЗ, GTIN, Цена].
+    KIZ_COLUMN_INDEX = 1
+
+    @staticmethod
+    def read(file_path) -> set:
+        """Возвращает множество непустых КИЗов из файла.
+
+        Вход:
+            file_path — путь к файлу продаж (Path или str).
+
+        Выход:
+            set[str] — непустые КИЗы из второго столбца, без
+            дубликатов. Пустое множество при ошибке чтения.
+
+        Роль:
+            Точный перенос SalesAccumulatorService._collect_kiz_set.
+            Строки, короче KIZ_COLUMN_INDEX+1 или с пустым КИЗом,
+            пропускаются.
+        """
+        try:
+            wb = openpyxl.load_workbook(
+                Path(file_path), read_only=True, data_only=True,
+            )
+        except Exception:
+            return set()
+
+        try:
+            sheet = wb.active
+            kiz_set = set()
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if len(row) > SalesFileKizReader.KIZ_COLUMN_INDEX:
+                    raw = row[SalesFileKizReader.KIZ_COLUMN_INDEX]
+                    if raw:
+                        kiz = str(raw).strip()
+                        if kiz:
+                            kiz_set.add(kiz)
+            return kiz_set
+        finally:
+            wb.close()
+
+class KizFilterDetailsWriter:
+    """Пишет детальный лог фильтрации КИЗов при аккумуляции продаж.
+
+    Роль:
+        Единая точка записи log_фильтрация_КИЗов.txt. Создаёт
+        отдельный LoggerV2 через переданный LogManagerV2 — так
+        структура лога совпадает с основным log_аккумуляция.txt
+        (те же префиксы [ts] [SEVERITY] [source]). Сохраняет
+        заголовки, отступы и порядок сортировки из прежней версии
+        SalesAccumulatorService._log_kiz_details.
+    """
+
+    @staticmethod
+    def write(details: dict, logs_dir, log_manager_v2) -> None:
+        """Пишет детальный лог фильтрации КИЗов.
+
+        Вход:
+            details — словарь {"kiz_from_fbs": set[str],
+                               "files": [{"name": str,
+                                          "total": int,
+                                          "duplicates": set[str],
+                                          "filtered": set[str]}, ...]}.
+            logs_dir — папка «Логи» рабочей папки.
+            log_manager_v2 — LogManagerV2 для создания логгера.
+
+        Выход: нет.
+
+        Роль:
+            Создаёт логгер SalesAccumulatorService.kiz_filter с
+            именем log_фильтрация_КИЗов.txt и построчно пишет
+            структуру. Пустые строки и разделители сохранены —
+            лог читается глазами, как и раньше.
+        """
+        logger = log_manager_v2.create_logger_v2(
+            source="SalesAccumulatorService.kiz_filter",
+            domain="sales",
+            work_folder=logs_dir,
+            log_filename="log_фильтрация_КИЗов.txt",
+        )
+
+        logger.report("=== ДЕТАЛИ ФИЛЬТРАЦИИ КИЗОВ ===")
+        logger.report("")
+        logger.report("КИЗы из ЧЗ_МП (приоритетные):")
+        if details["kiz_from_fbs"]:
+            for kiz in sorted(details["kiz_from_fbs"]):
+                logger.report(f"  {kiz}")
+        else:
+            logger.report("  (нет)")
+        logger.report("")
+        logger.report("=" * 60)
+        logger.report("")
+
+        for file_info in details["files"]:
+            logger.report(f"Файл: {file_info['name']}")
+            logger.report(
+                f"  Всего КИЗов в файле: {file_info['total']}"
+            )
+            logger.report(
+                f"  Дубликаты (уже есть в ЧЗ_МП): "
+                f"{len(file_info['duplicates'])}"
+            )
+            if file_info["duplicates"]:
+                for kiz in sorted(file_info["duplicates"]):
+                    logger.report(f"    {kiz}")
+            else:
+                logger.report("    (нет)")
+            logger.report(
+                f"  Отфильтрованные (добавлены): "
+                f"{len(file_info['filtered'])}"
+            )
+            if file_info["filtered"]:
+                for kiz in sorted(file_info["filtered"]):
+                    logger.report(f"    {kiz}")
+            else:
+                logger.report("    (нет)")
+            logger.report("")
+            logger.report("-" * 40)

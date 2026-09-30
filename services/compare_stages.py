@@ -17,8 +17,7 @@
 from typing import Optional
 
 from models.models import SupplyItem, Candidate
-from utils.index_utils import CandidateIndexBuilder
-from utils.similarity_utils import SimilarityUtils
+from utils.similarity_utils import SimilarityUtils, CandidateIndexBuilder
 
 
 class Stage1:
