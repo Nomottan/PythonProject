@@ -17,7 +17,10 @@
 
 from pathlib import Path
 from utils.context import TaskContext
-from utils.excel_helper import ExcelHelper
+from utils.excel_helper import (
+    ExcelHelper, WorkbookOpener, WorkbookWriter,
+)
+from utils.txt_helper import TextFileWriter
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper, FilenameUtils
 from utils.parsers import PreFinalRow
@@ -123,9 +126,7 @@ class PreparationService:
         for src in mp_files:
             src_path = Path(src)
 
-            wb = ExcelHelper.open_workbook_safe(
-                src_path, read_only=True, data_only=True,
-            )
+            wb = WorkbookOpener.open(src_path, logger=None, read_only=True)
             if wb is None:
                 logger.warning(f"Не удалось открыть {src_path.name}")
                 dst = ctx.reports_dir / FilenameUtils.format_with_extension(
@@ -392,9 +393,9 @@ class ExportKizService:
                 )
                 continue
             txt_path = ctx.processing_dir / f"{seller_name}.txt"
-            with open(txt_path, "w", encoding="utf-8") as f:
-                for kiz in sorted(kiz_set):
-                    f.write(kiz + "\n")
+            TextFileWriter.write(
+                txt_path, header=None, items=sorted(kiz_set), logger=logger,
+            )
             logger.report(
                 f"  {seller_name}: сохранено {len(kiz_set)} КИЗов "
                 f"в {txt_path.name}"
@@ -451,10 +452,9 @@ class FilterPreFinalService:
 
             logger.report(f"\nОбработка файла: {file_path.name}")
 
-            wb = ExcelHelper.open_workbook_with_logger(
-                file_path, logger,
-                description="предитоговый файл",
-                read_only=False, data_only=True,
+            wb = WorkbookOpener.open(
+                file_path, logger=logger,
+                description="предитоговый файл", read_only=False,
             )
             if wb is None:
                 continue
@@ -508,11 +508,9 @@ class FilterPreFinalService:
                 wb.close()
 
             rows_for_write = [values for _, values in filtered_rows]
-            ExcelHelper.rewrite_sheet(
-                file_path=file_path,
-                headers=headers,
-                rows=rows_for_write,
-                sheet_name=original_sheet_title,
+            WorkbookWriter.overwrite(
+                file_path, headers, rows_for_write,
+                sheet_name=original_sheet_title, logger=logger,
             )
 
         logger.report("\n=== ФИЛЬТРАЦИЯ ЗАВЕРШЕНА ===")
@@ -568,10 +566,9 @@ class GenerateSalesService:
                 continue
 
             logger.report(f"\nОбработка файла: {file_path.name}")
-            wb = ExcelHelper.open_workbook_with_logger(
-                file_path, logger,
-                description="предитоговый файл",
-                read_only=True, data_only=True,
+            wb = WorkbookOpener.open(
+                file_path, logger=logger,
+                description="предитоговый файл", read_only=True,
             )
             if wb is None:
                 continue
@@ -850,10 +847,9 @@ class FinalizePricesService:
             logger.report(f"Файл скопирован в корень: {new_path.name}")
 
             # ---- 5. Открытие ИТОГа и три этапа через PriceFiller. ----
-            wb = ExcelHelper.open_workbook_with_logger(
-                new_path, logger,
-                description="итоговый файл",
-                read_only=False, data_only=True,
+            wb = WorkbookOpener.open(
+                new_path, logger=logger,
+                description="итоговый файл", read_only=False,
             )
             if wb is None:
                 continue

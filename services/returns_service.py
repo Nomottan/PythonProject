@@ -1,6 +1,8 @@
 from pathlib import Path
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
+from utils.excel_helper import WorkbookWriter
+from utils.txt_helper import TextFileWriter
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper, FilenameUtils
 from utils.sales_file_generator import SalesFileGenerator
@@ -113,23 +115,16 @@ class ReturnsPreparationService:
             "Возвраты_{date}", ctx.date_str
         )
         result_path = ctx.reports_dir / result_name
-        try:
-            wb_new, ws_new = ExcelHelper.create_workbook_with_headers(
-                headers=data.headers or [],
-                sheet_name="Возвраты",
-                write_only=False,
-            )
-            for row_values in data.rows:
-                ws_new.append(row_values)
-            wb_new.save(result_path)
-            wb_new.close()
-            logger.report(f"Создан файл с возвратами: {result_name}")
-        except Exception as e:
-            logger.critical(
-                f"Ошибка сохранения файла {result_name}: {e}",
-                can_influence=False,
-            )
+        ok = WorkbookWriter.create(
+            result_path,
+            headers=data.headers or [],
+            rows=data.rows,
+            sheet_name="Возвраты",
+            logger=logger,
+        )
+        if not ok:
             return
+        logger.report(f"Создан файл с возвратами: {result_name}")
 
         # Агрегаты.
         stats = data.stats
@@ -255,9 +250,9 @@ class KizExportService:
                 key=lambda x: x[0].lower(),
             ):
                 txt_path = ctx.work_folder / f"{company}.txt"
-                with open(txt_path, "w", encoding="utf-8") as f:
-                    for kiz in kiz_list:
-                        f.write(kiz + "\n")
+                TextFileWriter.write(
+                    txt_path, header=None, items=kiz_list, logger=logger,
+                )
                 logger.report(
                     f"  {company}: сохранено {len(kiz_list)} КИЗов "
                     f"в {txt_path.name}"

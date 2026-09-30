@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from utils.excel_helper import ExcelHelper
+from utils.excel_helper import ExcelHelper, WorkbookOpener
 from utils.kiz_utils import KizUtils, KizOccurrences
 from utils.text_utils import TextUtils
 from utils.parsers import ReturnsRow, DateParser
@@ -150,9 +150,9 @@ class ChzMpReportReader:
         entries: List[ChzMpEntry] = []
         logger.report(f"Обработка ЧЗ_МП: {Path(report_path).name}")
 
-        wb = ExcelHelper.open_workbook_with_logger(
-            report_path, logger, description="ЧЗ_МП",
-            read_only=True, data_only=True,
+        wb = WorkbookOpener.open(
+            report_path, logger=logger, description="ЧЗ_МП",
+            read_only=True,
         )
         if wb is None:
             return entries
@@ -267,9 +267,9 @@ class WBReportReader:
             return None
         logger.report(f"  Продавец определён: {seller.name}")
 
-        wb = ExcelHelper.open_workbook_with_logger(
-            report_path, logger, description="отчёт МП",
-            read_only=True, data_only=True,
+        wb = WorkbookOpener.open(
+            report_path, logger=logger, description="отчёт МП",
+            read_only=True,
         )
         if wb is None:
             return None
@@ -505,9 +505,9 @@ class OZONReportReader:
             )
             return None
 
-        wb = ExcelHelper.open_workbook_with_logger(
-            report_path, logger, description="отчёт Ozon",
-            read_only=True, data_only=True,
+        wb = WorkbookOpener.open(
+            report_path, logger=logger, description="отчёт Ozon",
+            read_only=True,
         )
         if wb is None:
             return None
@@ -774,9 +774,9 @@ class ReturnsSourceReportReader:
             некоторых файлах — тогда пустой список). Строки —
             через iter_rows(values_only=True).
         """
-        wb = ExcelHelper.open_workbook_with_logger(
-            source_path, logger, description="исходный файл возвратов",
-            read_only=True, data_only=True,
+        wb = WorkbookOpener.open(
+            source_path, logger=logger, description="исходный файл возвратов",
+            read_only=True,
         )
         if wb is None:
             return ReturnsSourceData(
@@ -931,9 +931,9 @@ class ReturnsKizReader:
             логируются через logger.warning и не прерывают
             обход.
         """
-        wb = ExcelHelper.open_workbook_with_logger(
-            file_path, logger, description="файл возвратов",
-            read_only=True, data_only=True,
+        wb = WorkbookOpener.open(
+            file_path, logger=logger, description="файл возвратов",
+            read_only=True,
         )
         if wb is None:
             return ReturnsKizData(
@@ -1070,32 +1070,6 @@ class ReturnsTransferData:
     rows: list
     total_rows: int
     unique_brands: set
-class MpReportTypeDetector:
-    """Определяет тип отчёта МП по имени первого листа.
-
-    Роль:
-        WB-отчёты имеют первый лист «Сборочные задания»,
-        Ozon-отчёты — «Отчет». Нормализация имени листа — через
-        TextUtils.normalize + замена «ё» → «е» (на случай опечаток
-        и раскладки). Иначе — None, файл копируется как неопознанный.
-    """
-
-    @staticmethod
-    def detect(wb) -> Optional[str]:
-        """Возвращает "wb", "ozon" или None.
-
-        Вход: wb — открытый openpyxl workbook.
-        Выход: тип отчёта или None.
-        Роль: единая точка определения типа по первому листу.
-        """
-        if not wb.sheetnames:
-            return None
-        first = TextUtils.normalize(wb.sheetnames[0]).replace("ё", "е")
-        if first == "отчет":
-            return "ozon"
-        if first == "сборочные задания":
-            return "wb"
-        return None
 
 class ReturnsTransferReader:
     """Читатель файла возвратов для подготовки передач.
@@ -1131,9 +1105,9 @@ class ReturnsTransferReader:
             TextUtils.build_key_mapping с logger=logger, чтобы
             дубликаты ключей шли в warnings.txt.
         """
-        wb = ExcelHelper.open_workbook_with_logger(
-            file_path, logger, description="файл возвратов",
-            read_only=True, data_only=True,
+        wb = WorkbookOpener.open(
+            file_path, logger=logger, description="файл возвратов",
+            read_only=True,
         )
         if wb is None:
             return ReturnsTransferData(

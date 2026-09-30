@@ -143,18 +143,6 @@ class TextUtils:
         return None
 
     @staticmethod
-    def log_unknown_entities(unknown_dict, log_path, title, ctx):
-        if not unknown_dict:
-            return
-        sorted_unknown = sorted(unknown_dict.keys(), key=str.lower)
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(title + "\n")
-            f.write("=" * 50 + "\n")
-            for entity in sorted_unknown:
-                f.write(f"{entity}: {unknown_dict[entity]}\n")
-        ctx.log(f"Список неизвестных сущностей сохранён в {log_path.name}")
-
-    @staticmethod
     def clean_invalid_excel_chars(text: str) -> str:
         """
         Удаляет из строки символы, которые openpyxl не может записать в Excel.
@@ -162,9 +150,6 @@ class TextUtils:
         """
         if not text:
             return text
-        # Оставляем только печатаемые символы: табуляция (9), перевод строки (10), возврат каретки (13),
-        # и все символы от 32 до 126 (печатаемые ASCII) и выше (Unicode)
-        # Удаляем все управляющие символы, кроме \t, \n, \r
         return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
 
     def clean_kiz(raw: str) -> list[str]:

@@ -26,9 +26,10 @@ from datetime import date
 
 from utils.context import TaskContext
 from utils.file_helper import FileHelper
-from utils.excel_helper import ExcelHelper
-from utils.sales_file_generator import SalesFileKizReader, KizFilterDetailsWriter
-
+from utils.excel_helper import ExcelHelper, WorkbookWriter
+from utils.sales_file_generator import (
+    SalesFileKizReader, SalesFileRowsReader, KizFilterDetailsWriter,
+)
 
 class SalesAccumulatorService:
     """Сервис аккумуляции продаж.
@@ -201,23 +202,23 @@ class SalesAccumulatorService:
                 )
                 continue
 
-            rows_added = ExcelHelper.copy_rows_by_column_value(
-                src_path=src_path,
-                dst_path=dst_path,
-                column_index=self.KIZ_COLUMN_INDEX,
-                allowed_values=filtered,
-                append=dst_path.exists(),
+            header, filtered_rows = SalesFileRowsReader.read_filtered(
+                src_path, self.KIZ_COLUMN_INDEX, filtered, logger=None,
             )
 
-            if dst_path.exists() and rows_added >= 0:
-                # Файл был до этой итерации — дописывали.
+            if dst_path.exists():
+                WorkbookWriter.append_rows(
+                    dst_path, filtered_rows, logger=logger,
+                )
                 action = "Дополнен"
             else:
+                WorkbookWriter.create(
+                    dst_path, header, filtered_rows,
+                    sheet_name="Продажи", logger=logger,
+                )
                 action = "Создан новый файл"
 
-            # Различаем в логе: до вызова dst_path.exists() уже
-            # проверяли — но после append=True файл точно был.
-            # Логируем по факту: append определяли до вызова.
+            rows_added = len(filtered_rows)
             logger.report(
                 f"  {action} {dst_path.name}: добавлено "
                 f"{rows_added} строк (всего КИЗов {len(src_kiz_set)}, "

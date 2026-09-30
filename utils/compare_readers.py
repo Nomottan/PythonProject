@@ -18,9 +18,12 @@ from pathlib import Path
 from datetime import date
 from typing import TYPE_CHECKING
 
-from utils.excel_helper import ExcelHelper, CsvNormalizer
+from utils.excel_helper import (
+    ExcelHelper, CsvNormalizer, WorkbookOpener, WorkbookWriter,
+)
 from utils.parsers import ProductNameParser
 from utils.text_utils import TextUtils
+from utils.txt_helper import TextFileWriter  # NEW
 from models.models import SupplyItem, Candidate
 
 if TYPE_CHECKING:
@@ -71,7 +74,10 @@ class SupplyItemsReader:
         if logger is not None:
             logger.report(f"Загрузка товаров из листа поставки: {file_path.name}")
 
-        wb = ExcelHelper.open_data_file(file_path, read_only=True, data_only=True)
+        wb = WorkbookOpener.open(
+            file_path, logger=logger, description="лист поставки",
+            read_only=True,
+        )
         try:
             ws = wb.active
             header_row, columns = ExcelHelper.find_header_row_and_columns(
@@ -186,7 +192,10 @@ class CandidatesReader:
         if logger is not None:
             logger.report(f"Загрузка кандидатов из сборного файла: {file_path.name}")
 
-        wb = ExcelHelper.open_data_file(file_path, read_only=True, data_only=True)
+        wb = WorkbookOpener.open(
+            file_path, logger=logger, description="сборный файл",
+            read_only=True,
+        )
         try:
             ws = wb.active
             header_row, columns = ExcelHelper.find_header_row_and_columns(
@@ -353,14 +362,13 @@ class ConsolidatedSupplyBuilder:
                 data['source_file'],
             ])
 
-        wb, _ = ExcelHelper.create_report_workbook(
-            ConsolidatedSupplyBuilder._RESULT_HEADERS, rows,
+        WorkbookWriter.create(
+            consolidated_path,
+            ConsolidatedSupplyBuilder._RESULT_HEADERS,
+            rows,
             sheet_name="Поставки",
+            logger=logger,
         )
-        try:
-            wb.save(consolidated_path)
-        finally:
-            wb.close()
 
         if logger is not None:
             logger.report(f"Сборный файл сохранён: {consolidated_path.name}")
@@ -395,14 +403,14 @@ class ConsolidatedSupplyBuilder:
 
         if invalid_log:
             log_path = output_dir / f"log_некорректные_строки_{file_path.stem}.txt"
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write(f"Некорректные строки в файле {file_path.name}\n")
-                f.write("=" * 60 + "\n")
-                for line in invalid_log:
-                    f.write(line + "\n")
+            TextFileWriter.write(
+                log_path,
+                header=f"Некорректные строки в файле {file_path.name}",
+                items=invalid_log,
+                logger=logger,
+            )
             if logger is not None:
                 logger.report(f"  Некорректные строки сохранены в {log_path.name}")
-
         if not valid_rows:
             if logger is not None:
                 logger.report("  Валидных строк не найдено")
@@ -447,11 +455,11 @@ class ConsolidatedSupplyBuilder:
             инкрементом count (1 за строку — так было в исходнике).
             Файл без заголовков или без ШК-столбца пропускается.
         """
-        try:
-            wb = ExcelHelper.open_data_file(file_path, read_only=True, data_only=True)
-        except Exception as e:
-            if logger is not None:
-                logger.report(f"  Ошибка открытия: {e} – пропускаем")
+        wb = WorkbookOpener.open(
+            file_path, logger=logger, description="файл поставок",
+            read_only=True,
+        )
+        if wb is None:
             return
 
         try:

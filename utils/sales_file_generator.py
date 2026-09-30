@@ -1,11 +1,14 @@
-import random, openpyxl
+import random
 from pathlib import Path
 from typing import List, Dict, Optional, TYPE_CHECKING
-from utils.excel_helper import ExcelHelper
+from utils.excel_helper import (
+    ExcelHelper, WorkbookOpener, WorkbookWriter,
+)
 from utils.text_utils import TextUtils
 from utils.kiz_utils import KizUtils
 from services.subservices.logging import LoggerV2
-
+if TYPE_CHECKING:
+    from services.subservices.logging import LogManagerV2
 
 class SalesFileGenerator:
     """
@@ -87,7 +90,11 @@ class SalesFileGenerator:
             vad
         ]
 
-        ExcelHelper.append_row_to_file(file_path, row_data, headers=self.headers)
+        ok = WorkbookWriter.append(
+            file_path, row_data, headers=self.headers, logger=self._logger,
+        )
+        if not ok:
+            raise RuntimeError(f"Ошибка записи в {file_path}")
 
         if file_path not in self.created_files:
             self.created_files.append(file_path)
@@ -174,11 +181,8 @@ class SalesFileKizReader:
             Строки, короче KIZ_COLUMN_INDEX+1 или с пустым КИЗом,
             пропускаются.
         """
-        try:
-            wb = openpyxl.load_workbook(
-                Path(file_path), read_only=True, data_only=True,
-            )
-        except Exception:
+        wb = WorkbookOpener.open(file_path, logger=None, read_only=True)
+        if wb is None:
             return set()
 
         try:
@@ -193,7 +197,64 @@ class SalesFileKizReader:
                             kiz_set.add(kiz)
             return kiz_set
         finally:
-            wb.close()
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+class SalesFileRowsReader:
+    """Читает строки файла продаж с фильтром по значению столбца.
+
+    Роль:
+        Единая точка чтения строк файла продаж с фильтром.
+        Заменяет логику ExcelHelper.copy_rows_by_column_value на
+        «читающей» стороне. Возвращает заголовок и отфильтрованные
+        строки. Запись результата — ответственность WorkbookWriter.
+    """
+
+    @staticmethod
+    def read_filtered(file_path, column_index, allowed_values,
+                      logger=None) -> tuple:
+        """Читает строки с фильтром по значению столбца.
+
+        Вход:
+            file_path — путь к файлу продаж.
+            column_index — 0-based индекс столбца для фильтра.
+            allowed_values — set/коллекция допустимых значений
+                             (сравнение по str(value).strip()).
+            logger — LoggerV2 или None.
+
+        Выход:
+            (header, rows):
+                header — list значений первой строки файла.
+                rows — list кортежей строк, прошедших фильтр.
+            При ошибке открытия — ([], []).
+
+        Роль:
+            Единая точка чтения отфильтрованных строк. Открывает
+            через WorkbookOpener.open(read_only=True). Строки, где
+            ячейка column_index пустая или не в allowed_values,
+            пропускаются.
+        """
+        wb = WorkbookOpener.open(file_path, logger=logger, read_only=True)
+        if wb is None:
+            return [], []
+
+        try:
+            sheet = wb.active
+            header = [cell.value for cell in sheet[1]]
+            rows: list = []
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if len(row) > column_index:
+                    cell = row[column_index]
+                    if cell and str(cell).strip() in allowed_values:
+                        rows.append(row)
+            return header, rows
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 class KizFilterDetailsWriter:
     """Пишет детальный лог фильтрации КИЗов при аккумуляции продаж.

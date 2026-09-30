@@ -29,7 +29,7 @@ from typing import Optional
 from utils.context import TaskContext
 from utils.excel_helper import ExcelHelper
 from utils.text_utils import TextUtils
-from utils.similarity_utils import CompareReportTxtWriter
+from utils.txt_helper import TextFileWriter
 from utils.compare_readers import (
     SupplyItemsReader, CandidatesReader, ConsolidatedSupplyBuilder,
 )
@@ -599,23 +599,41 @@ class ReportGenerator:
         if self._logger is not None:
             self._logger.report(f"Отчёт сохранён: {report_path.name}")
 
-        # txt-списки — через CompareReportTxtWriter.
-        not_found_path = CompareReportTxtWriter.write_not_found(
-            output_dir, not_found, date_str,
-        )
-        if not_found_path is not None and self._logger is not None:
-            self._logger.report(
-                f"Список не найденных сохранён: {not_found_path.name}"
+        # txt-списки — через TextFileWriter.write.
+        if not_found:
+            not_found_path = output_dir / f"Не_найдено_{date_str}.txt"
+            created = TextFileWriter.write(
+                not_found_path,
+                header="Товары из листа поставки, не найденные в поставках:",
+                items=[
+                    f"{item.name} (кол-во: {item.count})"
+                    for item in not_found
+                ],
+                logger=self._logger,
             )
+            if created and self._logger is not None:
+                self._logger.report(
+                    f"Список не найденных сохранён: {not_found_path.name}"
+                )
 
         if candidates is not None:
             unused = [c for c in candidates if not c.used]
-            unused_path = CompareReportTxtWriter.write_unused(
-                output_dir, unused, date_str,
-            )
-            if unused_path is not None and self._logger is not None:
-                self._logger.report(
-                    f"Список лишних в поставках сохранён: "
-                    f"{unused_path.name}"
+            if unused:
+                unused_path = (
+                        output_dir / f"Лишние_в_поставках_{date_str}.txt"
                 )
+                created = TextFileWriter.write(
+                    unused_path,
+                    header="Товары из поставок, которых нет в листе (лишние):",
+                    items=[
+                        f"{c.name} (кол-во: {c.count})"
+                        for c in unused
+                    ],
+                    logger=self._logger,
+                )
+                if created and self._logger is not None:
+                    self._logger.report(
+                        f"Список лишних в поставках сохранён: "
+                        f"{unused_path.name}"
+                    )
 

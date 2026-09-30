@@ -4,26 +4,20 @@ from openpyxl import Workbook
 from typing import List, Dict, Tuple, TYPE_CHECKING
 from utils.text_utils import TextUtils
 from utils.parsers import NumberParser
+from utils.batcher import Batcher
 
 if TYPE_CHECKING:
     from services.subservices.logging import LoggerV2
 
 class ExcelHelper:
-    @staticmethod
-    def get_column_index(sheet, header_name: str) -> int | None:
-        if sheet.max_row < 1:
-            return None
-        header_row = sheet[1]
-        for idx, cell in enumerate(header_row, start=1):
-            if cell.value and str(cell.value).strip().lower() == header_name.strip().lower():
-                return idx
-        return None
 
     @staticmethod
-    def open_data_file(file_path, read_only=True, data_only=True):
+    def _open_data_file(file_path, read_only=True, data_only=True):
         """
-        Открывает файл любого поддерживаемого формата (.xlsx, .xls, .csv) и возвращает объект,
-        который имеет интерфейс, аналогичный openpyxl Workbook (sheetnames, active, iter_rows).
+        Открывает файл любого поддерживаемого формата (.xlsx, .xls, .csv)
+        и возвращает объект с интерфейсом openpyxl Workbook.
+
+        Приватный: публичный вход — WorkbookOpener.open.
         """
         file_path = Path(file_path)
         ext = file_path.suffix.lower()
@@ -37,30 +31,6 @@ class ExcelHelper:
             return CsvReader(file_path)
         else:
             raise ValueError(f"Неподдерживаемый формат файла: {ext}")
-
-    @staticmethod
-    def get_first_row(sheet):
-        if sheet.max_row < 1:
-            return []
-        return [cell.value for cell in sheet[1]]
-
-    @staticmethod
-    def find_sheet_by_key(wb, keys):
-        sheets_normalized = [TextUtils.normalize(s) for s in wb.sheetnames]
-        for key in keys:
-            norm_key = TextUtils.normalize(key)
-            if norm_key in sheets_normalized:
-                idx = sheets_normalized.index(norm_key)
-                return wb.sheetnames[idx]
-        return None
-
-    @staticmethod
-    def open_workbook_safe(file_path, read_only=False, data_only=True):
-        try:
-            from openpyxl import load_workbook
-            return load_workbook(file_path, data_only=data_only, read_only=read_only)
-        except Exception:
-            return None
 
     @staticmethod
     def _is_dimension_broken(wb) -> bool:
@@ -93,18 +63,6 @@ class ExcelHelper:
         except Exception:
             # Ошибка чтения max_row — не рискуем, считаем файл нормальным.
             return False
-
-    @staticmethod
-    def create_workbook_with_headers(headers, sheet_name="Лист1", write_only=False):
-        wb = Workbook(write_only=write_only)
-        if write_only:
-            ws = wb.create_sheet(sheet_name)
-        else:
-            ws = wb.active
-            ws.title = sheet_name
-        if headers:
-            ws.append(headers)
-        return wb, ws
 
     @staticmethod
     def find_header_row_and_columns(sheet, header_variants: dict,
@@ -179,141 +137,6 @@ class ExcelHelper:
         return best_row, best_columns
 
     @staticmethod
-    def create_report_workbook(headers, rows,
-                               sheet_name: str = "Сравнение") -> tuple:
-        """Создаёт workbook с одним листом, заголовками и строками.
-
-        Вход:
-            headers — список заголовков. None или пустой — шапка
-                      не пишется.
-            rows — итерируемое строк для записи. Каждая строка —
-                   список значений.
-            sheet_name — имя листа.
-
-        Выход:
-            (wb, ws) — открытый Workbook и его активный лист.
-            Сохранение и close — ответственность вызывающего.
-
-        Роль:
-            Убирает ручное «Workbook → title → append headers →
-            append rows» из сервисов. Используется ReportGenerator
-            (Excel-отчёт сравнения) и ConsolidatedSupplyBuilder
-            (Сборный_поставок_{date}.xlsx).
-        """
-        wb = Workbook()
-        ws = wb.active
-        ws.title = sheet_name
-
-        if headers:
-            ws.append(headers)
-        for row in rows:
-            ws.append(row)
-
-        return wb, ws
-
-    @staticmethod
-    def append_headers(worksheet, headers):
-        worksheet.append(headers)
-
-    @staticmethod
-    def copy_filtered_rows(source_sheet, target_sheet, columns_to_keep,
-                           condition, start_row=2, status_col_idx=None, status_counts=None):
-        rows_copied = 0
-        for row in source_sheet.iter_rows(min_row=start_row, values_only=True):
-            if not condition(row):
-                continue
-            new_row = []
-            for col_idx in columns_to_keep:
-                value = row[col_idx - 1] if len(row) >= col_idx else None
-                new_row.append(value)
-            target_sheet.append(new_row)
-
-            if status_col_idx is not None and status_counts is not None:
-                status_val = row[status_col_idx - 1] if len(row) >= status_col_idx else None
-                status_str = str(status_val).strip() if status_val is not None else ""
-                if status_str:
-                    status_counts[status_str] = status_counts.get(status_str, 0) + 1
-                else:
-                    status_counts["(пусто)"] = status_counts.get("(пусто)", 0) + 1
-
-            rows_copied += 1
-        return rows_copied
-
-    @staticmethod
-    def close_workbooks(workbooks_dict):
-        if not workbooks_dict:
-            return
-        for value in workbooks_dict.values():
-            if isinstance(value, list):
-                for wb in value:
-                    wb.close()
-            else:
-                value.close()
-        workbooks_dict.clear()
-
-    @staticmethod
-    def open_workbook_with_ctx(file_path, ctx, description="файл", read_only=False, data_only=True,
-                               auto_fallback: bool = True):
-        """Открывает workbook и логирует результат.
-
-        Назначение:
-            Единая точка открытия для сервисов. Скрывает проблему отсутствующего
-            атрибута dimension: если read_only=True и файл «схлопнут», открывает
-            его повторно в обычном режиме. Бизнес-логика сервисов не знает об этом.
-
-        Вход:
-            file_path — путь к файлу.
-            ctx — TaskContext (даёт log/error/warning).
-            description — описание для сообщений («отчёт МП», «файл возвратов»).
-            read_only — открывать ли в read-only (для .xlsx/.xlsm).
-            data_only — читать значения вместо формул.
-            auto_fallback — включён по умолчанию. При read_only=True проверяет
-                            «схлопнутость» и переоткрывает файл без read_only.
-
-        Выход: openpyxl workbook (или обёртка XlsReader/CsvReader) либо None.
-
-        Роль: централизованное решение проблемы. Вызовы в сервисах менять
-              не нужно — auto_fallback=True работает по умолчанию.
-        """
-        wb = ExcelHelper.open_workbook_safe(file_path, read_only=read_only, data_only=data_only)
-        if wb is None:
-            # REPLACE: было ctx.log — теперь ctx.error. Это уже ошибка,
-            # и она должна попадать в errors.txt.
-            ctx.error(f"Ошибка открытия {description}: {Path(file_path).name}")
-            return None
-
-        # Fallback имеет смысл только для .xlsx/.xlsm (openpyxl) и только
-        # при read_only=True. Для .xls (xlrd) и .csv (CsvReader) dimension
-        # не используется, там другой механизм чтения.
-        suffix = Path(file_path).suffix.lower()
-        if auto_fallback and read_only and suffix in ('.xlsx', '.xlsm'):
-            if ExcelHelper._is_dimension_broken(wb):
-                # Пытаемся аккуратно закрыть текущий wb перед переоткрытием.
-                # Ошибку close не пробрасываем — fallback важнее.
-                try:
-                    wb.close()
-                except Exception as e:
-                    sys.stderr.write(
-                        f"[ExcelHelper] Ошибка закрытия wb перед fallback: {e}\n"
-                    )
-
-                # WARNING — файл нестандартный, но обрабатываем. Пользователь
-                # увидит это в логе, но не как ошибку.
-                ctx.warning(
-                    f"Файл {Path(file_path).name} не содержит корректного dimension. "
-                    f"Переоткрываю без read_only."
-                )
-
-                # Переоткрываем без read_only — тогда openpyxl парсит XML
-                # полностью и корректно определяет границы листов.
-                wb = ExcelHelper.open_workbook_safe(file_path, read_only=False, data_only=data_only)
-                if wb is None:
-                    ctx.error(f"Ошибка повторного открытия {description}: {Path(file_path).name}")
-                    return None
-
-        return wb
-
-    @staticmethod
     def find_seller_by_sheet_name(wb, sellers, sheet_name):
         normalized_sheet = TextUtils.normalize(sheet_name)
         for seller in sellers:
@@ -321,16 +144,6 @@ class ExcelHelper:
                 return seller
         return None
 
-    @staticmethod
-    def parse_seller_from_mp_filename(filename):
-        import re
-        match = re.search(r"ОТЧЁТ МП ПО (.+?)\.xlsx$", filename, re.IGNORECASE)
-        if match:
-            candidate = match.group(1).strip()
-            candidate = re.sub(r'\s+\d{1,2}[._-]\d{1,2}[._-]\d{2,4}$', '', candidate)
-            candidate = candidate.strip()
-            return candidate
-        return None
 
     @staticmethod
     def read_column_values(sheet, col_index, start_row=2):
@@ -341,49 +154,6 @@ class ExcelHelper:
                 if val:
                     values.append(val)
         return values
-
-    @staticmethod
-    def filter_and_replace_sheet(file_path, sheet_name, conditions, ctx, description="файл"):
-        wb = ExcelHelper.open_workbook_with_ctx(file_path, ctx, description=description, read_only=False,
-                                                data_only=True)
-        if wb is None:
-            return None
-
-        try:
-            sheet = wb[sheet_name] if sheet_name else wb.active
-            headers = [cell.value for cell in sheet[1]]
-            rows = []
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                rows.append(row)
-
-            total = len(rows)
-            kept = []
-            removed_stats = {label: 0 for label, _ in conditions}
-
-            for row in rows:
-                keep = True
-                for label, func in conditions:
-                    if not func(row):
-                        removed_stats[label] += 1
-                        keep = False
-                        break
-                if keep:
-                    kept.append(row)
-
-            new_wb, new_ws = ExcelHelper.create_workbook_with_headers(headers, sheet_name=sheet.title)
-            for row in kept:
-                new_ws.append(row)
-            new_wb.save(file_path)
-            new_wb.close()
-
-            return {
-                "total": total,
-                "kept": len(kept),
-                "removed": removed_stats
-            }
-
-        finally:
-            wb.close()
 
     @staticmethod
     def filter_and_clean_rows(sheet, status_col=None, owner_col=None,
@@ -422,110 +192,24 @@ class ExcelHelper:
         return filtered_rows, stats
 
     @staticmethod
-    def append_row_to_file(file_path, row_data, headers=None, sheet_name=None):
-        import openpyxl
-        wb = None
-        try:
-            if file_path.exists():
-                wb = openpyxl.load_workbook(file_path)
-                sheet = wb.active
-            else:
-                wb = openpyxl.Workbook()
-                sheet = wb.active
-                if headers:
-                    sheet.append(headers)
-            sheet.append(row_data)
-            wb.save(file_path)
-            print(f"[DEBUG] Файл сохранён: {file_path}, размер {file_path.stat().st_size} байт")
-        except Exception as e:
-            print(f"[ERROR] Ошибка записи в {file_path}: {e}")
-            raise RuntimeError(f"Ошибка записи в {file_path}: {e}")
-        finally:
-            if wb:
-                wb.close()
+    def is_file_empty(file_path, sheet_name=None) -> bool:
+        """Проверяет, что файл пуст (только заголовки).
 
-    @staticmethod
-    def is_file_empty(file_path, sheet_name=None):
-        try:
-            import openpyxl
-            file_path = Path(file_path)
-            if not file_path.exists():
-                return True
-            wb = openpyxl.load_workbook(file_path)
-            ws = wb[sheet_name] if sheet_name else wb.active
-            is_empty = ws.max_row == 1
-            wb.close()
-            return is_empty
-        except Exception:
-            return True
-
-        # ---------- Логирование через LoggerV2 ----------
-
-    @staticmethod
-    def open_workbook_with_logger(file_path, logger,
-                                  description: str = "файл",
-                                  read_only: bool = False,
-                                  data_only: bool = True,
-                                  auto_fallback: bool = True):
-        """Открывает workbook и логирует результат через LoggerV2.
-
-        Вход:
-            file_path — путь к файлу.
-            logger — LoggerV2 для сообщений об ошибке и fallback.
-            description — описание для сообщений («отчёт МП»).
-            read_only — открывать ли в read-only (для .xlsx/.xlsm).
-            data_only — читать значения вместо формул.
-            auto_fallback — при read_only=True проверяет «схлопнутость»
-                            атрибута dimension и переоткрывает файл
-                            без read_only.
-
-        Выход:
-            openpyxl workbook или обёртка XlsReader/CsvReader, либо None.
-
-        Роль:
-            Аналог open_workbook_with_ctx для сервисов, работающих
-            через LoggerV2. Ошибка открытия уходит в critical,
-            fallback — в warning. Существующий open_workbook_with_ctx
-            остаётся для сервисов на старой системе логирования.
+        Использует WorkbookOpener.open(logger=None, read_only=False).
+        Если файл не открылся → True.
         """
-        wb = ExcelHelper.open_workbook_safe(
-            file_path, read_only=read_only, data_only=data_only
-        )
+        wb = WorkbookOpener.open(file_path, logger=None, read_only=False)
         if wb is None:
-            logger.critical(
-                f"Ошибка открытия {description}: {Path(file_path).name}",
-                can_influence=False,
-            )
-            return None
+            return True
+        try:
+            ws = wb[sheet_name] if sheet_name else wb.active
+            return ws.max_row == 1
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
-        # Fallback имеет смысл только для .xlsx/.xlsm (openpyxl) и только
-        # при read_only=True. Для .xls (xlrd) и .csv (CsvReader) dimension
-        # не используется, там другой механизм чтения.
-        suffix = Path(file_path).suffix.lower()
-        if auto_fallback and read_only and suffix in ('.xlsx', '.xlsm'):
-            if ExcelHelper._is_dimension_broken(wb):
-                try:
-                    wb.close()
-                except Exception as e:
-                    sys.stderr.write(
-                        f"[ExcelHelper] Ошибка закрытия wb перед fallback: {e}\n"
-                    )
-                logger.warning(
-                    f"Файл {Path(file_path).name} не содержит корректного "
-                    f"dimension. Переоткрываю без read_only."
-                )
-                wb = ExcelHelper.open_workbook_safe(
-                    file_path, read_only=False, data_only=data_only
-                )
-                if wb is None:
-                    logger.critical(
-                        f"Ошибка повторного открытия {description}: "
-                        f"{Path(file_path).name}",
-                        can_influence=False,
-                    )
-                    return None
-
-        return wb
 
     @staticmethod
     def is_column_numeric(file_path, price_col: int, kiz_col: int,
@@ -551,9 +235,9 @@ class ExcelHelper:
             (значение == header) в проверке не участвуют.
             Ранний выход False при первой нечисловой цене.
         """
-        wb = ExcelHelper.open_workbook_with_logger(
-            file_path, logger, description="проверка итога",
-            read_only=False, data_only=True,
+        wb = WorkbookOpener.open(
+            file_path, logger=logger, description="проверка итога",
+            read_only=False,
         )
         if wb is None:
             return False
@@ -575,93 +259,6 @@ class ExcelHelper:
             return True
         finally:
             wb.close()
-
-    @staticmethod
-    def rewrite_sheet(file_path, headers, rows,
-                      sheet_name: str = "Лист1") -> None:
-        """Перезаписывает файл: новые заголовки и строки.
-
-        Вход:
-            file_path — путь к файлу (тот же, что перезаписываем).
-            headers — список заголовков. None или пустой → пишем только строки.
-            rows — итерируемое строк для записи. Каждая строка — список значений.
-            sheet_name — имя листа в новом файле.
-
-        Выход: нет.
-
-        Роль:
-            Создаёт новый workbook, пишет заголовки и строки, сохраняет
-            по исходному пути. Исходное содержимое файла полностью
-            заменяется. Аналог ручной перезаписи в
-            FilterPreFinalService.filter_files.
-        """
-        new_wb, new_ws = ExcelHelper.create_workbook_with_headers(
-            headers or [], sheet_name=sheet_name
-        )
-        try:
-            for row in rows:
-                new_ws.append(row)
-            new_wb.save(file_path)
-        finally:
-            new_wb.close()
-
-    @staticmethod
-    def copy_rows_by_column_value(src_path, dst_path, column_index,
-                                      allowed_values, append: bool = False
-                                      ) -> int:
-        """Копирует строки src в dst, отфильтрованные по значению столбца.
-
-        Вход:
-            src_path — путь к файлу-источнику.
-            dst_path — путь к целевому файлу.
-            column_index — 0-based индекс столбца для фильтра.
-            allowed_values — коллекция допустимых значений (обычно set).
-            append — True — дописать к существующему dst_path
-                     (заголовок не переписывается); False — создать
-                     новый файл с заголовком из src_path.
-
-        Выход:
-            int — число добавленных строк.
-
-        Роль:
-            Единая точка копирования отфильтрованных строк между
-            Excel-файлами. Раньше логика дублировалась в двух ветках
-            SalesAccumulatorService.accumulate (дописать / создать) —
-            вынесена сюда, чтобы сервис стал тонким оркестратором.
-            Строки, где ячейка column_index пустая, пропускаются.
-        """
-        wb_src = openpyxl.load_workbook(
-            Path(src_path), read_only=True, data_only=True,
-        )
-        try:
-            sheet_src = wb_src.active
-
-            if append:
-                wb_dst = openpyxl.load_workbook(Path(dst_path))
-                sheet_dst = wb_dst.active
-            else:
-                wb_dst = Workbook()
-                sheet_dst = wb_dst.active
-                header = list(sheet_src.iter_rows(
-                    min_row=1, max_row=1, values_only=True,
-                ))[0]
-                sheet_dst.append(header)
-
-            rows_added = 0
-            for row in sheet_src.iter_rows(min_row=2, values_only=True):
-                if len(row) > column_index:
-                    cell = row[column_index]
-                    if cell:
-                        value = str(cell).strip()
-                        if value in allowed_values:
-                            sheet_dst.append(row)
-                            rows_added += 1
-
-            wb_dst.save(Path(dst_path))
-            wb_dst.close()
-        finally:
-            wb_src.close()
-        return rows_added
 
 class CsvReader:
     """Адаптер для чтения CSV-файлов как Excel-листа."""
@@ -889,3 +486,334 @@ class CsvNormalizer:
                 invalid_log.append(f"  Данные: {row[:10]}")  # только первые 10 ячеек для краткости
 
         return valid_rows, invalid_log
+
+class WorkbookOpener:
+    """Единая точка открытия workbook.
+
+    Роль:
+        Определяет формат по расширению, делегирует в
+        ExcelHelper._open_data_file. Обрабатывает битый dimension
+        для .xlsx/.xlsm при read_only=True. Не бросает исключений:
+        на ошибке — logger.critical + return None.
+    """
+
+    @staticmethod
+    def open(path, logger=None, description="файл",
+             read_only=True, auto_fallback=True):
+        """Открывает workbook.
+
+        Вход:
+            path — путь к файлу (.xlsx/.xlsm/.xls/.csv).
+            logger — LoggerV2 или None.
+            description — описание для сообщений.
+            read_only — режим чтения для .xlsx/.xlsm.
+            auto_fallback — переоткрывать ли при битом dimension.
+
+        Выход:
+            openpyxl.Workbook / XlsReader / CsvReader или None.
+
+        Роль:
+            - data_only=True всегда (параметр не выносится).
+            - Пробует открыть через ExcelHelper._open_data_file.
+            - Если ошибка/None → logger.critical(can_influence=False)
+              или молча (logger=None) → return None.
+            - Fallback для .xlsx/.xlsm при read_only=True:
+              _is_dimension_broken → close → logger.warning →
+              переоткрытие с read_only=False. Если не удалось →
+              logger.critical, return None.
+            - Для .xls/.csv fallback не срабатывает.
+        """
+        path_obj = Path(path)
+
+        # 1. Первичное открытие.
+        try:
+            wb = ExcelHelper._open_data_file(
+                path_obj, read_only=read_only, data_only=True,
+            )
+        except Exception as e:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка открытия {description}: "
+                    f"{path_obj.name} ({e})",
+                    can_influence=False,
+                )
+            return None
+
+        if wb is None:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка открытия {description}: {path_obj.name}",
+                    can_influence=False,
+                )
+            return None
+
+        # 2. Fallback только для .xlsx/.xlsm при read_only=True.
+        suffix = path_obj.suffix.lower()
+        if auto_fallback and read_only and suffix in ('.xlsx', '.xlsm'):
+            if ExcelHelper._is_dimension_broken(wb):
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+                if logger is not None:
+                    logger.warning(
+                        f"Файл {path_obj.name} не содержит корректного "
+                        f"dimension. Переоткрываю без read_only."
+                    )
+                try:
+                    wb = ExcelHelper._open_data_file(
+                        path_obj, read_only=False, data_only=True,
+                    )
+                except Exception as e:
+                    if logger is not None:
+                        logger.critical(
+                            f"Ошибка повторного открытия {description}: "
+                            f"{path_obj.name} ({e})",
+                            can_influence=False,
+                        )
+                    return None
+                if wb is None:
+                    if logger is not None:
+                        logger.critical(
+                            f"Ошибка повторного открытия {description}: "
+                            f"{path_obj.name}",
+                            can_influence=False,
+                        )
+                    return None
+
+        return wb
+
+class WorkbookWriter:
+    """Единая точка записи workbook.
+
+    Роль:
+        Четыре публичных метода. Использует Batcher(threshold=50)
+        для буферизации строк внутри одного вызова. Сохранение
+        на диск — само. При ошибке → logger.critical(can_influence=False),
+        return False.
+
+    Атрибуты класса:
+        _BATCH_THRESHOLD — порог промежуточного flush для Batcher.
+    """
+
+    _BATCH_THRESHOLD = 50
+
+    @staticmethod
+    def create(path, headers, rows=None, sheet_name="Лист1",
+               logger=None) -> bool:
+        """Создаёт новый файл с заголовками и (опционально) строками.
+
+        Вход:
+            path — путь к создаваемому .xlsx.
+            headers — список заголовков. None или пусто → шапка не пишется.
+            rows — итерируемое строк. None или пусто → только заголовки.
+            sheet_name — имя листа.
+            logger — LoggerV2 или None.
+
+        Выход:
+            True — файл создан; False — ошибка.
+
+        Роль:
+            Объединяет create_report_workbook и
+            create_workbook_with_headers. Буферизация строк —
+            через Batcher(threshold=50).
+        """
+        path_obj = Path(path)
+        wb = None
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+            if headers:
+                ws.append(headers)
+
+            if rows:
+                buffer: list = []
+
+                def flush():
+                    for r in buffer:
+                        ws.append(r)
+                    buffer.clear()
+
+                batcher = Batcher(
+                    flush, threshold=WorkbookWriter._BATCH_THRESHOLD,
+                )
+                with batcher.batch():
+                    for row in rows:
+                        buffer.append(row)
+                        batcher.mark_dirty()
+
+            wb.save(path_obj)
+            return True
+        except Exception as e:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка создания файла {path_obj.name}: {e}",
+                    can_influence=False,
+                )
+            return False
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def overwrite(path, headers, rows, sheet_name="Лист1",
+                  logger=None) -> bool:
+        """Перезаписывает существующий файл. Заменяет rewrite_sheet.
+
+        Вход:
+            path — путь к файлу (содержимое затирается).
+            headers — список заголовков. None или пусто → шапка не пишется.
+            rows — итерируемое строк.
+            sheet_name — имя листа.
+            logger — LoggerV2 или None.
+
+        Выход:
+            True — файл записан; False — ошибка.
+
+        Роль:
+            Создаёт новый Workbook по тому же пути — исходное
+            содержимое полностью заменяется. Буферизация строк —
+            через Batcher(threshold=50).
+        """
+        path_obj = Path(path)
+        wb = None
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+            if headers:
+                ws.append(headers)
+
+            if rows:
+                buffer: list = []
+
+                def flush():
+                    for r in buffer:
+                        ws.append(r)
+                    buffer.clear()
+
+                batcher = Batcher(
+                    flush, threshold=WorkbookWriter._BATCH_THRESHOLD,
+                )
+                with batcher.batch():
+                    for row in rows:
+                        buffer.append(row)
+                        batcher.mark_dirty()
+
+            wb.save(path_obj)
+            return True
+        except Exception as e:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка перезаписи файла {path_obj.name}: {e}",
+                    can_influence=False,
+                )
+            return False
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def append(path, row, headers=None, logger=None) -> bool:
+        """Дописывает одну строку.
+
+        Вход:
+            path — путь к .xlsx.
+            row — список значений одной строки.
+            headers — заголовки. Используются только если файла
+                      нет — тогда создаётся с ними.
+            logger — LoggerV2 или None.
+
+        Выход:
+            True — успех; False — ошибка.
+
+        Роль:
+            Если файл существует → открывает и добавляет строку;
+            иначе создаёт с headers. Заменяет append_row_to_file.
+        """
+        path_obj = Path(path)
+        wb = None
+        try:
+            if path_obj.exists():
+                wb = openpyxl.load_workbook(path_obj)
+            else:
+                wb = Workbook()
+                if headers:
+                    wb.active.append(headers)
+            wb.active.append(row)
+            wb.save(path_obj)
+            return True
+        except Exception as e:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка записи в {path_obj.name}: {e}",
+                    can_influence=False,
+                )
+            return False
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def append_rows(path, rows, logger=None) -> bool:
+        """Дописывает пачку строк в существующий файл.
+
+        Вход:
+            path — путь к существующему .xlsx файлу.
+            rows — итерируемое строк для записи.
+            logger — LoggerV2 или None.
+
+        Выход:
+            True — успех, False — ошибка.
+
+        Роль:
+            Используется SalesAccumulatorService для сценария
+            «append к существующему файлу продаж». Открывает файл,
+            добавляет строки через Batcher(50), сохраняет.
+        """
+        path_obj = Path(path)
+        wb = None
+        try:
+            wb = openpyxl.load_workbook(path_obj)
+            ws = wb.active
+
+            buffer: list = []
+
+            def flush():
+                for r in buffer:
+                    ws.append(r)
+                buffer.clear()
+
+            batcher = Batcher(
+                flush, threshold=WorkbookWriter._BATCH_THRESHOLD,
+            )
+            with batcher.batch():
+                for row in rows:
+                    buffer.append(row)
+                    batcher.mark_dirty()
+
+            wb.save(path_obj)
+            return True
+        except Exception as e:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка записи в {path_obj.name}: {e}",
+                    can_influence=False,
+                )
+            return False
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
