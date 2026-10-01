@@ -11,7 +11,7 @@ ListWidgetFactory не наследует BaseWidgetFactory: QSS собирае�
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QListWidget, QScrollArea, QSizePolicy, QVBoxLayout,
+    QWidget, QListWidget, QFrame, QScrollArea, QSizePolicy, QVBoxLayout,
 )
 
 from ui.styles import WidgetStyle
@@ -137,7 +137,8 @@ class ListWidgetFactory:
                            border="none", border_radius=0,
                            widget_resizable=True, object_name=None,
                            cursor_shape=None, extra_style="",
-                           scrollbar_width=12, scrollbar_radius=6):
+                           scrollbar_width=12, scrollbar_radius=6,
+                           rounded=True):
         """Создаёт прокручиваемую область со скроллбарами.
 
         Вход:
@@ -149,18 +150,22 @@ class ListWidgetFactory:
             object_name, cursor_shape — общие настройки.
             extra_style — дополнительный CSS.
             scrollbar_width, scrollbar_radius — параметры скроллбара.
+            rounded — форма рамки QFrame: True (дефолт) →
+                      StyledPanel (скруглённые углы Qt),
+                      False → NoFrame (прямые углы).
 
         Выход: QScrollArea.
 
         Роль: единая точка создания QScrollArea. Скроллбар
               подбирается через WidgetStyle (ScrollbarStyle).
-
-        REPLACE: QSS собирается через WidgetStyle.apply_scroll_area.
-        Внутренние методы _extract_rgb / _calc_scrollbar_colors /
-        _build_scrollbar_qss удалены — их код переехал в
-        ui/styles/scrollbar.py (ScrollbarStyle).
+              Форма рамки управляется параметром rounded — QSS
+              «border: none» дефолтный frameShape не всегда
+              перекрывает, поэтому задаём его явно.
         """
         scroll = QScrollArea(parent)
+        scroll.setFrameShape(
+            QFrame.StyledPanel if rounded else QFrame.NoFrame
+        )
         if object_name:
             scroll.setObjectName(object_name)
         if cursor_shape is not None:
@@ -179,7 +184,8 @@ class ListWidgetFactory:
 
     @staticmethod
     def create_scroll_container(parent, spacing=2, margins=(0, 0, 0, 0),
-                                bg_color=(25, 25, 45)):
+                                bg_color=(25, 25, 45),
+                                rounded=True):
         """Создаёт прокручиваемую область с внутренним контейнером.
 
         Вход:
@@ -187,6 +193,8 @@ class ListWidgetFactory:
             spacing — расстояние между элементами в layout.
             margins — отступы (left, top, right, bottom).
             bg_color — фон окна для скроллбара.
+            rounded — форма рамки QScrollArea: True (дефолт) →
+                      скруглённые углы, False → прямые углы.
 
         Выход: (scroll_area, content_widget, content_layout).
 
@@ -200,7 +208,7 @@ class ListWidgetFactory:
 
         scroll_area = ListWidgetFactory.create_scroll_area(
             parent, widget=content_widget, widget_resizable=True,
-            bg_color=bg_color,
+            bg_color=bg_color, rounded=rounded,
         )
 
         return scroll_area, content_widget, content_layout

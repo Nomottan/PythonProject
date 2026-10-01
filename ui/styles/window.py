@@ -32,19 +32,23 @@ class WindowStyle:
 
         Выход: QSS-строка.
 
-        Роль: задаёт полупрозрачный фон и скруглённые углы.
-              Для кортежа из 3 значений alpha = 0.8.
+        Роль: задаёт фон и скруглённые углы. Для 3-элементного
+              кортежа — rgb(...) без альфы; для 4-элементного —
+              rgba(...) с указанной альфой.
         """
-        r, g, b, a = (
-            bg_color if len(bg_color) == 4
-            else (*bg_color, 0.8)
-        )
+        if len(bg_color) == 4:
+            r, g, b, a = bg_color
+            bg_css = f"rgba({r}, {g}, {b}, {a})"
+        else:
+            r, g, b = bg_color[:3]
+            bg_css = f"rgb({r}, {g}, {b})"
+
         return f"""
-            QWidget {{
-                background-color: rgba({r}, {g}, {b}, {a});
-                border-radius: 15px;
-            }}
-        """
+                QWidget {{
+                    background-color: {bg_css};
+                    border-radius: 15px;
+                }}
+            """
 
     @staticmethod
     def close_button_qss(color) -> str:
@@ -70,3 +74,28 @@ class WindowStyle:
                         background-color: #c10020;
                     }}
                 """
+
+    @staticmethod
+    def resolve_parent_bg(parent, fallback: tuple) -> tuple:
+        """Возвращает цвет фона родителя для расчёта производных цветов.
+
+        Вход:
+            parent — родительское окно или None.
+            fallback — цвет по умолчанию, если у parent нет bg_color.
+
+        Выход:
+            Кортеж (r, g, b) или (r, g, b, a).
+
+        Роль:
+            Единая точка поиска фона родителя: parent.bg_color →
+            parent.window().bg_color → fallback. Используется
+            окнами и диалогами для расчёта производных цветов
+            через ColorCalculator.derive.
+        """
+        if parent is not None:
+            if hasattr(parent, "bg_color"):
+                return parent.bg_color
+            top = parent.window()
+            if top is not None and hasattr(top, "bg_color"):
+                return top.bg_color
+        return fallback

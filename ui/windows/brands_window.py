@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QDialog,
 )
 from PySide6.QtCore import Qt
-
+from ui.styles import ColorCalculator, WindowStyle
 from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
     InputWidgetFactory,
@@ -25,7 +25,6 @@ from ui.factories.factories import (
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
 from ui.windows.message_dialog import NotificationDialog, MessageDialog
-# NEW: базовый диалог редактирования.
 from ui.base.base_edit_dialog import BaseEditDialog
 from models.models import Seller, Brand
 
@@ -61,7 +60,14 @@ class BrandsWindow(QMainWindow):
                 domain=self.LOGGER_DOMAIN,
             )
         self.main_window = parent
-        self.bg_color = (30, 30, 30, 0.9)
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 50, 60))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r - 35,
+            g_fn=lambda g: g - 15,
+            b_fn=lambda b: b + 5,
+            alpha=0.9,
+        )
 
         # Читаем бренды и продавцов через сервис.
         # Восстанавливаем связи Brand.sellers ↔ Seller.brands, чтобы
@@ -260,7 +266,14 @@ class BrandEditDialog(BaseEditDialog):
         self.sellers = sellers if sellers is not None else []
         self.main_window = main_window
         self._deleted = False
-        self.bg_color = (40, 30, 50, 0.95)
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (30, 30, 30, 0.9))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r - 10,
+            g_fn=lambda g: g + 10,
+            b_fn=lambda b: b - 10,
+            alpha=0.95,
+        )
         super().__init__(
             parent=parent,
             title=f"Редактирование бренда: {brand.name}",
@@ -322,7 +335,7 @@ class BrandEditDialog(BaseEditDialog):
         self.sellers_layout.setSpacing(2)
         scroll = ListWidgetFactory.create_scroll_area(
             self, widget=self.sellers_widget,
-            widget_resizable=True, bg_color=self.bg_color,
+            widget_resizable=True, bg_color=self.bg_color
         )
         right_layout.addWidget(scroll)
 
@@ -335,6 +348,25 @@ class BrandEditDialog(BaseEditDialog):
         cols_layout.addWidget(right_widget)
 
         layout.addLayout(cols_layout)
+
+        cb_bg = ColorCalculator.derive(
+            self.bg_color,
+            r_fn=lambda r: r - 10,
+            g_fn=lambda g: g - 10,
+            b_fn=lambda b: b - 10,
+            alpha=0.9,
+        )
+        self.requires_saving_cb = InputWidgetFactory.create_checkbox(
+            parent=self,
+            text="Требует сохранения. Есть вероятность возврата",
+            checked=self.brand.requires_saving,
+            bg_color=cb_bg,
+            text_color=None,
+        )
+        LayoutFactory.add_centered_widget(
+            layout, self.requires_saving_cb,
+        )
+
 
         # --- Нижние кнопки ---
         bottom_layout = QHBoxLayout()
@@ -512,7 +544,7 @@ class BrandEditDialog(BaseEditDialog):
     # ---------- Применение изменений ----------
 
     def _apply_changes(self) -> None:
-        """Переносит имя и ключи из полей в модель Brand.
+        """Переносит имя, ключи и флаг requires_saving в модель Brand.
 
         Роль: единая точка применения правок. Вызывается из closeEvent
               и reject. Если бренд удалён — пропускаем (объект уже
@@ -522,4 +554,7 @@ class BrandEditDialog(BaseEditDialog):
             return
         self.brand.name = self.name_edit.text().strip()
         self.brand.keys = self.keys_list.get_items()
+        self.brand.requires_saving = (
+            self.requires_saving_cb.isChecked()
+        )
 

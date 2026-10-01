@@ -43,6 +43,7 @@ from storage import (
     PlannerTaskStorage,
     PlannerArchiveStorage,
 )
+from ui.styles import WidgetStyle
 
 
 class MainWindow(QMainWindow):
@@ -54,12 +55,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Помощник")
         self.setGeometry(100, 100, 600, 900)
         self.setMinimumSize(600, 650)
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #28323c;
-                border-radius: 15px;
-            }
-        """)
+        self.bg_color = (40, 50, 60, 1)
 
         # --- Пути ---
         self.paths = PathManager()
@@ -203,6 +199,7 @@ class MainWindow(QMainWindow):
         # 3. МАКЕТ
         # ============================================================
         central = QWidget()
+        WidgetStyle.apply_window_central(central, self.bg_color)
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(10, 10, 10, 10)
