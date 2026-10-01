@@ -25,7 +25,7 @@ from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper, FilenameUtils
 from utils.parsers import PreFinalRow
 from utils.price_utils import AveragePriceResolver, PriceFiller
-from utils.report_readers import (
+from utils.mp_readers import (
     ChzMpReportReader, WBReportReader, OZONReportReader,
     MpReportTypeDetector,
 )
@@ -319,7 +319,7 @@ class ExportKizService:
                     continue
 
             # ------------------------------------------------------------
-            # 2. Обработка отчётов МП — через MpReportReader.
+            # 2. Обработка отчётов МП — через WBReportReader.
             # ------------------------------------------------------------
             mp_files = FileHelper.find_files_by_pattern(
                 ctx.reports_dir, "Отчёт_WB_*.xlsx"

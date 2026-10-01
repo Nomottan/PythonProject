@@ -195,38 +195,40 @@ class ChosenKiz:
         Результат выбора «самого позднего» вхождения одного и того
         же storage_kiz из листа «КИЗ» отчёта МП. Возвращается
         методом KizOccurrences.pick_latest и используется
-        MpReportReader для валидации и записи в буфер цен.
+        WBReportReader/OZONReportReader для валидации и записи
+        в буфер цен.
 
     Поля:
         full_kiz — полный КИЗ выбранного вхождения.
-        task_num — номер сборочного задания выбранного вхождения.
+        sale_date_str — дата продажи в формате «%H:%M:%S %d.%m.%Y»
+                        или None, если дату не удалось получить.
         price — цена из отчёта, если она числовая и положительная;
                 иначе None.
-        sale_date_str — дата продажи из листа «Сборочные задания»
-                        для выбранного task_num; None, если задания
-                        в словаре нет.
         skipped_dup_count — сколько вхождений той же группы были
                             отброшены как дубликаты (len(group) - 1).
     """
     full_kiz: str
-    task_num: str
-    price: Optional[float]
     sale_date_str: Optional[str]
+    price: Optional[float]
     skipped_dup_count: int
 
 class KizOccurrences:
     """Группировка вхождений КИЗов из отчёта МП.
 
     Роль:
-        Собирает все вхождения одного storage_kiz из листа «КИЗ».
-        Из группы выбирается одно — с самой поздней датой
-        сборочного задания. Остальные считаются дубликатами.
-        Заменяет ручной словарь occurrences из ExportKizService.
+        Собирает все вхождения одного storage_kiz из листа «КИЗ»
+        (WB) или «Отчет» (Ozon). Из группы выбирается одно —
+        с самым поздним ключом сортировки. Остальные считаются
+        дубликатами.
+
+        Ключ сортировки — полиморфный: для WB это строка task_num
+        (дата берётся из отдельного словаря task_to_date), для
+        Ozon — уже готовый datetime из ячейки. Логику извлечения
+        ключа задаёт вызывающий через key_func в pick_latest.
 
     Поля:
-        _entries — dict[storage_kiz, list[tuple[full_kiz, task_num, price]]].
-                   Каждое значение — список вхождений одного КИЗа
-                   в том порядке, в котором они встречались в отчёте.
+        _entries — dict[storage_kiz, list[tuple[full_kiz, sort_value, price]]].
+                   sort_value: str (WB) или datetime (Ozon).
     """
 
     def __init__(self) -> None:
@@ -235,16 +237,19 @@ class KizOccurrences:
         Вход: нет.
         Роль: создаёт пустую структуру — словарь групп.
         """
-        self._entries: dict[str, List[tuple[str, str, Optional[float]]]] = {}
+        self._entries: dict[
+            str, List[tuple[str, object, Optional[float]]]
+        ] = {}
 
-    def add(self, storage_kiz: str, full_kiz: str, task_num: str,
-            price_value: Optional[float]) -> None:
+    def add(self, storage_kiz: str, full_kiz: str,
+            sort_value, price_value: Optional[float]) -> None:
         """Добавляет одно вхождение КИЗа.
 
         Вход:
             storage_kiz — 31-символьный КИЗ, используется как ключ группы.
             full_kiz — полный КИЗ этого вхождения.
-            task_num — номер сборочного задания.
+            sort_value — ключ сортировки: task_num (str) для WB
+                         или datetime для Ozon.
             price_value — цена из отчёта или None.
 
         Выход: нет.
@@ -252,50 +257,53 @@ class KizOccurrences:
               через setdefault.
         """
         self._entries.setdefault(storage_kiz, []).append(
-            (full_kiz, task_num, price_value)
+            (full_kiz, sort_value, price_value)
         )
 
-    def pick_latest(self, storage_kiz: str,
-                    task_to_date: dict) -> Optional[ChosenKiz]:
+    def pick_latest(self, storage_kiz: str, key_func) -> Optional[ChosenKiz]:
         """Выбирает самое позднее вхождение из группы.
 
         Вход:
             storage_kiz — ключ группы.
-            task_to_date — dict {task_num: sale_date_str}. Значения —
-                           строки дат в одном из форматов DateParser.KIZ_FORMATS.
+            key_func — Callable[[tuple], Optional[datetime]]. Извлекает
+                       ключ сортировки из entry (full_kiz, sort_value,
+                       price). Возвращает datetime или None.
 
         Выход:
             ChosenKiz выбранного вхождения либо None, если группы нет.
 
         Роль:
-            Сортирует вхождения группы по дате из task_to_date в
-            порядке убывания и берёт первое. Если дата вхождения
-            не парсится или задания нет в словаре — считается
+            Сортирует вхождения группы по дате в порядке убывания
+            и берёт первое. Если key_func вернул None — считается
             datetime.min (самое раннее), чтобы такое вхождение
-            ушло в конец. skipped_dup_count = len(group) - 1.
+            ушло в конец. sale_date_str формируется из datetime
+            в формате «%H:%M:%S %d.%m.%Y»; если ключ не дал
+            datetime — None. skipped_dup_count = len(group) - 1.
+            sorted(reverse=True) — stable: при равенстве ключей
+            порядок сохраняется («при равенстве — первое»).
         """
         entries = self._entries.get(storage_kiz)
         if not entries:
             return None
 
-        from services.kiz_validator import KizValidator
-
         def _sort_key(entry) -> datetime:
-            """Ключ сортировки: дата вхождения; datetime.min при ошибке."""
-            task_num = entry[1]
-            date_str = task_to_date.get(task_num)
-            dt = DateParser.parse_any(date_str, DateParser.KIZ_FORMATS)
+            """Ключ сортировки: datetime вхождения; datetime.min при None."""
+            dt = key_func(entry)
             return dt or datetime.min
 
         entries_sorted = sorted(entries, key=_sort_key, reverse=True)
         chosen = entries_sorted[0]
-        full_kiz, task_num, price_value = chosen
+        full_kiz, _sort_value, price_value = chosen
+
+        dt = key_func(chosen)
+        sale_date_str = (
+            dt.strftime("%H:%M:%S %d.%m.%Y") if dt is not None else None
+        )
 
         return ChosenKiz(
             full_kiz=full_kiz,
-            task_num=task_num,
+            sale_date_str=sale_date_str,
             price=price_value,
-            sale_date_str=task_to_date.get(task_num),
             skipped_dup_count=len(entries) - 1,
         )
 

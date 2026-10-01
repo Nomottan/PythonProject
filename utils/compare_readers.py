@@ -29,13 +29,124 @@ from models.models import SupplyItem, Candidate
 if TYPE_CHECKING:
     from services.subservices.logging import LoggerV2
 
+class HeadersTableReader:
+    """База для читателей Excel-таблиц с поиском заголовков.
 
-class SupplyItemsReader:
+    Роль:
+        Общий каркас: открыть файл, найти строку заголовков,
+        проитерировать, построить items через _build_item.
+        Наследник задаёт _HEADER_VARIANTS, _REQUIRED_COLUMNS
+        и _build_item.
+
+    Атрибуты класса:
+        _HEADER_VARIANTS — {поле: [варианты заголовков]}.
+        _REQUIRED_COLUMNS — обязательные поля. Отсутствие → [].
+        _OPEN_DESCRIPTION — описание для WorkbookOpener.
+    """
+
+    _HEADER_VARIANTS: dict = {}
+    _REQUIRED_COLUMNS: tuple = ("name",)
+    _OPEN_DESCRIPTION: str = "файл"
+
+    @classmethod
+    def read(cls, file_path, brands_set, logger) -> list:
+        """Читает items из файла.
+
+        Вход:
+            file_path — путь к файлу.
+            brands_set — set[str] ключей брендов или None.
+            logger — LoggerV2 или None.
+
+        Выход:
+            list items. Пустой список при ошибке.
+        """
+        file_path = Path(file_path)
+        brands_set = brands_set or set()
+        items: list = []
+
+        if logger is not None:
+            logger.report(f"Загрузка из {file_path.name}")
+
+        wb = WorkbookOpener.open(
+            file_path, logger=logger,
+            description=cls._OPEN_DESCRIPTION, read_only=True,
+        )
+        if wb is None:
+            return []
+        try:
+            ws = wb.active
+            header_row, columns = ExcelHelper.find_header_row_and_columns(
+                ws, cls._HEADER_VARIANTS,
+            )
+            if header_row is None or columns is None:
+                if logger is not None:
+                    logger.warning("Не удалось найти заголовки таблицы.")
+                return []
+
+            if logger is not None:
+                logger.report(f"Заголовки найдены в строке {header_row}")
+                cls._log_columns(columns, logger)
+
+            for field in cls._REQUIRED_COLUMNS:
+                if columns.get(field) is None:
+                    if logger is not None:
+                        logger.warning(
+                            f"Не найдено обязательное поле '{field}'."
+                        )
+                    return []
+
+            for row in ws.iter_rows(min_row=header_row + 1,
+                                     values_only=True):
+                if cls._should_skip_row(row, columns):
+                    continue
+                item = cls._build_item(row, columns, brands_set)
+                if item is not None:
+                    items.append(item)
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+        if logger is not None:
+            logger.report(f"Загружено: {len(items)}")
+            if items:
+                logger.report("Первые 5:")
+                for i, item in enumerate(items[:5]):
+                    logger.report(
+                        f"  {i + 1}. {cls._format_item_for_log(item)}"
+                    )
+        return items
+
+    # ---------- Точки переопределения ----------
+
+    @classmethod
+    def _should_skip_row(cls, row, columns) -> bool:
+        """Пропустить ли строку. По умолчанию — False."""
+        return False
+
+    @classmethod
+    def _build_item(cls, row, columns, brands_set):
+        """Построить item из строки. Обязательно переопределить."""
+        raise NotImplementedError
+
+    @classmethod
+    def _log_columns(cls, columns, logger) -> None:
+        """Залогировать распознанные столбцы. Можно переопределить."""
+        if logger is not None:
+            logger.report(f"Столбцы: {columns}")
+
+    @classmethod
+    def _format_item_for_log(cls, item) -> str:
+        """Формат элемента для лога «Первые 5». Можно переопределить."""
+        return str(item)
+
+class SupplyItemsReader(HeadersTableReader):
     """Читает товары из копии листа поставки.
 
     Роль:
-        Перенос DataLoader.load_supply_items. Открывает Excel, ищет
-        строку заголовков через ExcelHelper.find_header_row_and_columns,
+        Открывает Excel через WorkbookOpener.open, ищет строку
+        заголовков через ExcelHelper.find_header_row_and_columns,
         читает строки, разбирает наименование через ProductNameParser.
         Возвращает список SupplyItem. Заголовки не найдены — warning
         и пустой список.
@@ -49,118 +160,83 @@ class SupplyItemsReader:
         'row_num': ["№", "№ п/п", "№ п.п.", "Номер", "Item", "Row"],
     }
 
-    @staticmethod
-    def read(file_path, brands_set, logger) -> list:
-        """Читает SupplyItem из файла.
+    _REQUIRED_COLUMNS = ("name",)
+    _OPEN_DESCRIPTION = "лист поставки"
 
-        Вход:
-            file_path — путь к копии листа поставки.
-            brands_set — set[str] ключей брендов (в нижнем регистре)
-                         либо None.
-            logger — LoggerV2 или None.
+    @classmethod
+    def _should_skip_row(cls, row, columns) -> bool:
+        """Пропускает строки без name и строку-шапку 'Наименование'."""
+        col_name = columns.get('name')
+        if col_name is None or len(row) <= col_name or not row[col_name]:
+            return True
+        name_str = str(row[col_name]).strip()
+        if not name_str or name_str.lower() == 'наименование':
+            return True
+        return False
 
-        Выход:
-            list[SupplyItem]. Пустой список при ошибке чтения
-            заголовков (не бросаем — вызывающий продолжает).
+    @classmethod
+    def _build_item(cls, row, columns, brands_set):
+        """Собирает SupplyItem из строки."""
+        col_article = columns.get('article')
+        col_name = columns.get('name')
+        col_count = columns.get('count')
+        col_row_num = columns.get('row_num')
 
-        Роль:
-            Точный перенос DataLoader.load_supply_items. Все шаги
-            логируются через logger.report.
-        """
-        file_path = Path(file_path)
-        brands_set = brands_set or set()
-        items: list[SupplyItem] = []
+        name_str = str(row[col_name]).strip()
 
-        if logger is not None:
-            logger.report(f"Загрузка товаров из листа поставки: {file_path.name}")
-
-        wb = WorkbookOpener.open(
-            file_path, logger=logger, description="лист поставки",
-            read_only=True,
-        )
-        try:
-            ws = wb.active
-            header_row, columns = ExcelHelper.find_header_row_and_columns(
-                ws, SupplyItemsReader._HEADER_VARIANTS,
-            )
-            if header_row is None or columns is None:
-                if logger is not None:
-                    logger.warning(
-                        "Не удалось найти заголовки таблицы. "
-                        "Проверьте структуру файла."
-                    )
-                return []
-
-            if logger is not None:
-                logger.report(f"Заголовки найдены в строке {header_row}")
-                logger.report(
-                    f"Столбцы: артикул={columns.get('article')}, "
-                    f"наименование={columns.get('name')}, "
-                    f"количество={columns.get('count')}, "
-                    f"№={columns.get('row_num')}"
-                )
-
-            col_article = columns.get('article')
-            col_name = columns.get('name')
-            col_count = columns.get('count')
-            col_row_num = columns.get('row_num')
-
-            for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-                if col_name is None or len(row) <= col_name or not row[col_name]:
-                    continue
-                name_str = str(row[col_name]).strip()
-                if not name_str or name_str.lower() == 'наименование':
-                    continue
-
-                article = (row[col_article]
-                           if col_article is not None and len(row) > col_article
-                           else "")
-                count_raw = (row[col_count]
-                             if col_count is not None and len(row) > col_count
-                             else None)
+        article = (row[col_article]
+                   if col_article is not None and len(row) > col_article
+                   else "")
+        count_raw = (row[col_count]
+                     if col_count is not None and len(row) > col_count
+                     else None)
+        count = None
+        if count_raw is not None:
+            try:
+                count = int(float(count_raw))
+            except (ValueError, TypeError):
                 count = None
-                if count_raw is not None:
-                    try:
-                        count = int(float(count_raw))
-                    except (ValueError, TypeError):
-                        count = None
 
-                row_num = (row[col_row_num]
-                           if col_row_num is not None and len(row) > col_row_num
-                           else None)
+        row_num = (row[col_row_num]
+                   if col_row_num is not None and len(row) > col_row_num
+                   else None)
 
-                features = ProductNameParser.extract(name_str, brands_set)
-                items.append(SupplyItem(
-                    row_num=row_num,
-                    article=str(article).strip() if article else "",
-                    name=name_str,
-                    count=count,
-                    keywords=features.keywords,
-                    brand=features.brand,
-                ))
-        finally:
-            wb.close()
+        features = ProductNameParser.extract(name_str, brands_set)
+        return SupplyItem(
+            row_num=row_num,
+            article=str(article).strip() if article else "",
+            name=name_str,
+            count=count,
+            keywords=features.keywords,
+            brand=features.brand,
+        )
 
+    @classmethod
+    def _log_columns(cls, columns, logger) -> None:
+        """Детализированный лог столбцов."""
         if logger is not None:
-            logger.report(f"Загружено товаров: {len(items)}")
-            if items:
-                logger.report("Первые 5 товаров (имя, количество):")
-                for i, item in enumerate(items[:5]):
-                    logger.report(
-                        f"  {i + 1}. {item.name} | кол-во: {item.count} "
-                        f"| keywords: {item.keywords}"
-                    )
-        return items
+            logger.report(
+                f"Столбцы: артикул={columns.get('article')}, "
+                f"наименование={columns.get('name')}, "
+                f"количество={columns.get('count')}, "
+                f"№={columns.get('row_num')}"
+            )
 
+    @classmethod
+    def _format_item_for_log(cls, item) -> str:
+        """Формат строки для лога."""
+        return (
+            f"{item.name} | кол-во: {item.count} | "
+            f"keywords: {item.keywords}"
+        )
 
-class CandidatesReader:
+class CandidatesReader(HeadersTableReader):
     """Читает кандидатов из сборного файла поставок.
 
     Роль:
-        Перенос DataLoader.load_candidates. Обязательные поля —
-        name и shk; если хотя бы одно не найдено — warning и пустой
-        список (без shk сравнение невозможно — кандидат не может
-        быть привязан к артикулу).
+        Обязательные поля — name и shk; если хотя бы одно не
+        найдено — warning и пустой список (без shk сравнение
+        невозможно — кандидат не может быть привязан к артикулу).
     """
 
     _HEADER_VARIANTS = {
@@ -172,109 +248,70 @@ class CandidatesReader:
         'shk':         ["ШК", "GTIN", "Barcode"],
     }
 
-    @staticmethod
-    def read(file_path, brands_set, logger) -> list:
-        """Читает Candidate из сборного файла.
+    _REQUIRED_COLUMNS = ("name", "shk")
+    _OPEN_DESCRIPTION = "сборный файл"
 
-        Вход:
-            file_path — путь к Сборный_поставок_{date}.xlsx.
-            brands_set — set[str] ключей брендов либо None.
-            logger — LoggerV2 или None.
+    @classmethod
+    def _should_skip_row(cls, row, columns) -> bool:
+        """Пропускает строки без name."""
+        col_name = columns.get('name')
+        if col_name is None or len(row) <= col_name:
+            return True
+        return not row[col_name]
 
-        Выход:
-            list[Candidate]. Пустой список при ошибке чтения
-            заголовков или отсутствии обязательных полей.
-        """
-        file_path = Path(file_path)
-        brands_set = brands_set or set()
-        candidates: list[Candidate] = []
+    @classmethod
+    def _build_item(cls, row, columns, brands_set):
+        """Собирает Candidate из строки."""
+        col_name = columns.get('name')
+        col_count = columns.get('count')
+        col_serial = columns.get('serial')
+        col_source = columns.get('source_file')
+        col_shk = columns.get('shk')
 
-        if logger is not None:
-            logger.report(f"Загрузка кандидатов из сборного файла: {file_path.name}")
+        name = row[col_name]
+        count = (row[col_count]
+                 if col_count is not None and len(row) > col_count
+                 else None)
+        if count is not None:
+            try:
+                count = int(count)
+            except (ValueError, TypeError):
+                count = None
+        serial = (row[col_serial]
+                  if col_serial is not None and len(row) > col_serial
+                  else None)
+        source_file = (row[col_source]
+                       if col_source is not None and len(row) > col_source
+                       else "")
+        shk = (row[col_shk]
+               if col_shk is not None and len(row) > col_shk
+               else None)
 
-        wb = WorkbookOpener.open(
-            file_path, logger=logger, description="сборный файл",
-            read_only=True,
+        features = ProductNameParser.extract(str(name).strip(), brands_set)
+        return Candidate(
+            name=str(name).strip(),
+            count=count,
+            serial=str(serial).strip() if serial else None,
+            source_file=str(source_file).strip() if source_file else "",
+            keywords=features.keywords,
+            brand=features.brand,
+            shk=str(shk).strip() if shk else None,
         )
-        try:
-            ws = wb.active
-            header_row, columns = ExcelHelper.find_header_row_and_columns(
-                ws, CandidatesReader._HEADER_VARIANTS,
-            )
-            if header_row is None or columns is None:
-                if logger is not None:
-                    logger.warning("Не удалось найти заголовки в сборном файле.")
-                return []
 
-            col_name = columns.get('name')
-            col_count = columns.get('count')
-            col_serial = columns.get('serial')
-            col_source = columns.get('source_file')
-            col_shk = columns.get('shk')
-
-            if col_name is None or col_shk is None:
-                if logger is not None:
-                    logger.warning(
-                        "В сборном файле не найдены столбцы "
-                        "'Наименование' или 'ШК'."
-                    )
-                return []
-
-            for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-                name = (row[col_name]
-                        if col_name is not None and len(row) > col_name
-                        else None)
-                if not name:
-                    continue
-                count = (row[col_count]
-                         if col_count is not None and len(row) > col_count
-                         else None)
-                if count is not None:
-                    try:
-                        count = int(count)
-                    except (ValueError, TypeError):
-                        count = None
-                serial = (row[col_serial]
-                          if col_serial is not None and len(row) > col_serial
-                          else None)
-                source_file = (row[col_source]
-                               if col_source is not None and len(row) > col_source
-                               else "")
-                shk = (row[col_shk]
-                       if col_shk is not None and len(row) > col_shk
-                       else None)
-
-                features = ProductNameParser.extract(str(name).strip(), brands_set)
-                candidates.append(Candidate(
-                    name=str(name).strip(),
-                    count=count,
-                    serial=str(serial).strip() if serial else None,
-                    source_file=str(source_file).strip() if source_file else "",
-                    keywords=features.keywords,
-                    brand=features.brand,
-                    shk=str(shk).strip() if shk else None,
-                ))
-        finally:
-            wb.close()
-
-        if logger is not None:
-            logger.report(f"Загружено кандидатов: {len(candidates)}")
-            if candidates:
-                logger.report("Первые 5 кандидатов с ключевыми словами:")
-                for i, cand in enumerate(candidates[:5]):
-                    logger.report(f"  {i + 1}. {cand.name} -> keywords: {cand.keywords}")
-        return candidates
-
+    @classmethod
+    def _format_item_for_log(cls, item) -> str:
+        """Формат строки для лога."""
+        return f"{item.name} -> keywords: {item.keywords}"
 
 class ConsolidatedSupplyBuilder:
     """Собирает единый файл поставок из списка входных файлов.
 
     Роль:
-        Перенос CompareService.build_consolidated_supply. Для каждого
-        файла определяет формат: CSV — через CsvNormalizer, Excel — через
-        ExcelHelper.open_data_file + find_header_row_and_columns.
-        Агрегирует строки по GTIN/ШК в словарь, пишет Сборный_поставок_{date}.xlsx
-        через ExcelHelper.create_report_workbook.
+        Для каждого файла определяет формат: CSV — через
+        CsvNormalizer, Excel — через WorkbookOpener.open +
+        find_header_row_and_columns. Агрегирует строки по GTIN/ШК
+        в словарь, пишет Сборный_поставок_{date}.xlsx через
+        WorkbookWriter.create.
     """
 
     # Заголовки для Excel-файлов поставок.
@@ -449,7 +486,7 @@ class ConsolidatedSupplyBuilder:
             logger — LoggerV2 или None.
 
         Роль:
-            Открывает файл через ExcelHelper.open_data_file, ищет
+            Открывает файл через WorkbookOpener.open, ищет
             заголовки через find_header_row_and_columns. Каждая
             строка с непустым ШК добавляется в consolidated с
             инкрементом count (1 за строку — так было в исходнике).

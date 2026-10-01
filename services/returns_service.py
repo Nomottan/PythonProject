@@ -6,7 +6,7 @@ from utils.txt_helper import TextFileWriter
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper, FilenameUtils
 from utils.sales_file_generator import SalesFileGenerator
-from utils.report_readers import (
+from utils.returns_readers import (
     ReturnsSourceReportReader, ReturnsKizReader, ReturnsTransferReader,
 )
 
