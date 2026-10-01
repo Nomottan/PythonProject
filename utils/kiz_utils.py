@@ -4,7 +4,7 @@ from utils.text_utils import TextUtils
 from dataclasses import dataclass
 from datetime import datetime
 from services.subservices.logging import LoggerV2
-
+from utils.parsers import DateParser
 
 class KizUtils:
     """Утилиты для работы с КИЗами.
@@ -214,7 +214,6 @@ class ChosenKiz:
     sale_date_str: Optional[str]
     skipped_dup_count: int
 
-
 class KizOccurrences:
     """Группировка вхождений КИЗов из отчёта МП.
 
@@ -263,7 +262,7 @@ class KizOccurrences:
         Вход:
             storage_kiz — ключ группы.
             task_to_date — dict {task_num: sale_date_str}. Значения —
-                           строки дат в одном из форматов KizValidator.
+                           строки дат в одном из форматов DateParser.KIZ_FORMATS.
 
         Выход:
             ChosenKiz выбранного вхождения либо None, если группы нет.
@@ -279,16 +278,13 @@ class KizOccurrences:
         if not entries:
             return None
 
-        # Локальный импорт: KizValidator тянет KizStorage; чтобы
-        # не создавать циклический импорт на уровне модуля,
-        # импортируем внутри метода.
         from services.kiz_validator import KizValidator
 
         def _sort_key(entry) -> datetime:
             """Ключ сортировки: дата вхождения; datetime.min при ошибке."""
             task_num = entry[1]
             date_str = task_to_date.get(task_num)
-            dt = KizValidator._parse_date(date_str)
+            dt = DateParser.parse_any(date_str, DateParser.KIZ_FORMATS)
             return dt or datetime.min
 
         entries_sorted = sorted(entries, key=_sort_key, reverse=True)

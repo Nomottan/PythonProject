@@ -27,7 +27,7 @@ from utils.excel_helper import ExcelHelper, WorkbookOpener
 from utils.kiz_utils import KizUtils, KizOccurrences
 from utils.text_utils import TextUtils
 from utils.parsers import ReturnsRow, DateParser
-from services.kiz_validator import KizValidator, ValidationResult
+from services.kiz_validator import ValidationResult
 
 if TYPE_CHECKING:
     from services.subservices.logging import LoggerV2
@@ -113,7 +113,6 @@ class MpReportData:
     skipped_date_before_return: int
     total_unique: int
     skipped_by_type: dict
-
 
 class ChzMpReportReader:
     """Читатель файлов ЧЗ_МП.
@@ -218,7 +217,6 @@ class ChzMpReportReader:
             )
 
         return entries
-
 
 class WBReportReader:
     """Читатель отчётов МП.
@@ -385,8 +383,8 @@ class WBReportReader:
 
                 sale_date_str = chosen.sale_date_str
                 # Если дата отсутствует или не парсится — фолбэк на сегодня.
-                if sale_date_str is None or KizValidator._parse_date(
-                    sale_date_str
+                if sale_date_str is None or DateParser.parse_any(
+                        sale_date_str, DateParser.KIZ_FORMATS,
                 ) is None:
                     sale_date_str = datetime.now().strftime("%d-%m-%Y")
 
@@ -708,7 +706,6 @@ class ReturnsFilterStats:
     status_counts: dict
     passed_companies: set
 
-
 @dataclass
 class ReturnsSourceData:
     """Результат разбора исходного файла возвратов.
@@ -727,7 +724,6 @@ class ReturnsSourceData:
     headers: list
     rows: list
     stats: ReturnsFilterStats
-
 
 class ReturnsSourceReportReader:
     """Читатель исходного файла возвратов.
@@ -870,7 +866,6 @@ class ReturnsSourceReportReader:
             except Exception:
                 pass
 
-
 @dataclass
 class ReturnsKizData:
     """Результат выгрузки КИЗов для возврата.
@@ -894,7 +889,6 @@ class ReturnsKizData:
     returns_updated_in_base: int
     returns_not_in_base: int
     kiz_stats: dict
-
 
 class ReturnsKizReader:
     """Читатель файла «Возвраты_{date}.xlsx» для выгрузки КИЗов.
@@ -1021,7 +1015,6 @@ class ReturnsKizReader:
             kiz_stats=kiz_stats,
         )
 
-
 @dataclass
 class ReturnsTransferRow:
     """Одна строка передачи КИЗа между продавцами.
@@ -1050,7 +1043,6 @@ class ReturnsTransferRow:
     raw_kiz: str
     brand: str
     owner_company_str: str
-
 
 @dataclass
 class ReturnsTransferData:

@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 from storage.fbs_kiz_storage import KizStorage
+from utils.parsers import DateParser
 
 
 class ValidationResult(Enum):
@@ -129,7 +130,7 @@ class KizValidator:
             return ValidationResult.ADDED
 
         # --- Отчёт МП: парсим дату ---
-        sale_dt = self._parse_date(sale_date_str)
+        sale_dt = DateParser.parse_any(sale_date_str, DateParser.KIZ_FORMATS)
         if sale_dt is None:
             sale_dt = datetime.now()
             self.storage.warning(
@@ -169,7 +170,9 @@ class KizValidator:
             return ValidationResult.SKIPPED_NO_RETURN
 
         # 4. Есть и продажа, и возврат — сравниваем даты.
-        existing_returned_dt = self._parse_date(existing_returned_str)
+        existing_returned_dt = DateParser.parse_any(
+            existing_returned_str, DateParser.KIZ_FORMATS,
+        )
         if existing_returned_dt is None:
             self.storage.warning(
                 f"Отсев (битая дата возврата): {kiz}"
@@ -190,26 +193,6 @@ class KizValidator:
             return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
 
     # ---------- Валидация для возвратов ----------
-
-    @staticmethod
-    def _parse_date(date_str: Optional[str]) -> Optional[datetime]:
-        """Парсит дату в одном из поддерживаемых форматов.
-
-        Вход: date_str — строка даты.
-        Выход: datetime или None.
-
-        Роль: единая точка парсинга. Поддерживает формат отчёта
-              МП ("HH:MM:SS DD.MM.YYYY" и "DD.MM.YYYY") и формат
-              хранилища ("DD-MM-YYYY").
-        """
-        if not date_str:
-            return None
-        for fmt in ("%H:%M:%S %d.%m.%Y", "%d.%m.%Y", "%d-%m-%Y"):
-            try:
-                return datetime.strptime(date_str, fmt)
-            except (ValueError, TypeError):
-                continue
-        return None
 
     def validate_for_return(self, kiz: str) -> bool:
         """Проверяет КИЗ для возврата.

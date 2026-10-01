@@ -28,12 +28,18 @@ class BaseParser:
 
     pass
 
-
 class DateParser(BaseParser):
     """Парсер дат и дат-со-временем.
 
     Роль: единая точка разбора строк в date/datetime. Все методы
           возвращают None при несоответствии формату.
+    """
+    KIZ_FORMATS = ("%H:%M:%S %d.%m.%Y", "%d.%m.%Y", "%d-%m-%Y")
+    """Форматы дат КИЗ из отчётов МП и хранилища.
+
+    Единая константа для всех, кто разбирает КИЗ-даты.
+    Используется в KizValidator.validate_for_sale,
+    KizOccurrences.pick_latest, WBReportReader.read.
     """
 
     @staticmethod
@@ -128,6 +134,106 @@ class DateParser(BaseParser):
                 continue
         return None
 
+    @staticmethod
+    def parse_any(text, formats) -> Optional[datetime]:
+        """Разбирает строку по списку форматов.
+
+        Вход:
+            text — строка даты.
+            formats — iterable форматов strptime, в порядке
+                      попыток.
+
+        Выход:
+            datetime первого подошедшего формата, либо None.
+
+        Роль:
+            Единая точка разбора строк с неопределённым форматом.
+            Пустая строка или None → None. Исключения strptime
+            (ValueError, TypeError) не пробрасываются.
+        """
+        if not text:
+            return None
+        cleaned = str(text).strip()
+        for fmt in formats:
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
+
+class ExcelRow:
+    """База для dataclass'ов, читаемых из строки Excel.
+
+    Роль:
+        Единая точка чтения строк Excel в типизированные
+        dataclass'ы-наследники. Наследники задают раскладку
+        столбцов (_COLUMNS), минимальную длину строки
+        (_MIN_COLUMNS) и обязательные непустые поля (_REQUIRED);
+        логика чтения — в этом классе.
+
+    ВНИМАНИЕ: атрибуты класса _COLUMNS, _MIN_COLUMNS, _REQUIRED
+    заданы без аннотаций. Аннотация превратила бы их в поля
+    @dataclass-наследника и сломала бы порядок аргументов.
+    """
+
+    _COLUMNS = {}         # {имя_поля: 0-based индекс}
+    _MIN_COLUMNS = 0      # минимальная длина строки
+    _REQUIRED = ()        # обязательные поля
+
+    @classmethod
+    def _to_str(cls, value) -> str:
+        """Приводит значение ячейки к строке без краевых пробелов.
+
+        Вход: value — значение из row.
+        Выход: строка без краевых пробелов; "" для None.
+        """
+        return str(value).strip() if value is not None else ""
+
+    @classmethod
+    def _cell(cls, row: tuple, field: str):
+        """Возвращает значение ячейки по имени поля.
+
+        Вход:
+            row — кортеж значений строки.
+            field — имя поля из _COLUMNS.
+
+        Выход:
+            Значение ячейки; None — если поле не задано
+            в _COLUMNS или строка короче нужного индекса.
+        """
+        idx = cls._COLUMNS.get(field)
+        if idx is None or len(row) <= idx:
+            return None
+        return row[idx]
+
+    @classmethod
+    def from_row(cls, row: tuple):
+        """Создаёт экземпляр из строки Excel.
+
+        Вход: row — кортеж значений.
+
+        Выход:
+            Экземпляр класса-наследника; None, если строка
+            короче _MIN_COLUMNS или не заполнено обязательное
+            поле.
+
+        Роль:
+            Единая точка чтения: проверяет длину, читает поля
+            по _COLUMNS, валидирует _REQUIRED, создаёт экземпляр
+            через cls(**values).
+        """
+        if len(row) < cls._MIN_COLUMNS:
+            return None
+
+        values = {}
+        for field in cls._COLUMNS:
+            values[field] = cls._to_str(cls._cell(row, field))
+
+        for field in cls._REQUIRED:
+            if not values.get(field):
+                return None
+
+        return cls(**values)
 
 class NumberParser(BaseParser):
     """Парсер чисел из строк с разделителями.
@@ -235,7 +341,7 @@ class NumberParser(BaseParser):
         return ((value + multiple - 1) // multiple) * multiple
 
 @dataclass
-class PreFinalRow:
+class PreFinalRow(ExcelRow):
     """Одна строка предитогового файла ЧЗ МП.
 
     Роль:
@@ -256,57 +362,17 @@ class PreFinalRow:
     brand: str
     product_name: str
 
-    @classmethod
-    def from_row(cls, row: tuple,
-                 min_columns: int = 12) -> "PreFinalRow | None":
-        """Создаёт PreFinalRow из строки листа Excel.
+    _COLUMNS = {
+        "kiz": 1,
+        "product_name": 5,
+        "brand": 6,
+        "owner_company": 11,
+    }
+    _MIN_COLUMNS = 12
+    _REQUIRED = ("kiz", "owner_company")
 
-        Вход:
-            row — кортеж значений строки (как выдаёт openpyxl
-                  в режиме values_only=True).
-            min_columns — минимальная длина row. Если фактическая
-                          длина меньше — строка считается
-                          некорректной и метод вернёт None.
-
-        Выход:
-            PreFinalRow, если удалось прочитать КИЗ и владельца.
-            None — если row короче min_columns, либо КИЗ пустой,
-            либо владелец пустой.
-
-        Роль:
-            Единственная точка знания о раскладке столбцов
-            предитогового файла. Значения приводятся к str и
-            очищаются от краевых пробелов; None становится "".
-            Если КИЗ или владелец пусты — строка не имеет смысла
-            для дальнейшей обработки и отбрасывается здесь.
-        """
-        if len(row) < min_columns:
-            return None
-
-        def _to_str(value) -> str:
-            """Приводит значение ячейки к строке без краевых пробелов.
-
-            Вход: value — значение из row.
-            Выход: str; пустая строка, если value is None.
-            """
-            return str(value).strip() if value is not None else ""
-
-        kiz = _to_str(row[1])
-        product_name = _to_str(row[5])
-        brand = _to_str(row[6])
-        owner_company = _to_str(row[11])
-
-        if not kiz or not owner_company:
-            return None
-
-        return cls(
-            kiz=kiz,
-            owner_company=owner_company,
-            brand=brand,
-            product_name=product_name,
-        )
 @dataclass
-class ReturnsRow:
+class ReturnsRow(ExcelRow):
     """Одна строка файла возвратов.
 
     Роль:
@@ -335,52 +401,15 @@ class ReturnsRow:
     brand: str
     owner_company: str
 
-    @classmethod
-    def from_row(cls, row: tuple,
-                 min_columns: int = 6) -> "ReturnsRow | None":
-        """Создаёт ReturnsRow из строки файла возвратов.
-
-        Вход:
-            row — кортеж значений строки (как выдаёт openpyxl
-                  в режиме values_only=True).
-            min_columns — минимальная длина row. Если фактическая
-                          длина меньше — строка считается
-                          некорректной и метод вернёт None.
-
-        Выход:
-            ReturnsRow, если удалось прочитать КИЗ.
-            None — если row короче min_columns либо КИЗ пустой.
-
-        Роль:
-            Единственная точка знания о раскладке столбцов файла
-            возвратов. Значения приводятся к str и очищаются от
-            краевых пробелов; None становится "". Если КИЗ пуст —
-            строка бесполезна для дальнейшей обработки и
-            отбрасывается здесь. Пустой brand или owner_company
-            не отбрасывается: вызывающий код решает сам.
-        """
-        if len(row) < min_columns:
-            return None
-
-        def _to_str(value) -> str:
-            """Приводит значение ячейки к строке без краевых пробелов.
-
-            Вход: value — значение из row.
-            Выход: str; пустая строка, если value is None.
-            """
-            return str(value).strip() if value is not None else ""
-
-        kiz = _to_str(row[0])
-        if not kiz:
-            return None
-
-        return cls(
-            kiz=kiz,
-            status=_to_str(row[1]),
-            product_name=_to_str(row[2]),
-            brand=_to_str(row[3]),
-            owner_company=_to_str(row[5]),
-        )
+    _COLUMNS = {
+        "kiz": 0,
+        "status": 1,
+        "product_name": 2,
+        "brand": 3,
+        "owner_company": 5,
+    }
+    _MIN_COLUMNS = 6
+    _REQUIRED = ("kiz",)
 
 @dataclass
 class ProductFeatures:
@@ -517,3 +546,4 @@ class ProductNameParser(BaseParser):
             keywords.add(brand.lower())
 
         return ProductFeatures(keywords=keywords, brand=brand, count=count)
+
