@@ -12,7 +12,7 @@ Brand.sellers), дедупликации — это и делает сервис
 
 from models.models import Seller, Brand
 from storage.main_config import MainConfig
-
+from utils.text_utils import TextUtils
 
 class SellersBrandsService:
     """Высокоуровневые операции над Seller и Brand.
@@ -26,7 +26,7 @@ class SellersBrandsService:
 
     Публичный API: get_sellers_objects, set_sellers_objects,
     get_sellers_with_brands, get_brands_objects, set_brands_objects,
-    get_brands_dict.
+    get_brands_dict, add_key_to_brand, create_brand.
     """
 
     def __init__(self, main_config: MainConfig,
@@ -192,29 +192,123 @@ class SellersBrandsService:
         """Сохраняет список Brand в конфиг.
 
         Вход: brands — list[Brand].
-
         Выход: нет.
+        Роль: делегирует в _save_brands, результат игнорируется.
+              Логирование и обработка ошибок — в _save_brands.
+        """
+        self._save_brands(brands)
 
-        Роль: сериализует через to_dict, пишет в MainConfig.
+    def _save_brands(self, brands: list) -> bool:
+        """Записывает список Brand в config.json.
 
-        Логирование:
-            debug — количество сохранённых брендов.
-            critical — если сериализация или запись упали.
+        Вход: brands — list[Brand].
+        Выход: True — сериализация и запись прошли; False — исключение
+               перехвачено и залогировано через critical(can_influence=False).
+
+        Роль: единая точка записи brands. try/except инкапсулирован —
+              публичные методы получают честный bool и не дублируют
+              обработку ошибок.
         """
         try:
             serialized = [b.to_dict() for b in brands]
             self._config.set("brands", serialized)
             if self._logger is not None:
                 self._logger.debug(
-                    f"set_brands_objects: сохранено {len(serialized)} "
-                    f"брендов"
+                    f"_save_brands: сохранено {len(serialized)} брендов"
                 )
+            return True
         except Exception as e:
             if self._logger is not None:
                 self._logger.critical(
                     f"Ошибка сохранения брендов: {e}",
                     can_influence=False,
                 )
+            return False\
+
+    def add_key_to_brand(self, brand_name: str, key: str) -> bool:
+        """Добавляет сырой ключ key в brand.keys бренда brand_name.
+
+        Вход:
+            brand_name — точное имя бренда (без нормализации).
+            key — сырая строка-ключ.
+        Выход:
+            True — ключ добавлен или уже присутствует (цель достигнута).
+            False — валидация, поиск бренда или запись упали.
+        Роль: точечная мутация одного бренда — точный поиск по имени,
+              дедупликация по нормализации, запись через _save_brands.
+              В brand.keys попадает сырая строка без нормализации.
+        """
+        if not isinstance(key, str) or TextUtils.normalize(key) == "":
+            if self._logger is not None:
+                self._logger.warning(
+                    f"add_key_to_brand: некорректный ключ ({key!r}), "
+                    f"бренд '{brand_name}'"
+                )
+            return False
+
+        brands = self.get_brands_objects()
+
+        target = None
+        for b in brands:
+            if b.name == brand_name:
+                target = b
+                break
+
+        if target is None:
+            if self._logger is not None:
+                self._logger.warning(
+                    f"add_key_to_brand: бренд '{brand_name}' не найден"
+                )
+            return False
+
+        normalized_key = TextUtils.normalize(key)
+        existing = {TextUtils.normalize(k) for k in target.keys}
+        if normalized_key in existing:
+            return True
+
+        target.keys.append(key)
+        return self._save_brands(brands)
+
+    def create_brand(self, name: str, keys: list[str],
+                     requires_saving: bool = True) -> bool:
+        """Создаёт новый бренд и сохраняет в config.json.
+
+        Вход:
+            name — имя бренда.
+            keys — список сырых ключей; None и [] эквивалентны.
+            requires_saving — флаг сохранения КИЗов, передаётся в Brand
+                              без изменений.
+        Выход:
+            True — бренд создан и сохранён.
+            False — валидация, дубликат по нормализации или запись упали.
+        Роль: запрет дубликатов по нормализованному имени (регистр,
+              пробелы не учитываются), существующий бренд не подменяется.
+              Ключи не нормализуются и не дедуплицируются.
+        """
+        if not isinstance(name, str) or TextUtils.normalize(name) == "":
+            if self._logger is not None:
+                self._logger.warning(
+                    f"create_brand: некорректное имя ({name!r})"
+                )
+            return False
+
+        brands = self.get_brands_objects()
+        normalized_name = TextUtils.normalize(name)
+        for b in brands:
+            if TextUtils.normalize(b.name) == normalized_name:
+                if self._logger is not None:
+                    self._logger.warning(
+                        f"create_brand: бренд '{name}' уже существует"
+                    )
+                return False
+
+        new_brand = Brand(
+            name=name,
+            keys=keys or [],
+            requires_saving=requires_saving,
+        )
+        brands.append(new_brand)
+        return self._save_brands(brands)
 
     def get_brands_dict(self) -> dict:
         """Возвращает {name: Brand} для восстановления связей.
