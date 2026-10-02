@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 from typing import List, Optional
 from utils.text_utils import TextUtils
 from dataclasses import dataclass
@@ -188,29 +189,34 @@ class KizUtils:
         return result
 
     @staticmethod
-    def filter_for_removal(kiz_to_brand_key, brand_key_to_brand,
+    def filter_for_removal(kiz_to_brand_data, brand_key_to_brand,
                            logger=None):
         """Отбирает КИЗы, чей бренд помечен requires_saving=False.
 
         Вход:
-            kiz_to_brand_key — dict[str, str]: {kiz: normalized_brand_key}.
+            kiz_to_brand_data — dict[str, tuple[str, str]]:
+                {kiz: (нормализованный_ключ, сырая_строка_бренда)}.
             brand_key_to_brand — dict[str, Brand]: {normalized_key: Brand}.
             logger — LoggerV2 или None.
 
         Выход:
-            (to_delete, stats):
+            (to_delete, stats, brands_unknown):
                 to_delete — set[str]: КИЗы с requires_saving is False.
-                stats — dict с ключами:
-                    total, empty_brand, unknown_brand, recognized,
-                    saved, deleted, top_deleted.
+                stats — dict с ключами total, empty_brand, unknown_brand,
+                        recognized, saved, deleted, top_deleted.
+                brands_unknown — dict[str, list[str]]:
+                        {норм_ключ: [сырая_1, сырая_2, ...]} — только
+                        для неизвестных непустых брендов. Порядок
+                        ключей и сырых строк — по мере обнаружения,
+                        дедуп сырых — по точному совпадению.
 
         Роль:
             Матчинг — точное совпадение нормализованных строк.
-            Пустой brand_key — счётчик empty_brand, КИЗ сохраняется.
-            Неизвестный brand_key — счётчик unknown_brand, КИЗ
-            сохраняется. Известный brand — счётчик recognized и
-            развилка по requires_saving. top_deleted — топ-10
-            брендов по количеству удалённых КИЗов (по убыванию).
+            Пустой brand_key → empty_brand, КИЗ сохраняется.
+            Неизвестный brand_key → unknown_brand + сырая строка
+            в brands_unknown, КИЗ сохраняется. Известный бренд →
+            recognized + развилка saved/deleted. top_deleted —
+            топ-10 брендов по количеству удалённых КИЗов.
         """
         to_delete: set = set()
         stats = {
@@ -223,8 +229,9 @@ class KizUtils:
             "top_deleted": [],
         }
         top_deleted: dict = {}
+        brands_unknown: dict = {}
 
-        for kiz, brand_key in kiz_to_brand_key.items():
+        for kiz, (brand_key, raw_brand) in kiz_to_brand_data.items():
             if not brand_key:
                 stats["empty_brand"] += 1
                 if logger is not None:
@@ -236,10 +243,13 @@ class KizUtils:
             brand = brand_key_to_brand.get(brand_key)
             if brand is None:
                 stats["unknown_brand"] += 1
+                bucket = brands_unknown.setdefault(brand_key, [])
+                if raw_brand not in bucket:
+                    bucket.append(raw_brand)
                 if logger is not None:
                     logger.debug(
                         f"КИЗ {kiz} → brand_key '{brand_key}' → "
-                        f"Brand не найден"
+                        f"Brand не найден (сырое: {raw_brand!r})"
                     )
                 continue
 
@@ -248,7 +258,9 @@ class KizUtils:
             if brand.requires_saving is False:
                 to_delete.add(kiz)
                 stats["deleted"] += 1
-                top_deleted[brand.name] = top_deleted.get(brand.name, 0) + 1
+                top_deleted[brand.name] = (
+                        top_deleted.get(brand.name, 0) + 1
+                )
                 if logger is not None:
                     logger.debug(
                         f"КИЗ {kiz} → brand_key '{brand_key}' → "
@@ -262,12 +274,12 @@ class KizUtils:
                         f"Brand {brand.name} → сохранён"
                     )
 
-        stats["total"] = len(kiz_to_brand_key)
+        stats["total"] = len(kiz_to_brand_data)
         stats["top_deleted"] = sorted(
             top_deleted.items(), key=lambda x: -x[1],
         )[:10]
 
-        return to_delete, stats
+        return to_delete, stats, brands_unknown
 
 @dataclass
 class ChosenKiz:
@@ -407,3 +419,89 @@ class KizOccurrences:
               выбрать по каждой через pick_latest.
         """
         return self._entries.items()
+
+class KizDuplicatesFinder:
+    """Поиск дублей КИЗов в файлах продаж.
+
+    Роль:
+        Единая точка анализа папки «Продажи». Возвращает два
+        независимых результата: дубли внутри одного файла и
+        КИЗы, встречающиеся в нескольких файлах. Без состояния —
+        все методы @staticmethod.
+    """
+
+    @staticmethod
+    def find(sales_dir, logger) -> tuple:
+        """Находит внутрифайловые и межфайловые дубли КИЗов.
+
+        Вход:
+            sales_dir — Path к папке «Продажи».
+            logger — LoggerV2 или None.
+
+        Выход:
+            (intra_file, inter_file):
+                intra_file — dict[Path, dict[str, int]]:
+                    только файлы, где хотя бы один КИЗ встречается
+                    ≥ 2 раз. Значение — {kiz: count}, count > 1.
+                inter_file — dict[str, list[Path]]:
+                    только КИЗы, встречающиеся в ≥ 2 файлах.
+                    Порядок ключей — по первому обнаружению.
+                    Порядок путей внутри значения — по обходу файлов.
+
+        Роль:
+            Обходит sales_dir.glob("*.xlsx") в отсортированном
+            порядке (детерминизм), читает КИЗы каждого файла через
+            SalesFileKizReader.read_with_counts. Lazy import —
+            разрывает цикл sales_file_generator ↔ kiz_utils.
+            Пустая или несуществующая папка — ({}, {}).
+        """
+        sales_dir = Path(sales_dir)
+        if not sales_dir.exists() or not sales_dir.is_dir():
+            return {}, {}
+
+        # Lazy import — см. докстринг.
+        from utils.sales_file_generator import SalesFileKizReader
+
+        files = sorted(sales_dir.glob("*.xlsx"))
+        if not files:
+            return {}, {}
+
+        intra_file: dict = {}
+        kiz_to_files: dict = {}
+
+        for file_path in files:
+            counts = SalesFileKizReader.read_with_counts(file_path)
+            if not counts:
+                continue
+
+            # Внутрифайловые дубли.
+            duplicates = {k: c for k, c in counts.items() if c > 1}
+            if duplicates:
+                intra_file[file_path] = duplicates
+                if logger is not None:
+                    logger.debug(
+                        f"KizDuplicatesFinder: {file_path.name} — "
+                        f"внутрифайловых дублей: "
+                        f"{len(duplicates)} КИЗов"
+                    )
+
+            # Заполняем межфайловую карту.
+            for kiz in counts.keys():
+                bucket = kiz_to_files.setdefault(kiz, [])
+                bucket.append(file_path)
+
+        # Межфайловые дубли — только где КИЗ в ≥ 2 файлах.
+        inter_file: dict = {}
+        for kiz, paths in kiz_to_files.items():
+            if len(paths) >= 2:
+                inter_file[kiz] = paths
+
+        if inter_file and logger is not None:
+            for kiz, paths in inter_file.items():
+                names = [p.name for p in paths]
+                logger.debug(
+                    f"KizDuplicatesFinder: {kiz} встречается "
+                    f"в {len(paths)} файлах: {names}"
+                )
+
+        return intra_file, inter_file

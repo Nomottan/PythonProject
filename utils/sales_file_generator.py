@@ -44,6 +44,7 @@ class SalesFileGenerator:
         self.created_files: List[Path] = []
         self._stats: Dict[tuple, int] = {}
         self._logger = logger
+        self._file_to_receiver: Dict[Path, str] = {}
 
     def add_sale_row(self,
                      from_seller_name: str,
@@ -98,6 +99,7 @@ class SalesFileGenerator:
 
         if file_path not in self.created_files:
             self.created_files.append(file_path)
+            self._file_to_receiver[file_path] = to_seller_name
 
         key = (from_seller_name, to_seller_name)
         self._stats[key] = self._stats.get(key, 0) + 1
@@ -106,6 +108,21 @@ class SalesFileGenerator:
 
     def get_created_files(self) -> List[Path]:
         return self.created_files
+
+    def get_receiver_name(self, file_path) -> Optional[str]:
+        """Возвращает имя получателя для созданного файла продаж.
+
+        Вход:
+            file_path — путь к файлу (Path или str).
+        Выход:
+            str — сырое имя получателя (как передавалось в
+            add_sale_row), либо None, если файл не создавался
+            в этой сессии.
+
+        Роль: используется сервисом и UI для подписи кнопок
+              в диалоге выбора получателя.
+        """
+        return self._file_to_receiver.get(Path(file_path))
 
     def remove_empty_files(self) -> int:
         """Удаляет пустые файлы продаж из списка созданных.
@@ -127,6 +144,7 @@ class SalesFileGenerator:
                         file_path.unlink()
                         removed += 1
                         self.created_files.remove(file_path)
+                        self._file_to_receiver.pop(file_path, None)
                     except Exception as e:
                         self._log_debug(f"Ошибка удаления {file_path.name}: {e}")
                 else:
@@ -202,6 +220,45 @@ class SalesFileKizReader:
             except Exception:
                 pass
 
+    @staticmethod
+    def read_with_counts(file_path) -> dict:
+        """Читает КИЗы из файла продаж и считает их повторения.
+
+        Вход:
+            file_path — путь к файлу продаж (Path или str).
+
+        Выход:
+            dict[str, int] — {kiz: count} по непустым КИЗам из
+            второго столбца. Пустые ячейки игнорируются. Пустой
+            словарь при ошибке открытия.
+
+        Роль:
+            Используется KizDuplicatesFinder для поиска дублей.
+            Открытие — через WorkbookOpener.open(read_only=True),
+            закрытие — в finally.
+        """
+        wb = WorkbookOpener.open(file_path, logger=None, read_only=True)
+        if wb is None:
+            return {}
+
+        try:
+            sheet = wb.active
+            counts: dict = {}
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if len(row) > SalesFileKizReader.KIZ_COLUMN_INDEX:
+                    raw = row[SalesFileKizReader.KIZ_COLUMN_INDEX]
+                    if raw is None:
+                        continue
+                    kiz = str(raw).strip()
+                    if kiz:
+                        counts[kiz] = counts.get(kiz, 0) + 1
+            return counts
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
 class SalesFileRowsReader:
     """Читает строки файла продаж с фильтром по значению столбца.
 
@@ -255,6 +312,135 @@ class SalesFileRowsReader:
                 wb.close()
             except Exception:
                 pass
+
+    @staticmethod
+    def _rewrite_rows(file_path, header, rows, logger) -> bool:
+        """Перезаписывает файл продаж новым набором строк.
+
+        Вход:
+            file_path — путь к файлу.
+            header — список значений заголовков.
+            rows — список кортежей/списков строк.
+            logger — LoggerV2 или None.
+
+        Выход:
+            True — файл перезаписан;
+            False — WorkbookWriter.overwrite вернул False.
+
+        Роль: общая точка записи для remove_kiz и
+              remove_duplicates_in_file.
+        """
+        return WorkbookWriter.overwrite(
+            file_path, header, rows, logger=logger,
+        )
+
+    @staticmethod
+    def remove_kiz(file_path, kiz, logger) -> bool:
+        """Удаляет все строки с указанным КИЗом из файла продаж.
+
+        Вход:
+            file_path — путь к файлу продаж.
+            kiz — 31-символьный КИЗ.
+            logger — LoggerV2 или None.
+
+        Выход:
+            False — файл не открылся.
+            True — во всех остальных случаях (в т.ч. если КИЗ
+                   не найден или файл пуст).
+
+        Роль:
+            Открывает read-only, читает заголовок, проходит строки,
+            собирает те, у которых КИЗ в столбце
+            SalesFileKizReader.KIZ_COLUMN_INDEX не совпадает с kiz.
+            Если удалений не было — True без перезаписи. Иначе —
+            _rewrite_rows.
+        """
+        wb = WorkbookOpener.open(file_path, logger=logger, read_only=True)
+        if wb is None:
+            return False
+
+        kiz_col = SalesFileKizReader.KIZ_COLUMN_INDEX
+        header: list = []
+        rows_kept: list = []
+        removed_any = False
+        try:
+            sheet = wb.active
+            header = [cell.value for cell in sheet[1]]
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if len(row) > kiz_col:
+                    cell = row[kiz_col]
+                    if cell is not None and str(cell).strip() == kiz:
+                        removed_any = True
+                        continue
+                rows_kept.append(row)
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+        if not removed_any:
+            return True
+        return SalesFileRowsReader._rewrite_rows(
+            file_path, header, rows_kept, logger,
+        )
+
+    # REPLACE: SalesFileRowsReader.remove_duplicates_in_file
+    @staticmethod
+    def remove_duplicates_in_file(file_path, logger) -> int:
+        """Удаляет дублирующиеся строки по КИЗу внутри файла.
+
+        Вход:
+            file_path — путь к файлу продаж.
+            logger — LoggerV2 или None.
+
+        Выход:
+            0 — файл не открылся или перезапись не удалась.
+            int > 0 — количество удалённых строк-дублей.
+
+        Роль:
+            Оставляет первое вхождение КИЗа, остальные отбрасывает.
+            Пустой КИЗ пропускается как есть. Заголовок сохраняется.
+            Если удалений не было — 0 без перезаписи.
+        """
+        wb = WorkbookOpener.open(file_path, logger=logger, read_only=True)
+        if wb is None:
+            return 0
+
+        kiz_col = SalesFileKizReader.KIZ_COLUMN_INDEX
+        header: list = []
+        rows_kept: list = []
+        seen: set = set()
+        removed = 0
+        try:
+            sheet = wb.active
+            header = [cell.value for cell in sheet[1]]
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                kiz = ""
+                if len(row) > kiz_col:
+                    cell = row[kiz_col]
+                    if cell is not None:
+                        kiz = str(cell).strip()
+                if kiz:
+                    if kiz in seen:
+                        removed += 1
+                        continue
+                    seen.add(kiz)
+                rows_kept.append(row)
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+        if removed == 0:
+            return 0
+        ok = SalesFileRowsReader._rewrite_rows(
+            file_path, header, rows_kept, logger,
+        )
+        if not ok:
+            return 0
+        return removed
 
 class KizFilterDetailsWriter:
     """Пишет детальный лог фильтрации КИЗов при аккумуляции продаж.

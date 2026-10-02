@@ -560,3 +560,13 @@ class BrandEditDialog(BaseEditDialog):
             self.requires_saving_cb.isChecked()
         )
 
+    def was_deleted(self) -> bool:
+        """Возвращает True, если бренд был удалён из этого диалога.
+
+        Вход: нет.
+        Выход: self._deleted.
+        Роль: мастер разрешения неизвестных брендов различает
+              «пользователь удалил» и «пользователь применил
+              изменения» — при True запись не создаётся.
+        """
+        return self._deleted

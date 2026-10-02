@@ -14,9 +14,11 @@
     обработчики шагов и специфику ввода средней цены.
 """
 
-from PySide6.QtCore import Qt, QMetaObject, Q_ARG, Slot, QThread
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QVBoxLayout,
+    QHBoxLayout, QVBoxLayout,
 )
 
 from ui.base.base_service_window import BaseServiceWindow
@@ -27,7 +29,8 @@ from ui.factories.factories import (
 from ui.styles import ColorCalculator
 from ui.widgets.path_selector import PathSelector
 from ui.windows.shared_dialogs import (
-    PricesEditWindow, AveragePriceInputDialog,
+    PricesEditWindow, AveragePriceInputDialog, BrandsUnknownDialog,
+    SaleDuplicatePickerDialog,
 )
 from services.sells_fbs_service import (
     PreparationService, ExportKizService,
@@ -359,6 +362,7 @@ class ChzMPWindow(BaseServiceWindow):
 
         service = FilterPreFinalService(
             self.main_window.kiz_validator, self.log_manager_v2,
+            brand_unknown_resolver=self._brand_request_unknown_decision,
         )
         if self.logger:
             self.logger.debug(
@@ -381,7 +385,10 @@ class ChzMPWindow(BaseServiceWindow):
         if not self._precheck_target_dir():
             return
 
-        service = GenerateSalesService(self.log_manager_v2)
+        service = GenerateSalesService(
+            self.log_manager_v2,
+            duplicate_keeper_resolver=self._duplicate_sale_request_keeper,
+        )
         if self.logger:
             self.logger.debug(
                 "on_generate_sales: GenerateSalesService создан"
@@ -447,25 +454,13 @@ class ChzMPWindow(BaseServiceWindow):
         Вход: seller_name — имя продавца.
         Выход: int — цена; None — отмена.
 
-        Роль: если текущий поток — UI, открывает диалог напрямую;
-              иначе — через QMetaObject.invokeMethod с
-              BlockingQueuedConnection.
+        Роль: делегирует в _run_in_ui_blocking — тот сам решает,
+              вызывать диалог напрямую или через invokeMethod.
         """
         self._price_response = None
-
-        app = QApplication.instance()
-        if app is None:
-            return None
-
-        if QThread.currentThread() == app.thread():
-            self._show_price_dialog_slot(seller_name)
-        else:
-            QMetaObject.invokeMethod(
-                self,
-                "_show_price_dialog_slot",
-                Qt.BlockingQueuedConnection,
-                Q_ARG(str, seller_name),
-            )
+        self._run_in_ui_blocking(
+            lambda: self._show_price_dialog_slot(seller_name)
+        )
         return self._price_response
 
     @Slot(str)
@@ -482,3 +477,86 @@ class ChzMPWindow(BaseServiceWindow):
         else:
             self._price_response = None
 
+    def _brand_request_unknown_decision(self, brands_unknown: dict) -> dict:
+        """Callback от FilterPreFinalService: разрешить неизвестные бренды.
+
+        Вход:
+            brands_unknown — {норм_ключ: [сырая_1, ...]}.
+        Выход:
+            dict от мастера ({"total", "resolved", "skipped"}),
+            либо None при ошибке (сервис обработает).
+
+        Роль: делегирует открытие мастера в UI-поток через
+              _run_in_ui_blocking. Вызывается из фонового потока
+              сервиса — прямой показ QDialog там недопустим.
+        """
+        return self._run_in_ui_blocking(
+            lambda: self._open_brands_unknown_dialog(brands_unknown)
+        )
+
+    @Slot(object)
+    def _open_brands_unknown_dialog(self, brands_unknown: dict) -> dict:
+        """Открывает мастер разрешения неизвестных брендов.
+
+        Вход: brands_unknown — {норм_ключ: [сырая_1, ...]}.
+        Выход: агрегаты мастера ({"total", "resolved", "skipped"}).
+
+        Роль: создаёт BrandsUnknownDialog, открывает модально через
+              exec(), возвращает get_stats().
+        """
+        dialog = BrandsUnknownDialog(
+            parent=self,
+            brands_unknown=brands_unknown,
+            sellers_brands_service=self.main_window.sellers_brands_service,
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        return dialog.get_stats()
+
+    # ============================================================
+    # ОБРАБОТКА ДУБЛЕЙ В ПРОДАЖАХ
+    # ============================================================
+
+    def _duplicate_sale_request_keeper(self, kiz: str,
+                                       file_to_receiver: dict):
+        """Callback от GenerateSalesService: выбрать файл-получатель.
+
+        Вход:
+            kiz — 31-символьный КИЗ.
+            file_to_receiver — dict[Path, str]: путь → имя получателя.
+        Выход:
+            Path выбранного файла или None (сервис сделает fallback
+            на file_paths[0]).
+
+        Роль: делегирует открытие диалога в UI-поток через
+              _run_in_ui_blocking. Из фонового потока прямой показ
+              QDialog недопустим.
+        """
+        return self._run_in_ui_blocking(
+            lambda: self._duplicate_open_picker_dialog(
+                kiz, file_to_receiver,
+            )
+        )
+
+    @Slot(object)
+    def _duplicate_open_picker_dialog(self, kiz: str,
+                                      file_to_receiver: dict):
+        """Открывает SaleDuplicatePickerDialog в UI-потоке.
+
+        Вход:
+            kiz — 31-символьный КИЗ.
+            file_to_receiver — dict[Path, str]: путь → имя получателя.
+        Выход:
+            Path выбранного файла или None.
+
+        Роль: создаёт диалог, открывает модально через exec(),
+              возвращает get_selected_path().
+        """
+        dialog = SaleDuplicatePickerDialog(
+            parent=self,
+            kiz=kiz,
+            file_to_receiver=file_to_receiver,
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        return dialog.get_selected_path()

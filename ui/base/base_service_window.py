@@ -17,7 +17,8 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtCore import QMetaObject, Qt, QThread, Signal, Slot
+from PySide6.QtWidgets import QApplication, QMainWindow
 
 from ui.factories.factories import (
     LabelFactory, StatusLogFactory, WindowFactory,
@@ -58,6 +59,7 @@ class BaseServiceWindow(QMainWindow):
     LOGGER_DOMAIN = None
     BG_COLOR = (50, 50, 50)
     PIPELINE_BUTTONS = ()
+    _run_in_ui_signal = Signal(object)
 
     def __init__(self, parent=None, title="", log_manager_v2=None) -> None:
         """Конструктор.
@@ -75,6 +77,9 @@ class BaseServiceWindow(QMainWindow):
         super().__init__(parent)
         self.main_window = parent
         self.log_manager_v2 = log_manager_v2
+
+        self._ui_callable = None
+        self._ui_result = None
 
         # Логгер окна — если задан source.
         self.logger = None
@@ -353,6 +358,54 @@ class BaseServiceWindow(QMainWindow):
             on_finished=on_finished,
             error_callback=on_error,
         )
+
+    def _run_in_ui_blocking(self, callable):
+        """Выполняет callable в UI-потоке и возвращает результат.
+
+        Вход: callable — вызываемый объект без аргументов.
+        Выход: результат callable().
+
+        Роль: из фонового потока — через QMetaObject.invokeMethod
+              с BlockingQueuedConnection (ждём завершения слота
+              в UI-потоке). Из UI-потока или при отсутствии
+              QApplication — прямой вызов. Промежуточный результат
+              хранится в self._ui_result.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return callable()
+        if QThread.currentThread() == app.thread():
+            return callable()
+
+        self._ui_callable = callable
+        self._ui_result = None
+        QMetaObject.invokeMethod(
+            self,
+            "_execute_ui_callable_slot",
+            Qt.BlockingQueuedConnection,
+        )
+        return self._ui_result
+
+    @Slot()
+    def _execute_ui_callable_slot(self) -> None:
+        """Слот для _run_in_ui_blocking: выполняет сохранённый callable.
+
+        Вход: нет (callable берётся из self._ui_callable).
+        Выход: нет (результат в self._ui_result).
+
+        Роль: обёрнут в try/except — исключение не должно валить
+              UI-поток. При ошибке self._ui_result = None и critical
+              в лог окна.
+        """
+        try:
+            self._ui_result = self._ui_callable()
+        except Exception as e:
+            self._ui_result = None
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в UI-callable: {e}",
+                    can_influence=False,
+                )
 
     # ============================================================
     # Аккумуляция продаж
