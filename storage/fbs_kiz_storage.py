@@ -178,6 +178,48 @@ class KizStorage(DictJsonStorage):
         }
         self._batcher.mark_dirty()
 
+    def remove_many(self, keys) -> int:
+        """Удаляет пачку записей по ключам.
+
+        Вход:
+            keys — итерируемое ключей (КИЗов). Пустое → no-op.
+
+        Выход:
+            int — сколько ключей реально удалено (которых не было
+            в _data, не считаются).
+
+        Роль:
+            Единая точка массового удаления. Правки — только в
+            памяти и через _batcher.mark_dirty(). save() не
+            вызывается: сохранение на диск делает либо внешний
+            batch(), либо явный flush().
+        """
+        removed = 0
+        for kiz in keys:
+            if kiz in self._data:
+                del self._data[kiz]
+                removed += 1
+        if removed > 0:
+            self._batcher.mark_dirty()
+        return removed
+
+    def remove_kizs(self, keys) -> int:
+        """Удаляет пачку КИЗов из хранилища.
+
+        Вход:
+            keys — итерируемое ключей (КИЗов).
+
+        Выход:
+            int — сколько записей реально удалено.
+
+        Роль:
+            Тонкая обёртка над KizStorage.remove_many. Своего
+            логирования нет: факт изменения памяти и пометка
+            dirty — ответственность storage. Сохранение на диск —
+            через self.batch() снаружи.
+        """
+        return self.storage.remove_many(keys)
+
     def clean_old_entries(self, months: int = 1) -> int:
         """Удаляет записи старше N месяцев по дате продажи.
 

@@ -237,6 +237,23 @@ class ChzMPWindow(BaseServiceWindow):
         self.btn_generate_sales.setEnabled(False)
         self.btn_finalize_prices.setEnabled(False)
 
+    def _current_sellers(self) -> list:
+        """Возвращает продавцов с восстановленными связями Brand.
+
+        Вход: нет.
+        Выход: list[Seller] с заполненным .brands.
+
+        Роль:
+            Override базового _current_sellers. Для шага
+            «Сбор данных» нужны продавцы с полной информацией
+            о брендах — иначе filter_files не соберёт маппинг
+            «ключ бренда → Brand».
+        """
+        return (
+            self.main_window.sellers_brands_service
+            .get_sellers_with_brands()
+        )
+
     def cleanup(self) -> None:
         """Сброс списков файлов при закрытии окна."""
         self.list_fbs.clear_files()
@@ -340,7 +357,9 @@ class ChzMPWindow(BaseServiceWindow):
         if not self._precheck_target_dir():
             return
 
-        service = FilterPreFinalService(self.log_manager_v2)
+        service = FilterPreFinalService(
+            self.main_window.kiz_validator, self.log_manager_v2,
+        )
         if self.logger:
             self.logger.debug(
                 "on_filter_prefinal: FilterPreFinalService создан"

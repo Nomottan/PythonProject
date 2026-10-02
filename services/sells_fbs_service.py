@@ -32,6 +32,7 @@ from utils.mp_readers import (
 from utils.sales_file_generator import SalesFileGenerator
 from utils.fbs_buferprices import FbsBufferPrices
 from services.kiz_validator import ValidationResult
+from utils.kiz_utils import KizUtils
 
 class PreparationService:
     """Сервис подготовки: копирование входных файлов в рабочую папку.
@@ -417,12 +418,40 @@ class FilterPreFinalService:
         filter_files(target_dir, sellers, log_callback).
     """
 
-    def __init__(self, log_manager_v2) -> None:
-        """Конструктор.  """
+    def __init__(self, kiz_validator, log_manager_v2) -> None:
+        """Конструктор.
+
+        Вход:
+            kiz_validator — KizValidator: на шаге фильтрации
+                            удаляются записи из used_kiz.json по
+                            брендам с requires_saving=False.
+            log_manager_v2 — LogManagerV2, фабрика логгеров V2.
+
+        Роль: сохраняет ссылки. Логгер создаётся в начале
+              filter_files, когда уже известна рабочая папка.
+        """
+        self.kiz_validator = kiz_validator
         self._log_manager_v2 = log_manager_v2
 
     def filter_files(self, target_dir, sellers) -> None:
-        """Запускает фильтрацию. """
+        """Фильтрует предитоговые файлы и чистит used_kiz.json.
+
+        Вход:
+            target_dir — корневая папка задачи.
+            sellers — список Seller с восстановленными .brands
+                      (см. ChzMPWindow._current_sellers).
+
+        Выход: нет.
+
+        Роль:
+            Основной цикл — существующая фильтрация строк по
+            статусу и владельцу + перезапись файлов. Второй цикл —
+            сбор пар {kiz: brand_key} из уже отфильтрованных файлов.
+            Пересечение с used_kiz.json + маппинг key → Brand +
+            KizUtils.filter_for_removal определяют, какие записи
+            удалить. Удаление — batch-контекстом, чтобы был один
+            физический save на выходе.
+        """
         ctx = TaskContext(
             target_dir,
             "ЧЗ_МП_{date}",
@@ -440,8 +469,14 @@ class FilterPreFinalService:
         logger.report("=== ФИЛЬТРАЦИЯ ПРЕДИТОГОВЫХ ФАЙЛОВ ===")
         logger.report(f"Рабочая папка: {ctx.work_folder}")
 
+        # NEW: загружаем used_kiz.json — по нему будем считать пересечение.
+        self.kiz_validator.load()
+
         allowed_companies = TextUtils.get_allowed_companies(sellers)
 
+        # ------------------------------------------------------------------
+        # 1. Основной цикл: фильтрация строк в предитоговых файлах.
+        # ------------------------------------------------------------------
         for seller in sellers:
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
@@ -511,6 +546,116 @@ class FilterPreFinalService:
             WorkbookWriter.overwrite(
                 file_path, headers, rows_for_write,
                 sheet_name=original_sheet_title, logger=logger,
+            )
+
+        # ------------------------------------------------------------------
+        # 2. NEW: второй цикл — сбор пар {kiz: brand_key} из
+        #    отфильтрованных файлов. Первое вхождение КИЗа приоритетно
+        #    (порядок sellers задаёт обход).
+        # ------------------------------------------------------------------
+        kiz_to_brand_key: dict = {}
+        for seller in sellers:
+            file_path = ctx.processing_dir / f"{seller.name}.xlsx"
+            if not file_path.is_file():
+                continue
+
+            wb = WorkbookOpener.open(
+                file_path, logger=logger,
+                description="предитоговый файл", read_only=True,
+            )
+            if wb is None:
+                continue
+
+            try:
+                sheet = wb.active
+                for row_idx, row in enumerate(
+                    sheet.iter_rows(min_row=2, values_only=True),
+                    start=2,
+                ):
+                    parsed = PreFinalRow.from_row(row)
+                    if parsed is None:
+                        continue
+                    brand_key = TextUtils.normalize(parsed.brand)
+                    if parsed.kiz in kiz_to_brand_key:
+                        continue
+                    kiz_to_brand_key[parsed.kiz] = brand_key
+            finally:
+                wb.close()
+
+        # ------------------------------------------------------------------
+        # 3. Пересечение с used_kiz.json + маппинг key → Brand + отбор.
+        # ------------------------------------------------------------------
+        used_kiz_keys = set(self.kiz_validator.storage.get_all().keys())
+        intersection = {
+            k: v for k, v in kiz_to_brand_key.items()
+            if k in used_kiz_keys
+        }
+
+        # Уникальные Brand из sellers[].brands, дедуп по имени.
+        seen_names: set = set()
+        unique_brands: list = []
+        for seller in sellers:
+            for brand in seller.brands:
+                if brand.name not in seen_names:
+                    seen_names.add(brand.name)
+                    unique_brands.append(brand)
+
+        brand_key_to_brand = TextUtils.build_key_mapping(
+            unique_brands,
+            key_extractor=lambda b: b.get_all_keys(),
+            logger=logger,
+        )
+
+        total_in_files = len(kiz_to_brand_key)
+
+        to_delete, stats = KizUtils.filter_for_removal(
+            intersection, brand_key_to_brand, logger=logger,
+        )
+
+        # ------------------------------------------------------------------
+        # 4. Сводка.
+        # ------------------------------------------------------------------
+        logger.report("\n=== СВОДКА ПО ФИЛЬТРАЦИИ КИЗОВ ===")
+        logger.report(
+            f"Всего уникальных КИЗов в предитоговых файлах "
+            f"после фильтрации: {total_in_files}"
+        )
+        logger.report(
+            f"Из них есть в used_kiz.json: {stats['total']}"
+        )
+        logger.report(f"С пустым брендом: {stats['empty_brand']}")
+        logger.report(f"С неизвестным брендом: {stats['unknown_brand']}")
+        logger.report(f"Распознано брендов: {stats['recognized']}")
+        logger.report(
+            f"requires_saving=True → сохранено: {stats['saved']}"
+        )
+        logger.report(
+            f"requires_saving=False → удалено: {stats['deleted']}"
+        )
+        if stats["top_deleted"]:
+            logger.report(
+                "Топ-10 брендов по количеству удалённых КИЗов:"
+            )
+            for i, (brand_name, count) in enumerate(
+                stats["top_deleted"], start=1,
+            ):
+                logger.report(f"  {i}. {brand_name}: {count}")
+
+        # ------------------------------------------------------------------
+        # 5. Удаление из used_kiz.json — одним batch-контекстом.
+        # ------------------------------------------------------------------
+        if to_delete:
+            X = len(used_kiz_keys)
+            with self.kiz_validator.batch():
+                deleted = self.kiz_validator.remove_kizs(to_delete)
+            Y = X - deleted
+            if deleted != len(to_delete):
+                logger.warning(
+                    f"remove_kizs: запрошено удалить {len(to_delete)}, "
+                    f"реально удалено {deleted} – расхождение"
+                )
+            logger.info(
+                f"used_kiz.json: было {X}, стало {Y}, удалено {deleted}"
             )
 
         logger.report("\n=== ФИЛЬТРАЦИЯ ЗАВЕРШЕНА ===")

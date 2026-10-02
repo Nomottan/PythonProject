@@ -37,6 +37,22 @@ class Brand:
         """Возвращает список имён продавцов, связанных с брендом."""
         return [s.name for s in self.sellers]
 
+    def get_all_keys(self) -> list[str]:
+        """Возвращает все ключи бренда для распознавания.
+
+        Вход: нет.
+        Выход: новый список: self.keys + self.name (name последним).
+
+        Роль:
+            Единая точка для маппинга «ключ → Brand» в
+            TextUtils.build_key_mapping. Возвращает новый список,
+            чтобы вызывающий код не мог случайно мутировать
+            self.keys. Порядок keys → name детерминирован —
+            повторяемость маппинга. Нормализация (lower/strip) —
+            на стороне build_key_mapping.
+        """
+        return list(self.keys) + [self.name]
+
     def to_dict(self) -> dict:
         """Сериализация для сохранения в JSON."""
         return {

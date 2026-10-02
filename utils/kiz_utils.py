@@ -187,6 +187,88 @@ class KizUtils:
                 result.append(full_kiz[:31])
         return result
 
+    @staticmethod
+    def filter_for_removal(kiz_to_brand_key, brand_key_to_brand,
+                           logger=None):
+        """Отбирает КИЗы, чей бренд помечен requires_saving=False.
+
+        Вход:
+            kiz_to_brand_key — dict[str, str]: {kiz: normalized_brand_key}.
+            brand_key_to_brand — dict[str, Brand]: {normalized_key: Brand}.
+            logger — LoggerV2 или None.
+
+        Выход:
+            (to_delete, stats):
+                to_delete — set[str]: КИЗы с requires_saving is False.
+                stats — dict с ключами:
+                    total, empty_brand, unknown_brand, recognized,
+                    saved, deleted, top_deleted.
+
+        Роль:
+            Матчинг — точное совпадение нормализованных строк.
+            Пустой brand_key — счётчик empty_brand, КИЗ сохраняется.
+            Неизвестный brand_key — счётчик unknown_brand, КИЗ
+            сохраняется. Известный brand — счётчик recognized и
+            развилка по requires_saving. top_deleted — топ-10
+            брендов по количеству удалённых КИЗов (по убыванию).
+        """
+        to_delete: set = set()
+        stats = {
+            "total": 0,
+            "empty_brand": 0,
+            "unknown_brand": 0,
+            "recognized": 0,
+            "saved": 0,
+            "deleted": 0,
+            "top_deleted": [],
+        }
+        top_deleted: dict = {}
+
+        for kiz, brand_key in kiz_to_brand_key.items():
+            if not brand_key:
+                stats["empty_brand"] += 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ {kiz} → brand_key '' → пустой бренд"
+                    )
+                continue
+
+            brand = brand_key_to_brand.get(brand_key)
+            if brand is None:
+                stats["unknown_brand"] += 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ {kiz} → brand_key '{brand_key}' → "
+                        f"Brand не найден"
+                    )
+                continue
+
+            stats["recognized"] += 1
+
+            if brand.requires_saving is False:
+                to_delete.add(kiz)
+                stats["deleted"] += 1
+                top_deleted[brand.name] = top_deleted.get(brand.name, 0) + 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ {kiz} → brand_key '{brand_key}' → "
+                        f"Brand {brand.name} → удалён"
+                    )
+            else:
+                stats["saved"] += 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ {kiz} → brand_key '{brand_key}' → "
+                        f"Brand {brand.name} → сохранён"
+                    )
+
+        stats["total"] = len(kiz_to_brand_key)
+        stats["top_deleted"] = sorted(
+            top_deleted.items(), key=lambda x: -x[1],
+        )[:10]
+
+        return to_delete, stats
+
 @dataclass
 class ChosenKiz:
     """Выбранное вхождение КИЗа из группы дубликатов.
