@@ -73,7 +73,7 @@ class PlannerDayPickerWidget(QWidget):
 
         # --- Превью выбранных чисел ---
         self._preview_label = LabelFactory.create_label(
-            self, "", bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            self, "", bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignCenter, font_size=11, word_wrap=True,
         )
         layout.addWidget(self._preview_label)

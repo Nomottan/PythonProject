@@ -275,9 +275,14 @@ class ColorCalculator:
         text = []
         for c in (r, g, b):
             if target >= c:
-                text.append(target + (target - c) // 10)
+                text.append(
+                    ColorCalculator.clamp(target + (target - c) // 10)
+                )
+
             else:
-                text.append(target - (c - target) // 10)
+                text.append(
+                    ColorCalculator.clamp(target - (c - target) // 10)
+                )
 
         return ColorCalculator.to_str(tuple(text))
 

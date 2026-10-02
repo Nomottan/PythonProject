@@ -69,7 +69,7 @@ class Stage1ReviewDialog(QDialog):
                 f"Найдено {len(matches)} жёстких совпадений.\n"
                 f"Снимите галочку, чтобы исключить сопоставление."
             ),
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignCenter,
         )
         content_layout.addWidget(info_label)
@@ -225,7 +225,7 @@ class ConfirmMatchDialog(QDialog):
 
         content_layout.addWidget(LabelFactory.create_label(
             self, "Товар из листа поставки:",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
         content_layout.addWidget(LabelFactory.create_label(
@@ -235,7 +235,7 @@ class ConfirmMatchDialog(QDialog):
         ))
         content_layout.addWidget(LabelFactory.create_label(
             self, f"Количество: {supply_item.get('count', '?')}",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
 
@@ -245,7 +245,7 @@ class ConfirmMatchDialog(QDialog):
 
         content_layout.addWidget(LabelFactory.create_label(
             self, "Найденный кандидат в поставках:",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
         content_layout.addWidget(LabelFactory.create_label(
@@ -255,13 +255,13 @@ class ConfirmMatchDialog(QDialog):
         ))
         content_layout.addWidget(LabelFactory.create_label(
             self, f"Количество: {candidate_item.get('count', '?')}",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
 
         content_layout.addWidget(LabelFactory.create_label(
             self, f"Схожесть: {int(similarity_score * 100)}%",
-            bg_color=(0, 0, 0, 0), text_color="#88dd88",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
 
@@ -342,17 +342,17 @@ class ManualMatchDialog(QDialog):
 
         content_layout.addWidget(LabelFactory.create_label(
             self, "Товар из листа поставки:",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
         content_layout.addWidget(LabelFactory.create_label(
             self, supply_item['name'],
-            bg_color=(0, 0, 0, 0), text_color="#ffffff", word_wrap=True,
+            bg_color=(0, 0, 0, 0), text_color=None, word_wrap=True,
             padding="4px", border="1px solid #5a4a5c", border_radius=3,
         ))
         content_layout.addWidget(LabelFactory.create_label(
             self, f"Количество: {supply_item.get('count', '?')}",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft,
         ))
 
@@ -363,7 +363,7 @@ class ManualMatchDialog(QDialog):
         # Поле поиска.
         search_layout = QHBoxLayout()
         search_layout.addWidget(LabelFactory.create_label(
-            self, "Поиск:", bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            self, "Поиск:", bg_color=(0, 0, 0, 0), text_color=None,
         ))
         self.search_edit = InputWidgetFactory.create_default_line_edit(
             self, placeholder="Введите текст для фильтрации...",

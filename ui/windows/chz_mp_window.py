@@ -97,14 +97,14 @@ class ChzMPWindow(BaseServiceWindow):
             self,
             fixed_width=105,
             bg_color=(30, 20, 35, 0.3),
-            text_color="#d4d4d4",
+            text_color=None,
             font_size=10,
         )
         self.list_reports = ListWidgetFactory.create_file_list_widget(
             self,
             fixed_width=105,
             bg_color=(30, 20, 35, 0.3),
-            text_color="#d4d4d4",
+            text_color=None,
             font_size=10,
         )
 
@@ -125,7 +125,6 @@ class ChzMPWindow(BaseServiceWindow):
                 "После выводи их из оборота"
             ),
             bg_color=(0, 0, 0, 0),
-            text_color="#c2c2c2",
             padding="0px",
             border_radius=0,
             alignment=Qt.AlignCenter,

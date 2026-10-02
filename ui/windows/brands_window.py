@@ -316,7 +316,9 @@ class BrandEditDialog(BaseEditDialog):
             self, "Ключи:", alignment=Qt.AlignLeft,
         ))
         self.keys_list = EditableListWidget(
-            self, initial_items=self.brand.keys, add_text="+ добавить ключ",
+            self, initial_items=self.brand.keys,
+            add_text="+ добавить ключ",
+            bg_color=self.bg_color,
         )
         left_layout.addWidget(self.keys_list)
         cols_layout.addWidget(left_widget)
@@ -425,7 +427,7 @@ class BrandEditDialog(BaseEditDialog):
 
         name_lbl = LabelFactory.create_label(
             self, seller.name,
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0),
             alignment=Qt.AlignLeft | Qt.AlignVCenter,
         )
         row_layout.addWidget(name_lbl)

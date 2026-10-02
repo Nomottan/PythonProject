@@ -157,7 +157,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
             # Сначала label с днём — потом чекбокс без текста.
             day_lbl = LabelFactory.create_label(
                 cell, day_name,
-                bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                bg_color=(0, 0, 0, 0), text_color=None,
                 font_size=11, padding="0px",
             )
             cell_l.addWidget(day_lbl)
@@ -197,7 +197,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
 
         self._monthdays_label = LabelFactory.create_label(
             self._monthdays_widget, "",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4", font_size=11,
+            bg_color=(0, 0, 0, 0), text_color=None, font_size=11,
         )
         md_l.addWidget(self._monthdays_label)
         md_l.addStretch()
@@ -213,7 +213,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         """Быстрый хелпер для лейблов полей."""
         return LabelFactory.create_label(
             self, text, bg_color=(0, 0, 0, 0),
-            text_color="#d4d4d4", font_size=11,
+            text_color=None, font_size=11,
         )
 
     # ---------- Триггеры ----------

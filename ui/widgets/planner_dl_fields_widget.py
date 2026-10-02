@@ -73,7 +73,7 @@ class DeadlineFieldsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        lbl_kw = {"bg_color": (0, 0, 0, 0), "text_color": "#d4d4d4",
+        lbl_kw = {"bg_color": (0, 0, 0, 0), "text_color": None,
                   "font_size": 11}
 
         # --- Инклюзивный блок: дата + часы + минуты ---

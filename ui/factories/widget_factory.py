@@ -36,7 +36,7 @@ class ListWidgetFactory:
                            horizontal_scroll=True, vertical_scroll=True,
                            selection_mode=QListWidget.SingleSelection,
                            bg_color=(30, 20, 35, 0.3),
-                           text_color="#d4d4d4", border_radius=5,
+                           text_color=None, border_radius=5,
                            padding="0px", border="none", font_size=10,
                            object_name=None, cursor_shape=None,
                            extra_style=""):
@@ -96,7 +96,7 @@ class ListWidgetFactory:
     @staticmethod
     def create_file_list_widget(parent, fixed_width=None, fixed_height=None,
                                 bg_color=(30, 20, 35, 0.3),
-                                text_color="#d4d4d4", border_radius=5,
+                                text_color=None, border_radius=5,
                                 padding="0px", font_size=10,
                                 object_name=None):
         """Создаёт FileListWidget — список файлов с крестиком.

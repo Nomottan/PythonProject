@@ -38,7 +38,7 @@ class StatusLabel(QLabel):
     status_update = Signal(str)
 
     def __init__(self, parent=None, text="", bg_color=(0, 0, 0, 0),
-                 text_color="#d4d4d4", padding="10px", border_radius=0,
+                 text_color=None, padding="10px", border_radius=0,
                  alignment=Qt.AlignCenter, font_size=None,
                  font_weight=None):
         """Конструктор.
@@ -159,7 +159,7 @@ class LabelFactory:
             parent,
             text=text,
             bg_color=(0, 0, 0, 0),
-            text_color="#d4d4d4",
+            text_color=None,
             alignment=alignment,
             **kwargs
         )

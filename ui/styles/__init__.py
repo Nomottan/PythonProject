@@ -22,6 +22,7 @@ from .qss import QssBuilder
 from .scrollbar import ScrollbarStyle
 from .window import WindowStyle
 from .widget_style import WidgetStyle
+from .bg_resolver import BackgroundResolver
 
 __all__ = [
     "ColorCalculator",
@@ -30,4 +31,5 @@ __all__ = [
     "ScrollbarStyle",
     "WindowStyle",
     "WidgetStyle",
+    "BackgroundResolver",
 ]

@@ -32,7 +32,7 @@ class InputWidgetFactory:
 
     @staticmethod
     def create_line_edit(parent, text="", placeholder="",
-                         bg_color=(60, 50, 70, 0.9), text_color="#d4d4d4",
+                         bg_color=(60, 50, 70, 0.9), text_color=None,
                          border="1px solid #5a4a5c", border_radius=3,
                          padding="3px", fixed_size=None,
                          object_name=None, cursor_shape=None,
@@ -85,7 +85,7 @@ class InputWidgetFactory:
 
     @staticmethod
     def create_checkbox(parent, text, checked=False,
-                        bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                        bg_color=(0, 0, 0, 0), text_color=None,
                         border="none", border_radius=0, padding="0px",
                         fixed_size=None, object_name=None, cursor_shape=None,
                         font_size=None, font_weight=None,
@@ -137,7 +137,7 @@ class InputWidgetFactory:
 
     @staticmethod
     def create_combo_box(parent, items=None, current_index=0,
-                         bg_color=(60, 50, 70, 0.9), text_color="#d4d4d4",
+                         bg_color=(60, 50, 70, 0.9), text_color=None,
                          border="1px solid #5a4a5c", border_radius=3,
                          padding="3px", fixed_size=None,
                          object_name=None, cursor_shape=None,
@@ -191,7 +191,7 @@ class InputWidgetFactory:
             parent,
             text=text,
             bg_color=(60, 50, 70, 0.9),
-            text_color="#d4d4d4",
+            text_color=None,
             border="1px solid #5a4a5c",
             border_radius=3,
             padding="3px",
@@ -200,7 +200,7 @@ class InputWidgetFactory:
 
     @staticmethod
     def create_text_edit(parent, text="", placeholder="",
-                         bg_color=(60, 50, 70, 0.9), text_color="#d4d4d4",
+                         bg_color=(60, 50, 70, 0.9), text_color=None,
                          border="1px solid #5a4a5c", border_radius=5,
                          padding="5px", fixed_size=None,
                          object_name=None, cursor_shape=None,
@@ -245,7 +245,7 @@ class InputWidgetFactory:
     @staticmethod
     def create_spin_box(parent, min_value=0, max_value=999, value=0,
                         prefix="", suffix="",
-                        bg_color=(60, 50, 70, 0.9), text_color="#d4d4d4",
+                        bg_color=(60, 50, 70, 0.9), text_color=None,
                         border="1px solid #5a4a5c", border_radius=5,
                         padding="3px", fixed_size=None,
                         object_name=None, cursor_shape=None,
@@ -290,7 +290,7 @@ class InputWidgetFactory:
     @staticmethod
     def create_datetime_edit(parent, value=None,
                              bg_color=(60, 50, 70, 0.9),
-                             text_color="#d4d4d4",
+                             text_color=None,
                              border="1px solid #5a4a5c", border_radius=5,
                              padding="3px", fixed_size=None,
                              object_name=None, cursor_shape=None,
@@ -329,7 +329,7 @@ class InputWidgetFactory:
     @staticmethod
     def create_date_edit(parent, value=None,
                          bg_color=(60, 50, 70, 0.9),
-                         text_color="#d4d4d4",
+                         text_color=None,
                          border="1px solid #5a4a5c", border_radius=5,
                          padding="3px", fixed_size=None,
                          object_name=None, cursor_shape=None,

@@ -15,6 +15,7 @@ from .qss import QssBuilder
 from .scrollbar import ScrollbarStyle
 from .window import WindowStyle
 from .selectors import SelectorBuilder
+from .bg_resolver import BackgroundResolver
 
 
 class WidgetStyle:
@@ -57,6 +58,30 @@ class WidgetStyle:
             current = widget.styleSheet()
             widget.setStyleSheet(current + extra_style)
 
+    @staticmethod
+    def _effective_text_for(widget, bg_color, forced=None):
+        """Возвращает контрастный цвет текста от эффективного фона.
+
+        Вход:
+            widget — целевой QWidget (для поиска родителя).
+            bg_color — фон виджета (возможно, полупрозрачный).
+            forced — явный цвет текста. Если задан — возвращается
+                     как есть без расчёта.
+
+        Выход:
+            CSS-строка цвета текста.
+
+        Роль:
+            Единая точка расчёта цвета текста во всех apply_*.
+            Если forced задан — резолвер не вызывается. Иначе
+            эффективный фон ищется через BackgroundResolver,
+            контраст считается через ColorCalculator.text_for.
+        """
+        if forced is not None:
+            return forced
+        effective = BackgroundResolver.resolve_bg_color(widget, bg_color)
+        return ColorCalculator.text_for(effective)
+
     # ---------- Кнопки ----------
 
     @staticmethod
@@ -85,7 +110,7 @@ class WidgetStyle:
               extra_style.
         """
         bg_c = ColorCalculator.to_str(bg_color)
-        text_c = ColorCalculator.text_for(bg_color, text_color)
+        text_c = WidgetStyle._effective_text_for(btn, bg_color, text_color)
         hover_c = hover_color if hover_color else ColorCalculator.hover(bg_color)
         pressed_c = pressed_color if pressed_color else ColorCalculator.pressed(bg_color)
         disabled_c = (disabled_color if disabled_color
@@ -146,7 +171,7 @@ class WidgetStyle:
 
         Роль: единая сборка QSS меток.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(lbl, bg_color, text_color)
 
         selector = SelectorBuilder.build("QLabel", lbl.objectName() or None)
 
@@ -179,7 +204,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS поля ввода.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(edit, bg_color, text_color)
         selector = SelectorBuilder.build("QLineEdit", edit.objectName() or None)
         style = QssBuilder.base_rule(
             selector,
@@ -202,7 +227,7 @@ class WidgetStyle:
                        indicator_size=(16, 16),
                        indicator_bg_color=(200, 200, 200),
                        indicator_border="1px solid #888888",
-                       indicator_checked_bg_color=(180, 180, 180),
+                       indicator_checked_bg_color=(120, 120, 120),
                        indicator_border_radius=3,
                        extra_style="") -> None:
         """QSS для QCheckBox.
@@ -213,7 +238,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS чекбокса.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(cb, bg_color, text_color)
         selector = SelectorBuilder.build("QCheckBox", cb.objectName() or None)
 
         style = QssBuilder.base_rule(
@@ -246,7 +271,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS выпадающего списка.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(combo, bg_color, text_color)
         selector = SelectorBuilder.build("QComboBox", combo.objectName() or None)
         style = QssBuilder.base_rule(
             selector,
@@ -273,7 +298,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS многострочного поля.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(te, bg_color, text_color)
         selector = SelectorBuilder.build("QTextEdit", te.objectName() or None)
         style = QssBuilder.base_rule(
             selector,
@@ -302,7 +327,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS числового поля.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(spin, bg_color, text_color)
         selector = SelectorBuilder.build("QSpinBox", spin.objectName() or None)
         style = QssBuilder.base_rule(
             selector,
@@ -330,7 +355,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS поля даты/времени.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(dt, bg_color, text_color)
         selector = SelectorBuilder.build("QDateTimeEdit", dt.objectName() or None)
         style = QssBuilder.base_rule(
             selector,
@@ -357,7 +382,7 @@ class WidgetStyle:
         Выход: нет.
         Роль: единая сборка QSS поля даты.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(de, bg_color, text_color)
         selector = SelectorBuilder.build("QDateEdit", de.objectName() or None)
         style = QssBuilder.base_rule(
             selector,
@@ -386,7 +411,7 @@ class WidgetStyle:
         Роль: единая сборка QSS списка. Добавляет ::item с
               padding=2px.
         """
-        text_c = text_color if text_color is not None else ColorCalculator.text_for(bg_color)
+        text_c = WidgetStyle._effective_text_for(lw, bg_color, text_color)
         selector = SelectorBuilder.build("QListWidget", lw.objectName() or None)
         style = QssBuilder.base_rule(
             selector,

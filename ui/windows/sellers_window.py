@@ -172,7 +172,7 @@ class SellersWindow(QMainWindow):
         line_edit = InputWidgetFactory.create_line_edit(
             self, text=seller.name,
             bg_color=(100, 80, 130, 0.9),
-            text_color="white",
+            text_color=None,
             border_radius=5,
             padding="5px",
         )
@@ -294,14 +294,14 @@ class CompanyDialog(BaseEditDialog):
                 (
                     LabelFactory.create_label(
                         self, "ИНН:",
-                        bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                        bg_color=(0, 0, 0, 0), text_color=None,
                     ),
                     self.inn_edit,
                 ),
                 (
                     LabelFactory.create_label(
                         self, "Юр. лицо:",
-                        bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                        bg_color=(0, 0, 0, 0), text_color=None,
                     ),
                     self.company_edit,
                 ),
@@ -400,7 +400,7 @@ class BrandChecklistDialog(BaseEditDialog):
         for brand in selected:
             cb = InputWidgetFactory.create_checkbox(
                 self, brand.name, checked=True,
-                bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                bg_color=(0, 0, 0, 0), text_color=None,
                 object_name="brand_checkbox",
             )
             self.checkboxes.append((cb, brand))
@@ -409,7 +409,7 @@ class BrandChecklistDialog(BaseEditDialog):
         for brand in unselected:
             cb = InputWidgetFactory.create_checkbox(
                 self, brand.name, checked=False,
-                bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                bg_color=(0, 0, 0, 0), text_color=None,
                 object_name="brand_checkbox",
                 indicator_bg_color=(100, 80, 70),
                 indicator_checked_bg_color=(150, 200, 250),

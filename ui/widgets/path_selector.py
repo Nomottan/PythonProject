@@ -33,7 +33,7 @@ class PathSelector(QWidget):
             self,
             text=initial_path or "Путь не выбран",
             bg_color=(64, 48, 66, 128),
-            text_color="#d4d4d4",
+            text_color=None,
             padding="4px 8px",
             border_radius=5,
             alignment=Qt.AlignLeft | Qt.AlignVCenter,

@@ -55,7 +55,7 @@ class FileListWidget(QListWidget):
 
     def __init__(self, parent=None,
                  bg_color=(30, 20, 35, 0.3),
-                 text_color="#d4d4d4",
+                 text_color=None,
                  border_radius=5, padding="0px", font_size=10,
                  object_name=None, extra_style=""):
         """Конструктор.

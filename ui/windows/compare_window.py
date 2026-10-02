@@ -147,7 +147,6 @@ class CompareWindow(BaseServiceWindow):
                 "Шаг 6: Сформируйте отчёт"
             ),
             bg_color=(0, 0, 0, 0),
-            text_color="#c2c2c2",
             padding="0px",
             border_radius=0,
             alignment=Qt.AlignCenter,
@@ -172,7 +171,7 @@ class CompareWindow(BaseServiceWindow):
         self.file_label = LabelFactory.create_label(
             self, "Файл не выбран",
             bg_color=(64, 48, 66, 128),
-            text_color="#d4d4d4",
+            text_color=None,
             padding="4px 8px",
             border_radius=5,
             alignment=Qt.AlignLeft | Qt.AlignVCenter,
@@ -196,7 +195,7 @@ class CompareWindow(BaseServiceWindow):
         self.step_label = LabelFactory.create_label(
             self, "Текущий шаг: Ожидание",
             bg_color=(0, 0, 0, 0),
-            text_color="#d4d4d4",
+            text_color=None,
             alignment=Qt.AlignLeft | Qt.AlignVCenter,
             font_size=12,
             font_weight="bold",
@@ -257,7 +256,7 @@ class CompareWindow(BaseServiceWindow):
             fixed_width=220,
             fixed_height=200,
             bg_color=(30, 20, 35, 0.3),
-            text_color="#d4d4d4",
+            text_color=None,
             font_size=10,
         )
         right_layout.addWidget(self.list_supply)

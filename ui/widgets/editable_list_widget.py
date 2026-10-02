@@ -7,19 +7,20 @@ class EditableListWidget(QWidget):
     Виджет для управления списком строк с возможностью добавления/удаления.
     Используется в StringListDialog, BrandEditDialog и подобных.
     """
-    def __init__(self, parent=None, initial_items=None, add_text="+ Добавить"):
+    def __init__(self, parent=None, initial_items=None,
+                 add_text="+ Добавить", bg_color=(25, 25, 45)):
         super().__init__(parent)
         self.items = initial_items or []
-        self._build_ui(add_text)
+        self._build_ui(add_text, bg_color)
 
-    def _build_ui(self, add_text):
+    def _build_ui(self, add_text, bg_color):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(5)
 
         # Прокручиваемая область для строк
         scroll, self.content_widget, self.content_layout = ListWidgetFactory.create_scroll_container(
-            self, spacing=2
+            self, spacing=2, bg_color=bg_color,
         )
         layout.addWidget(scroll)
 

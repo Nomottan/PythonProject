@@ -339,8 +339,7 @@ class _BasePlannerListWindow(QMainWindow):
         # Остальные — пустой лейбл для выравнивания колонок.
         return LabelFactory.create_label(
             self, text="", bg_color=(0, 0, 0, 0),
-            text_color="#d4d4d4", alignment=Qt.AlignCenter,
-            min_size=(100, 0),
+            alignment=Qt.AlignCenter, min_size=(100, 0),
         )
 
     # ---------- Очистка / закрытие ----------

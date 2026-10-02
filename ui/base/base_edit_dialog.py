@@ -62,8 +62,11 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
                              LOGGER_SOURCE у наследника — создаётся
                              self.logger.
 
-        Роль: вызывает setup_dialog_frame (из DialogSetupMixin),
-              получает content_layout и передаёт его в _build_content.
+        Роль: сохраняет self.bg_color для наследников (расчёт
+                  производных цветов, поиск эффективного фона),
+                  вызывает setup_dialog_frame (из DialogSetupMixin),
+                  получает content_layout и передаёт его
+                  в _build_content.
         """
         super().__init__(parent)
         self._result = None
@@ -75,7 +78,7 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
                 source=self.LOGGER_SOURCE,
                 domain=self.LOGGER_DOMAIN,
             )
-
+        self.bg_color = bg_color
         # Настраиваем каркас и получаем layout для контента.
         content_layout = self.setup_dialog_frame(
             parent=parent,

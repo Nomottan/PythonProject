@@ -79,7 +79,7 @@ class NewTaskDialog(BaseTaskDialog):
         self.task_edit = InputWidgetFactory.create_line_edit(
             self,
             bg_color=(85, 60, 42, 0.9),
-            text_color="#d4d4d4",
+            text_color=None,
             border="1px solid #6b4a33",
             border_radius=3,
             padding="3px",
@@ -186,7 +186,7 @@ class NewTaskDialog(BaseTaskDialog):
         self._event_date_edit = InputWidgetFactory.create_line_edit(
             self._event_date_row,
             bg_color=(85, 60, 42, 0.9),
-            text_color="#d4d4d4",
+            text_color=None,
             border="1px solid #6b4a33",
             border_radius=3,
             padding="3px",
@@ -357,7 +357,7 @@ class DeadlineEditDialog(BaseTaskDialog):
         type_row_layout.setSpacing(6)
         type_row_layout.addWidget(LabelFactory.create_label(
             type_row, "Тип:",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4", font_size=11,
+            bg_color=(0, 0, 0, 0), text_color=None, font_size=11,
         ))
         self.deadline_type_combo = InputWidgetFactory.create_combo_box(
             type_row,

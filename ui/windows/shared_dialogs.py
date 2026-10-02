@@ -148,7 +148,7 @@ class AveragePriceInputDialog(BaseEditDialog):
                 f"{self._seller_name}\nУкажите цену"
             ),
             bg_color=(0, 0, 0, 0),
-            text_color="#d4d4d4",
+            text_color=None,
             alignment=Qt.AlignCenter,
             word_wrap=True,
         )
@@ -262,7 +262,7 @@ class PricesEditWindow(BaseEditDialog):
 
             name_label = LabelFactory.create_label(
                 self, seller.name,
-                bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+                bg_color=(0, 0, 0, 0), text_color=None,
                 alignment=Qt.AlignLeft | Qt.AlignVCenter,
             )
             row_layout.addWidget(name_label, stretch=1)

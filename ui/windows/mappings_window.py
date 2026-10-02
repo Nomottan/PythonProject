@@ -328,7 +328,7 @@ class BrandDetailWindow(BaseEditDialog):
         label_text = f"{supply_name} → {candidate_name}"
         label = LabelFactory.create_label(
             self, label_text,
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
             alignment=Qt.AlignLeft | Qt.AlignVCenter,
         )
         row_layout.addWidget(label, stretch=1)
@@ -410,7 +410,7 @@ class BrandDetailWindow(BaseEditDialog):
 
         content_layout.addWidget(LabelFactory.create_label(
             dialog, "Выберите бренд для перемещения:",
-            bg_color=(0, 0, 0, 0), text_color="#d4d4d4",
+            bg_color=(0, 0, 0, 0), text_color=None,
         ))
 
         combo = InputWidgetFactory.create_combo_box(

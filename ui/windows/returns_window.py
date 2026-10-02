@@ -96,7 +96,6 @@ class ReturnsWindow(BaseServiceWindow):
                 "Прежде чем продавать в ЭДО верни КИЗы в оборот"
             ),
             bg_color=(35, 50, 60, 0),
-            text_color="#e0e0e0",
             padding="6px",
             border_radius=5,
             alignment=Qt.AlignCenter,
@@ -107,7 +106,7 @@ class ReturnsWindow(BaseServiceWindow):
         self.file_label = LabelFactory.create_label(
             self, "Файл не выбран",
             bg_color=(64, 48, 66, 128),
-            text_color="#d4d4d4",
+            text_color=None,
             padding="4px 8px",
             border_radius=5,
             alignment=Qt.AlignLeft | Qt.AlignVCenter,

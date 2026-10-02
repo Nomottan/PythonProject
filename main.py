@@ -61,14 +61,9 @@ class MainWindow(QMainWindow):
         self.paths = PathManager()
 
         # --- Тег активности дочерних окон ---
-        # Объявлен ДО LogManagerV2 — getter ссылается на атрибут,
-        # поэтому он должен существовать.
         self.active_child = None
 
         # --- debug_enabled из config.json напрямую ---
-        # main_config создаётся ниже, а его конструктор уже требует
-        # log_manager_v2. Порядок разрывается чтением конфига
-        # через json.load до создания менеджера логов.
         debug_enabled = self._read_debug_enabled()
 
         # --- Новая система логирования LoggerV2 ---
@@ -83,7 +78,6 @@ class MainWindow(QMainWindow):
         )
 
         # Счётчик тиков on_timer — для периодического debug.
-        # Срабатывает раз в 600 тиков (600 * 100 мс = 60 сек).
         self._timer_tick_count = 0
 
         # --- Конфиг + сервис продавцов/брендов ---
