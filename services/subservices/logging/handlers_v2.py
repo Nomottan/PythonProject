@@ -149,12 +149,14 @@ class HandlerV2(ABC):
     def _info_file_path(self) -> Path:
         """Путь к Info-файлу домена.
 
-        Выход: work_folder / "Логи" / f"Отчёт от {date}.txt".
+        Выход: work_folder / f"Отчёт от {date}.txt". work_folder
+               уже указывает на папку логов — дополнительная
+               вложенность «Логи» не добавляется.
         Роль: используется InfoFileHandler и как fallback
               для UI-каналов, когда active_child недоступен.
         """
         date_str = datetime.now().strftime("%d_%m_%Y")
-        return self._work_folder / "Логи" / f"Отчёт от {date_str}.txt"
+        return self._work_folder / f"Отчёт от {date_str}.txt"
 
     def _errors_file_path(self) -> Path:
         """Путь к errors.txt в корне приложения.
@@ -304,11 +306,13 @@ class InfoUIHandler(HandlerV2):
 class ReportHandler(HandlerV2):
     """Handler журнала сервиса (Channel.REPORT).
 
-    Роль: пишет пошаговый журнал сервиса. Имя файла берётся из
-          log_filename, если он передан при создании. Иначе —
-          fallback на исторический формат log_{source}.txt
-          (обратная совместимость с уже существующими логгерами,
-          которые создавались без явного имени файла).
+    Роль: пишет пошаговый журнал сервиса прямо в work_folder.
+          Имя файла берётся из log_filename, если он передан при
+          создании. Иначе — fallback на исторический формат
+          log_{source}.txt (обратная совместимость с уже
+          существующими логгерами, которые создавались без
+          явного имени файла). work_folder уже указывает на папку
+          логов — дополнительная вложенность не добавляется.
 
     Поля:
         _log_filename — имя файла журнала (например, "log_подготовка.txt"),
@@ -348,8 +352,8 @@ class ReportHandler(HandlerV2):
         Вход: record — запись лога.
         Выход: нет.
         Роль: вычисляет путь к файлу по правилу:
-              - если self._log_filename задан → work_folder/Логи/log_filename;
-              - иначе → work_folder/Логи/log_{source}.txt (fallback).
+              - если self._log_filename задан → work_folder/log_filename;
+              - иначе → work_folder/log_{source}.txt (fallback).
               Если work_folder не задан — писать некуда, молча выходим.
         """
         if self._work_folder is None:
@@ -358,14 +362,15 @@ class ReportHandler(HandlerV2):
         # с учётом log_filename. Fallback сохранён, чтобы старые вызовы
         # create_logger_v2(source, domain) без log_filename работали как раньше.
         filename = self._log_filename or f"log_{self._source}.txt"
-        path = self._work_folder / "Логи" / filename
+        path = self._work_folder / filename
         self._append_to_file(path, self._format_line(record))
 
 
 class WarningFileHandler(HandlerV2):
     """Handler файла предупреждений (Channel.WARNING_FILE).
 
-    Роль: пишет предупреждения в work_folder / "Логи" / "warnings.txt".
+    Роль: пишет предупреждения в work_folder / "warnings.txt".
+          work_folder уже указывает на папку логов.
     """
 
     def _should_handle(self, record: LogRecordV2) -> bool:
@@ -376,7 +381,7 @@ class WarningFileHandler(HandlerV2):
         """Пишет строку в warnings.txt."""
         if self._work_folder is None:
             return
-        path = self._work_folder / "Логи" / "warnings.txt"
+        path = self._work_folder / "warnings.txt"
         self._append_to_file(path, self._format_line(record))
 
 

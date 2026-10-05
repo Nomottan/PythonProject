@@ -83,7 +83,6 @@ class PreparationService:
         logger.report("Подготовка завершена.")
 
         # Очистка устаревших записей КИЗов
-        self.kiz_validator.set_log_path(ctx.logs_dir)
         self.kiz_validator.load()
         deleted = self.kiz_validator.clean_old_entries(months=1)
         logger.info(f"Очистка старых записей: удалено {deleted}.")
@@ -282,7 +281,6 @@ class ExportKizService:
         )
         logger.report(f"Рабочая папка: {ctx.work_folder}")
 
-        self.kiz_validator.set_log_path(ctx.logs_dir)
         self.kiz_validator.load()
 
         kiz_by_seller: dict[str, set] = {seller.name: set() for seller in sellers}
@@ -559,41 +557,41 @@ class FilterPreFinalService:
                 sheet_name=original_sheet_title, logger=logger,
             )
 
-            # ------------------------------------------------------------------
-            # 2. Второй цикл — сбор пар {kiz: (норм_ключ, сырая_строка)} из
-            #    отфильтрованных файлов. Первое вхождение КИЗа приоритетно
-            #    (порядок sellers задаёт обход).
-            # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # 2. Второй цикл — сбор пар {kiz: (норм_ключ, сырая_строка)} из
+        #    отфильтрованных файлов. Первое вхождение КИЗа приоритетно
+        #    (порядок sellers задаёт обход).
+        # ------------------------------------------------------------------
 
-            for seller in sellers:
-                file_path = ctx.processing_dir / f"{seller.name}.xlsx"
-                if not file_path.is_file():
-                    continue
+        for seller in sellers:
+            file_path = ctx.processing_dir / f"{seller.name}.xlsx"
+            if not file_path.is_file():
+                continue
 
-                wb = WorkbookOpener.open(
-                    file_path, logger=logger,
-                    description="предитоговый файл", read_only=True,
-                )
-                if wb is None:
-                    continue
+            wb = WorkbookOpener.open(
+                file_path, logger=logger,
+                description="предитоговый файл", read_only=True,
+            )
+            if wb is None:
+                continue
 
-                try:
-                    sheet = wb.active
-                    for row_idx, row in enumerate(
-                            sheet.iter_rows(min_row=2, values_only=True),
-                            start=2,
-                    ):
-                        parsed = PreFinalRow.from_row(row)
-                        if parsed is None:
-                            continue
-                        if parsed.kiz in kiz_to_brand_data:
-                            continue
-                        kiz_to_brand_data[parsed.kiz] = (
-                            TextUtils.normalize(parsed.brand),
-                            parsed.brand,
-                        )
-                finally:
-                    wb.close()
+            try:
+                sheet = wb.active
+                for row_idx, row in enumerate(
+                        sheet.iter_rows(min_row=2, values_only=True),
+                        start=2,
+                ):
+                    parsed = PreFinalRow.from_row(row)
+                    if parsed is None:
+                        continue
+                    if parsed.kiz in kiz_to_brand_data:
+                        continue
+                    kiz_to_brand_data[parsed.kiz] = (
+                        TextUtils.normalize(parsed.brand),
+                        parsed.brand,
+                    )
+            finally:
+                wb.close()
 
         # ------------------------------------------------------------------
         # 3. Пересечение с used_kiz.json + маппинг key → Brand + отбор.
@@ -823,122 +821,121 @@ class GenerateSalesService:
             finally:
                 wb.close()
 
-                # ---- УДАЛЕНИЕ ПУСТЫХ ФАЙЛОВ ПРОДАЖ ----
-            logger.report("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
-            removed = sales_gen.remove_empty_files()
-            for file_path in sales_gen.get_created_files():
-                logger.report(f"  Файл сохранён: {file_path.name}")
+        # ---- УДАЛЕНИЕ ПУСТЫХ ФАЙЛОВ ПРОДАЖ ----
+        logger.report("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
+        removed = sales_gen.remove_empty_files()
+        for file_path in sales_gen.get_created_files():
+            logger.report(f"  Файл сохранён: {file_path.name}")
 
-            if removed:
-                logger.report(f"  Удалено пустых файлов: {removed}")
+        if removed:
+            logger.report(f"  Удалено пустых файлов: {removed}")
 
-            # ---- СТАТИСТИКА ПРОДАЖ ----
-            logger.report("\n--- СТАТИСТИКА ПРОДАЖ ---")
-            stats = sales_gen.get_stats()
-            if stats:
-                for (from_seller, to_seller), count in sorted(stats.items()):
-                    logger.report(
-                        f"  {from_seller} → {to_seller}: {count} КИЗов"
-                    )
+        # ---- СТАТИСТИКА ПРОДАЖ ----
+        logger.report("\n--- СТАТИСТИКА ПРОДАЖ ---")
+        stats = sales_gen.get_stats()
+        if stats:
+            for (from_seller, to_seller), count in sorted(stats.items()):
+                logger.report(
+                    f"  {from_seller} → {to_seller}: {count} КИЗов"
+                )
+        else:
+            logger.report("  Нет строк для передачи между продавцами")
+
+        # ---- ПОИСК И РАЗРЕШЕНИЕ ДУБЛЕЙ КИЗОВ ----
+        logger.report("\n--- ПРОВЕРКА ДУБЛЕЙ КИЗОВ ---")
+
+        intra_file, inter_file = KizDuplicatesFinder.find(
+            ctx.sales_dir, logger,
+        )
+
+        # 6.4 — intra-file дедупликация.
+        intra_files_count = len(intra_file)
+        intra_deleted_rows = 0
+        for file_path in intra_file:
+            deleted = SalesFileRowsReader.remove_duplicates_in_file(
+                file_path, logger,
+            )
+            intra_deleted_rows += deleted
+            logger.debug(
+                f"КИЗ в файле {file_path.name}: удалено дублей {deleted}"
+            )
+
+        # 6.5–6.6 — inter-file обработка через callback.
+        inter_count = len(inter_file)
+        resolved_count = 0
+        removed_occurrences = 0
+
+        if inter_file:
+            if self._duplicate_keeper_resolver is None:
+                logger.warning(
+                    f"UI-обработка дублей недоступна: {inter_count} "
+                    f"КИЗов остаются в нескольких файлах"
+                )
             else:
-                logger.report("  Нет строк для передачи между продавцами")
-
-            # ---- ПОИСК И РАЗРЕШЕНИЕ ДУБЛЕЙ КИЗОВ ----
-            logger.report("\n--- ПРОВЕРКА ДУБЛЕЙ КИЗОВ ---")
-
-            intra_file, inter_file = KizDuplicatesFinder.find(
-                ctx.sales_dir, logger,
-            )
-
-            # 6.4 — intra-file дедупликация.
-            intra_files_count = len(intra_file)
-            intra_deleted_rows = 0
-            for file_path in intra_file:
-                deleted = SalesFileRowsReader.remove_duplicates_in_file(
-                    file_path, logger,
-                )
-                intra_deleted_rows += deleted
-                logger.debug(
-                    f"КИЗ в файле {file_path.name}: удалено дублей {deleted}"
-                )
-
-            # 6.5–6.6 — inter-file обработка через callback.
-            inter_count = len(inter_file)
-            resolved_count = 0
-            removed_occurrences = 0
-
-            if inter_file:
-                if self._duplicate_keeper_resolver is None:
-                    logger.warning(
-                        f"UI-обработка дублей недоступна: {inter_count} "
-                        f"КИЗов остаются в нескольких файлах"
-                    )
-                else:
-                    for kiz, file_paths in inter_file.items():
-                        file_to_receiver = {
-                            p: (sales_gen.get_receiver_name(p) or p.name)
-                            for p in file_paths
-                        }
-                        chosen = None
-                        try:
-                            chosen = self._duplicate_keeper_resolver(
-                                kiz, file_to_receiver,
-                            )
-                        except Exception as e:
-                            logger.critical(
-                                f"Ошибка в резолвере дублей: {e}",
-                                can_influence=False,
-                            )
-                            chosen = None
-                        if chosen is None or chosen not in file_paths:
-                            chosen = file_paths[0]
-                        resolved_count += 1
-
-                        removed_names = []
-                        for p in file_paths:
-                            if p == chosen:
-                                continue
-                            ok = SalesFileRowsReader.remove_kiz(
-                                p, kiz, logger,
-                            )
-                            if ok:
-                                removed_occurrences += 1
-                                removed_names.append(p.name)
-                            else:
-                                logger.warning(
-                                    f"Не удалось удалить КИЗ {kiz} "
-                                    f"из {p.name}"
-                                )
-
-                        logger.debug(
-                            f"КИЗ {kiz}: найден в "
-                            f"{[p.name for p in file_paths]}; "
-                            f"оставлен в {chosen.name}; "
-                            f"удалён из {removed_names}"
+                for kiz, file_paths in inter_file.items():
+                    file_to_receiver = {
+                        p: (sales_gen.get_receiver_name(p) or p.name)
+                        for p in file_paths
+                    }
+                    try:
+                        chosen = self._duplicate_keeper_resolver(
+                            kiz, file_to_receiver,
                         )
+                    except Exception as e:
+                        logger.critical(
+                            f"Ошибка в резолвере дублей: {e}",
+                            can_influence=False,
+                        )
+                        chosen = None
+                    if chosen is None or chosen not in file_paths:
+                        chosen = file_paths[0]
+                    resolved_count += 1
 
-            # 6.7 — второй remove_empty_files: только если что-то менялось.
-            empty_removed_after = 0
-            if intra_files_count > 0 or inter_count > 0:
-                empty_removed_after = sales_gen.remove_empty_files()
+                    removed_names = []
+                    for p in file_paths:
+                        if p == chosen:
+                            continue
+                        ok = SalesFileRowsReader.remove_kiz(
+                            p, kiz, logger,
+                        )
+                        if ok:
+                            removed_occurrences += 1
+                            removed_names.append(p.name)
+                        else:
+                            logger.warning(
+                                f"Не удалось удалить КИЗ {kiz} "
+                                f"из {p.name}"
+                            )
 
-            # 6.8 — report-сводка.
-            logger.report(
-                f"Найдено внутрифайловых дублей: {intra_files_count} файлов, "
-                f"удалено {intra_deleted_rows} строк"
-            )
-            logger.report(
-                f"Найдено межфайловых дублей: {inter_count} КИЗов"
-            )
-            logger.report(
-                f"Разрешено в пользу файла: {resolved_count}; "
-                f"удалено вхождений: {removed_occurrences}"
-            )
-            logger.report(
-                f"После чистки удалено пустых файлов: {empty_removed_after}"
-            )
+                    logger.debug(
+                        f"КИЗ {kiz}: найден в "
+                        f"{[p.name for p in file_paths]}; "
+                        f"оставлен в {chosen.name}; "
+                        f"удалён из {removed_names}"
+                    )
 
-            logger.report("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
+        # 6.7 — второй remove_empty_files: только если что-то менялось.
+        empty_removed_after = 0
+        if intra_files_count > 0 or inter_count > 0:
+            empty_removed_after = sales_gen.remove_empty_files()
+
+        # 6.8 — report-сводка.
+        logger.report(
+            f"Найдено внутрифайловых дублей: {intra_files_count} файлов, "
+            f"удалено {intra_deleted_rows} строк"
+        )
+        logger.report(
+            f"Найдено межфайловых дублей: {inter_count} КИЗов"
+        )
+        logger.report(
+            f"Разрешено в пользу файла: {resolved_count}; "
+            f"удалено вхождений: {removed_occurrences}"
+        )
+        logger.report(
+            f"После чистки удалено пустых файлов: {empty_removed_after}"
+        )
+
+        logger.report("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
 
 class FinalizePricesService:
     """Сервис внесения цен и финализации итоговых файлов.
@@ -965,7 +962,6 @@ class FinalizePricesService:
         """Конструктор.
 
         Вход:
-            kiz_validator — KizValidator для set_log_path/load.
             log_manager_v2 — LogManagerV2, фабрика логгеров V2.
             price_requester — опциональный callable(seller_name) -> int | None.
                               Вызывается, когда нужно спросить цену у
@@ -1046,7 +1042,6 @@ class FinalizePricesService:
         logger.report("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
         logger.report(f"Рабочая папка: {ctx.work_folder}")
 
-        self.kiz_validator.set_log_path(ctx.logs_dir)
         self.kiz_validator.load()
 
         # Цены из отчётов читаем один раз — до цикла по продавцам.
@@ -1068,8 +1063,6 @@ class FinalizePricesService:
             if decision.need_dialog:
                 # Ни цен из отчёта, ни сохранённых цен вообще нет.
                 if self._price_requester is None:
-                    # Сервис не может открыть диалог сам: UI-поток
-                    # ему недоступен. Логируем и пропускаем продавца.
                     logger.warning(
                         f"Не могу запросить цену без UI-callback, "
                         f"пропускаю продавца '{seller.name}'"

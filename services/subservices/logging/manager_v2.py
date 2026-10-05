@@ -62,8 +62,9 @@ class LogManagerV2:
             work_folder — рабочая папка задачи (может быть None).
             log_filename — опциональное имя файла журнала сервиса
                            (Channel.REPORT). Если None — используется
-                           fallback log_{source}.txt в папке «Логи».
-                           Пример: "log_подготовка.txt".
+                           fallback log_{source}.txt прямо в переданной
+                           work_folder (без дополнительной вложенности
+                           «Логи»). Пример: "log_подготовка.txt".
 
         Выход: LoggerV2.
 

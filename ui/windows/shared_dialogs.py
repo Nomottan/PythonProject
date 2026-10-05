@@ -453,15 +453,18 @@ class BrandsUnknownDialog(BaseEditDialog):
         Вход: нет.
         Выход: нет.
 
-        Роль: список брендов читается свежим перед каждым открытием
-              (пользователь мог создать бренд на предыдущем шаге
-              мастера). Пустой выбор — skipped, вперёд. Успешный
-              add_key_to_brand — resolved, вперёд. Ошибка — уведомление
-              и остаёмся на текущем бренде.
+        Роль: список брендов читается свежим перед каждым открытием.
+              Пикер открывается модально относительно главного окна
+              (self._main_window), если оно доступно, — иначе
+              относительно самого мастера. Отмена выбора (selected
+              is None) — возврат на текущий шаг без изменений:
+              индекс не двигается, обе кнопки остаются активны.
+              Успешный add_key_to_brand — _resolve, вперёд. Ошибка
+              сервиса — уведомление, остаёмся на текущем бренде.
         """
         brands = self._service.get_brands_objects()
         dialog = BrandPickerDialog(
-            parent=self,
+            parent=self._main_window if self._main_window is not None else self,
             brands=brands,
             bg_color=self.bg_color,
             log_manager_v2=self.log_manager_v2,
@@ -469,7 +472,6 @@ class BrandsUnknownDialog(BaseEditDialog):
         dialog.exec()
         selected = dialog.get_selected()
         if selected is None:
-            self._skip()
             return
 
         raw = self._brands_unknown[
@@ -493,11 +495,17 @@ class BrandsUnknownDialog(BaseEditDialog):
         Вход: нет.
         Выход: нет.
 
-        Роль: was_deleted / пустое имя / стартовое «Новый бренд»
-              трактуются как skipped. Успешный create_brand —
-              resolved. Ошибка — уведомление и остаёмся.
+        Роль: стартовый Brand предзаполнен сырыми вариантами текущей
+              группы — name = raw_variants[0], keys = list(raw_variants).
+              Пользователь видит осмысленные данные и может их править.
+              Отмена (was_deleted / пустое имя) — возврат на текущий
+              шаг без изменений. Успешный create_brand — _resolve,
+              вперёд. Ошибка сервиса — уведомление, остаёмся.
         """
-        new_brand = Brand("Новый бренд")
+        raw_variants = self._brands_unknown[
+            self._keys_list[self._current_index]
+        ]
+        new_brand = Brand(name=raw_variants[0], keys=list(raw_variants))
         dialog = BrandEditDialog(
             parent=self,
             brand=new_brand,
@@ -508,14 +516,9 @@ class BrandsUnknownDialog(BaseEditDialog):
         dialog.exec()
 
         if dialog.was_deleted():
-            self._skip()
             return
         if (not new_brand.name
                 or TextUtils.normalize(new_brand.name) == ""):
-            self._skip()
-            return
-        if new_brand.name == "Новый бренд":
-            self._skip()
             return
 
         ok = self._service.create_brand(
@@ -537,11 +540,6 @@ class BrandsUnknownDialog(BaseEditDialog):
     def _resolve(self) -> None:
         """Считает текущий бренд разрешённым и переходит к следующему."""
         self._stats["resolved"] += 1
-        self._advance()
-
-    def _skip(self) -> None:
-        """Считает текущий бренд пропущенным и переходит к следующему."""
-        self._stats["skipped"] += 1
         self._advance()
 
     def _advance(self) -> None:
@@ -567,10 +565,16 @@ class BrandsUnknownDialog(BaseEditDialog):
         self._brand_label.setText(raw_first)
 
     def get_stats(self) -> dict:
-        """Возвращает агрегаты для лога.
+        """Возвращает агрегаты обхода для лога.
 
         Выход: {"total", "resolved", "skipped"}.
-        Роль: при нормальном обходе resolved + skipped == total.
+        Роль: skipped всегда 0 — в текущем мастер-флоу пропуск
+              бренда невозможен: отмена действия на любом шаге
+              возвращает пользователя на тот же бренд, продвижение
+              только через успешный resolve. Инвариант
+              resolved + skipped == total не заявлен: если
+              пользователь не завершил обход (не может — мастер
+              жёсткий), resolved может быть меньше total.
         """
         return dict(self._stats)
 

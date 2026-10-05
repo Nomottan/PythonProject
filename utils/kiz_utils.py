@@ -5,7 +5,6 @@ from utils.text_utils import TextUtils
 from dataclasses import dataclass
 from datetime import datetime
 from services.subservices.logging import LoggerV2
-from utils.parsers import DateParser
 
 class KizUtils:
     """Утилиты для работы с КИЗами.

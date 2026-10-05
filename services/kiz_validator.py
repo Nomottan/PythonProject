@@ -63,26 +63,6 @@ class KizValidator:
         """
         return self.storage.batch()
 
-    def set_log_path(self, work_dir: Path) -> None:
-        """Совместимость с существующими вызовами.
-
-        Вход: work_dir — рабочая папка задачи (не используется).
-
-        Выход: нет.
-
-        Роль:
-            Заглушка. Раньше KizStorage писал в отдельный
-            kiz_validation.log, и сервис передавал путь к нему.
-            Теперь лог идёт через LoggerV2 (errors.txt + UI), а
-            work_folder знает сам логгер. Метод сохранён, чтобы не
-            править эталонные sells_fbs_service.py — там он
-            вызывается из трёх мест.
-
-        REPLACE: тело метода убрано. KizStorage.set_log_path
-        удалён в Порции 4, а вызовы из сервисов сохранены.
-        """
-        # no-op: см. docstring.
-
     def clean_old_entries(self, months: int = 1) -> int:
         """Очищает старые записи в хранилище.
 

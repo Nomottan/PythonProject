@@ -203,23 +203,6 @@ class KizStorage(DictJsonStorage):
             self._batcher.mark_dirty()
         return removed
 
-    def remove_kizs(self, keys) -> int:
-        """Удаляет пачку КИЗов из хранилища.
-
-        Вход:
-            keys — итерируемое ключей (КИЗов).
-
-        Выход:
-            int — сколько записей реально удалено.
-
-        Роль:
-            Тонкая обёртка над KizStorage.remove_many. Своего
-            логирования нет: факт изменения памяти и пометка
-            dirty — ответственность storage. Сохранение на диск —
-            через self.batch() снаружи.
-        """
-        return self.storage.remove_many(keys)
-
     def clean_old_entries(self, months: int = 1) -> int:
         """Удаляет записи старше N месяцев по дате продажи.
 
