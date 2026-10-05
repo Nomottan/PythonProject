@@ -962,6 +962,8 @@ class FinalizePricesService:
         """Конструктор.
 
         Вход:
+            kiz_validator — KizValidator: доступ к used_kiz.json
+                            (load, clean_old_entries, batch).
             log_manager_v2 — LogManagerV2, фабрика логгеров V2.
             price_requester — опциональный callable(seller_name) -> int | None.
                               Вызывается, когда нужно спросить цену у

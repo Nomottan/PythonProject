@@ -7,7 +7,7 @@
 """
 
 from PySide6.QtWidgets import QTextEdit
-from ui.styles import ColorCalculator
+from ui.styles import ColorCalculator, BackgroundResolver
 from ui.factories.base_factory import BaseWidgetFactory
 
 class StatusLog(QTextEdit):
@@ -101,18 +101,16 @@ class StatusLog(QTextEdit):
 
         Вход: bg_color — явный цвет или None; parent — виджет-родитель.
         Выход: кортеж (r, g, b).
-        Роль: приоритет — явный → parent.bg_color → parent.window().bg_color
-              → fallback (40, 50, 60).
+        Роль: при явном bg_color — tuple(bg_color[:3]). Иначе —
+              делегирует в BackgroundResolver.resolve_parent_bg,
+              затем обрезает результат до 3 каналов.
         """
         if bg_color is not None:
             return tuple(bg_color[:3])
-        if parent is not None:
-            if hasattr(parent, "bg_color"):
-                return tuple(parent.bg_color[:3])
-            top = parent.window()
-            if top is not None and hasattr(top, "bg_color"):
-                return tuple(top.bg_color[:3])
-        return (40, 50, 60)
+        resolved = BackgroundResolver.resolve_parent_bg(
+            parent, (40, 50, 60),
+        )
+        return tuple(resolved[:3])
 
     @staticmethod
     def _calc_border(bg_color):

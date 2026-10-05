@@ -10,6 +10,7 @@
 """
 
 from .colors import ColorCalculator
+from .bg_resolver import BackgroundResolver
 
 
 class WindowStyle:
@@ -84,18 +85,12 @@ class WindowStyle:
             fallback — цвет по умолчанию, если у parent нет bg_color.
 
         Выход:
-            Кортеж (r, g, b) или (r, g, b, a).
+            Кортеж (r, g, b) или (r, g, b, a). Возвращается как есть —
+            без обрезки [:3].
 
         Роль:
+            Делегирует в BackgroundResolver.resolve_parent_bg.
             Единая точка поиска фона родителя: parent.bg_color →
-            parent.window().bg_color → fallback. Используется
-            окнами и диалогами для расчёта производных цветов
-            через ColorCalculator.derive.
+            parent.window().bg_color → fallback.
         """
-        if parent is not None:
-            if hasattr(parent, "bg_color"):
-                return parent.bg_color
-            top = parent.window()
-            if top is not None and hasattr(top, "bg_color"):
-                return top.bg_color
-        return fallback
+        return BackgroundResolver.resolve_parent_bg(parent, fallback)

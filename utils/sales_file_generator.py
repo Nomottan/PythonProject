@@ -181,6 +181,8 @@ class SalesFileKizReader:
     """
 
     # Индекс столбца с КИЗом (0-based): [Наименование, КИЗ, GTIN, Цена].
+    # Единственный источник для всех потребителей, включая
+    # SalesAccumulatorService и SalesFileRowsReader.
     KIZ_COLUMN_INDEX = 1
 
     @staticmethod

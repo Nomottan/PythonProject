@@ -31,6 +31,10 @@ class KizUtils:
     #   processed      — успешно обработано (вошло в результат)
     _stats: dict = {}
 
+    # Паттерн начала КИЗа: "01" + 14 цифр + "21".
+    # Используется для расщепления слипшихся КИЗов в одной ячейке.
+    _KIZ_START_PATTERN = re.compile(r'01\d{14}21')
+
     @classmethod
     def start_stats(cls) -> None:
         """Начинает сессию сбора статистики.
@@ -66,105 +70,159 @@ class KizUtils:
         return result
 
     @staticmethod
-    def clean_kiz_full(raw: str, logger: Optional[LoggerV2] = None) -> List[str]:
-        """Полная очистка КИЗа.
+    def _validate_length(raw, logger=None):
+        """Проверяет и нормализует вход clean_kiz_full.
 
         Вход:
-            raw — исходная строка КИЗа.
-            logger — опциональный LoggerV2. Если передан, детальные
-                     события (отбрасывание, транслитерация) уходят
-                     на уровне DEBUG.
+            raw — любое значение из ячейки Excel.
+            logger — LoggerV2 или None (для debug отброса).
 
-        Выход: список очищенных полных КИЗов (без обрезания).
-               Пустой список, если КИЗ некорректен.
+        Выход:
+            None — если raw пуст или после str(raw).strip() длина < 31.
+            Иначе — очищенная строка (после strip).
 
-        Роль: подготовительный этап перед clean_kiz_for_storage.
-              Детали — в DEBUG, агрегат — накапливается в _stats для INFO.
+        Роль: первый шаг конвейера. При отбросе — счётчик
+              dropped_short и logger.debug.
         """
         if not raw:
-            return []
-        raw = str(raw).strip()
-        if len(raw) < 31:
-            # Счётчик и debug-сообщение
+            return None
+        cleaned = str(raw).strip()
+        if len(cleaned) < 31:
             if KizUtils._stats_enabled:
                 KizUtils._stats["dropped_short"] += 1
             if logger is not None:
                 logger.debug(
-                    f"КИЗ отброшен: короче 31 символа ({len(raw)}): {raw[:30]}..."
+                    f"КИЗ отброшен: короче 31 символа "
+                    f"({len(cleaned)}): {cleaned[:30]}..."
                 )
+            return None
+        return cleaned
+
+    @staticmethod
+    def _strip_control_chars(text):
+        """Удаляет XML-представления и управляющие символы.
+
+        Вход: text — строка после _validate_length.
+        Выход: строка без _x001D_/_x001d_ и без символов ASCII < 32.
+        """
+        cleaned = re.sub(r'_x001[dD]_', '', text)
+        return ''.join(ch for ch in cleaned if ord(ch) >= 32)
+
+    @staticmethod
+    def _split_glued(text):
+        """Расщепляет слипшиеся КИЗы в одной строке.
+
+        Вход: text — строка после _strip_control_chars.
+        Выход: list[str] фрагментов.
+
+        Роль: находит все вхождения _KIZ_START_PATTERN через
+              finditer. Если матчей нет — [text]. Иначе — фрагменты
+              между стартами: text[starts[i]:starts[i+1]] для всех,
+              кроме последнего, и text[starts[-1]:]. Префикс до
+              первого матча отбрасывается.
+        """
+        matches = list(KizUtils._KIZ_START_PATTERN.finditer(text))
+        if not matches:
+            return [text]
+        starts = [m.start() for m in matches]
+        fragments = []
+        for i in range(len(starts) - 1):
+            fragments.append(text[starts[i]:starts[i + 1]])
+        fragments.append(text[starts[-1]:])
+        return fragments
+
+    @classmethod
+    def _process_fragment(cls, frag, logger):
+        """Обрабатывает один фрагмент слипшейся строки.
+
+        Вход: frag — фрагмент; logger — LoggerV2 или None.
+        Выход: очищенный КИЗ (≥ 31) или None, если отброшен.
+
+        Роль: проверка «01», сдвиг до валидного «01», транслитерация
+              кириллицы, финальная очистка непечатаемых символов.
+              Каждый отброс — счётчик + logger.debug.
+        """
+        if not frag.startswith("01"):
+            pos_01 = frag.find("01")
+            if pos_01 != -1 and len(frag) - pos_01 >= 31:
+                frag = frag[pos_01:]
+            else:
+                if cls._stats_enabled:
+                    cls._stats["dropped_no_01"] += 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ отброшен: не начинается с 01 и нет "
+                        f"валидного '01' внутри: {frag[:30]}..."
+                    )
+                return None
+        if len(frag) < 31:
+            if cls._stats_enabled:
+                cls._stats["dropped_short"] += 1
+            if logger is not None:
+                logger.debug(
+                    f"КИЗ отброшен: фрагмент короче 31: {frag[:30]}..."
+                )
+            return None
+        if TextUtils.is_cyrillic(frag):
+            if cls._stats_enabled:
+                cls._stats["transliterated"] += 1
+            if logger is not None:
+                logger.debug(
+                    f"КИЗ транслитерирован: {frag[:30]}..."
+                )
+            frag = TextUtils.keyboard_translit(frag)
+
+        cleaned_frag = ''.join(
+            ch for ch in frag if 32 <= ord(ch) <= 126
+        )
+        if len(cleaned_frag) < 31:
+            if cls._stats_enabled:
+                cls._stats["dropped_short"] += 1
+            if logger is not None:
+                logger.debug(
+                    f"КИЗ отброшен после очистки непечатаемых "
+                    f"символов: {cleaned_frag[:30]}..."
+                )
+            return None
+        return cleaned_frag
+
+    @staticmethod
+    def clean_kiz_full(raw: str,
+                       logger: Optional[LoggerV2] = None) -> List[str]:
+        """Полная очистка КИЗа.
+
+        Вход:
+            raw — исходная строка КИЗа (возможно, несколько слипшихся).
+            logger — опциональный LoggerV2. Если передан, детальные
+                     события (отбрасывание, транслитерация) уходят
+                     на уровне DEBUG.
+
+        Выход: список очищенных полных КИЗов (без обрезания). Пустой
+               список, если КИЗ некорректен или ни один фрагмент
+               не прошёл очистку.
+
+        Роль: оркестратор из 4 шагов: _validate_length →
+              _strip_control_chars → _split_glued → _process_fragment.
+              Каждый фрагмент добавляется отдельным элементом через
+              result.append — без склейки и перезаписи.
+        """
+        cleaned = KizUtils._validate_length(raw, logger=logger)
+        if cleaned is None:
             return []
 
-        # 1. Удаляем XML-представления управляющих символов.
-        cleaned = re.sub(r'_x001[dD]_', '', raw)
-        # 2. Удаляем настоящие управляющие символы (код ASCII < 32).
-        cleaned = ''.join(ch for ch in cleaned if ord(ch) >= 32)
-
-        # 3. Разделение слипшихся строк (если длина > 100).
-        fragments = []
-        if len(cleaned) > 100:
-            pattern = re.compile(r'01\d{14}')
-            match = pattern.search(cleaned, pos=80)
-            if match:
-                split_pos = match.start()
-                if split_pos > 0 and len(cleaned) - split_pos >= 31:
-                    fragments.append(cleaned[:split_pos])
-                    fragments.append(cleaned[split_pos:])
-            if not fragments:
-                fragments.append(cleaned)
-        else:
-            fragments.append(cleaned)
+        stripped = KizUtils._strip_control_chars(cleaned)
+        fragments = KizUtils._split_glued(stripped)
 
         result = []
         for frag in fragments:
-            # Проверка на начало «01» — обязательный признак КИЗа.
-            if not frag.startswith("01"):
-                pos_01 = frag.find("01")
-                if pos_01 != -1 and len(frag) - pos_01 >= 31:
-                    # Сдвигаем фрагмент до ближайшего «01» — отсекаем мусор.
-                    frag = frag[pos_01:]
-                else:
-                    if KizUtils._stats_enabled:
-                        KizUtils._stats["dropped_no_01"] += 1
-                    if logger is not None:
-                        logger.debug(
-                            f"КИЗ отброшен: не начинается с 01 и нет валидного "
-                            f"'01' внутри: {frag[:30]}..."
-                        )
-                    continue
-            if len(frag) < 31:
-                if KizUtils._stats_enabled:
-                    KizUtils._stats["dropped_short"] += 1
-                if logger is not None:
-                    logger.debug(f"КИЗ отброшен: фрагмент короче 31: {frag[:30]}...")
-                continue
-            if TextUtils.is_cyrillic(frag):
-                # Транслитерация кириллицы в латиницу для совместимости.
-                if KizUtils._stats_enabled:
-                    KizUtils._stats["transliterated"] += 1
-                if logger is not None:
-                    logger.debug(f"КИЗ транслитерирован: {frag[:30]}...")
-                frag = TextUtils.keyboard_translit(frag)
+            processed = KizUtils._process_fragment(frag, logger)
+            if processed is not None:
+                result.append(processed)
 
-            cleaned_frag = ''.join(ch for ch in frag if 32 <= ord(ch) <= 126)
-            if len(cleaned_frag) < 31:
-                if KizUtils._stats_enabled:
-                    KizUtils._stats["dropped_short"] += 1
-                if logger is not None:
-                    logger.debug(
-                        f"КИЗ отброшен после очистки непечатаемых символов: "
-                        f"{cleaned_frag[:30]}..."
-                    )
-                continue
-            frag = cleaned_frag
-
-            result.append(frag)
-
-        # Успешно обработанные в этой порции.
         if KizUtils._stats_enabled:
             KizUtils._stats["processed"] += len(result)
 
         return result
-
     @staticmethod
     def clean_kiz_for_storage(raw: str, logger: Optional[LoggerV2] = None) -> List[str]:
         """Очищает КИЗ и обрезает до 31 символа.

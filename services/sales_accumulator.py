@@ -44,9 +44,6 @@ class SalesAccumulatorService:
         accumulate(target_dir).
     """
 
-    # Индекс столбца с КИЗом (0-based): [Наименование, КИЗ, GTIN, Цена].
-    KIZ_COLUMN_INDEX = 1
-
     def __init__(self, log_manager_v2) -> None:
         """Конструктор.
 
@@ -203,7 +200,8 @@ class SalesAccumulatorService:
                 continue
 
             header, filtered_rows = SalesFileRowsReader.read_filtered(
-                src_path, self.KIZ_COLUMN_INDEX, filtered, logger=None,
+                src_path, SalesFileKizReader.KIZ_COLUMN_INDEX, filtered,
+                logger=None,
             )
 
             if dst_path.exists():

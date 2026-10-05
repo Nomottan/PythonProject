@@ -89,6 +89,34 @@ class BackgroundResolver:
         return bg_color
 
     @staticmethod
+    def resolve_parent_bg(parent, fallback):
+        """Возвращает цвет фона родителя.
+
+        Вход:
+            parent — QWidget или None.
+            fallback — значение по умолчанию.
+
+        Выход:
+            parent.bg_color, если есть; иначе parent.window().bg_color,
+            если есть; иначе fallback. Значение возвращается как есть —
+            без обрезки [:3], без нормализации.
+
+        Роль:
+            Единая точка поиска фона родителя. Исключений не бросает:
+            при любой ошибке доступа к атрибуту возвращает fallback.
+        """
+        if parent is not None:
+            try:
+                if hasattr(parent, "bg_color"):
+                    return parent.bg_color
+                top = parent.window()
+                if top is not None and hasattr(top, "bg_color"):
+                    return top.bg_color
+            except Exception:
+                return fallback
+        return fallback
+
+    @staticmethod
     def _walk_parents(widget, attr_name, predicate, max_steps=10):
         """Идёт вверх по widget.parent() в поисках атрибута.
 
