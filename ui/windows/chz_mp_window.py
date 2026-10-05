@@ -538,7 +538,6 @@ class ChzMPWindow(BaseServiceWindow):
             )
         )
 
-    @Slot(object)
     def _duplicate_open_picker_dialog(self, kiz: str,
                                       file_to_receiver: dict):
         """Открывает SaleDuplicatePickerDialog в UI-потоке.
@@ -546,11 +545,17 @@ class ChzMPWindow(BaseServiceWindow):
         Вход:
             kiz — 31-символьный КИЗ.
             file_to_receiver — dict[Path, str]: путь → имя получателя.
+
         Выход:
             Path выбранного файла или None.
 
-        Роль: создаёт диалог, открывает модально через exec(),
-              возвращает get_selected_path().
+        Роль:
+            Вызывается из _duplicate_sale_request_keeper через
+            lambda + _run_in_ui_blocking — прямой Python-вызов,
+            не invokeMethod. @Slot не требуется: сигнатура с двумя
+            Python-параметрами всё равно не совпала бы с одним
+            Q_ARG. Создаёт диалог, открывает модально через exec(),
+            возвращает get_selected_path().
         """
         dialog = SaleDuplicatePickerDialog(
             parent=self,

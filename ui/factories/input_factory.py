@@ -91,10 +91,9 @@ class InputWidgetFactory:
                         font_size=None, font_weight=None,
                         extra_style="", tooltip=None,
                         indicator_size=(16, 16),
-                        indicator_bg_color=(200, 200, 200),
-                        indicator_border="1px solid #888888",
-                        indicator_checked_bg_color=(180, 180, 180),
-                        indicator_border_radius=3):
+                        indicator_border_radius=3,
+                        indicator_border_width=1,
+                        indicator_border_style="solid"):
         """Создаёт стилизованный QCheckBox.
 
         Вход:
@@ -107,12 +106,19 @@ class InputWidgetFactory:
             extra_style — доп. CSS.
             tooltip — подсказка.
             indicator_size — (w, h) квадратика-индикатора.
-            indicator_bg_color — фон индикатора в обычном состоянии.
-            indicator_border — рамка индикатора.
-            indicator_checked_bg_color — фон индикатора в отмеченном.
-            indicator_border_radius — скругление индикатора.
+            indicator_border_radius — скругление индикатора в px.
+            indicator_border_width — толщина рамки индикатора в px.
+            indicator_border_style — стиль рамки ("solid").
 
         Выход: QCheckBox с QSS.
+
+        Роль:
+            Единая точка создания чекбоксов. Цвета индикатора не
+            принимаются снаружи: WidgetStyle.apply_checkbox сам
+            считает их от эффективного фона родителя через
+            BackgroundResolver + ColorCalculator.indicator_*.
+            Это снимает риск «случайных» hex-констант и
+            рассинхронизации индикатора с фоном.
         """
         checkbox = QCheckBox(text, parent)
         checkbox.setChecked(checked)
@@ -129,8 +135,8 @@ class InputWidgetFactory:
         WidgetStyle.apply_checkbox(
             checkbox, bg_color, text_color, border, border_radius,
             padding, font_size, font_weight,
-            indicator_size, indicator_bg_color, indicator_border,
-            indicator_checked_bg_color, indicator_border_radius,
+            indicator_size, indicator_border_radius,
+            indicator_border_width, indicator_border_style,
             extra_style,
         )
         return checkbox

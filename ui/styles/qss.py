@@ -102,34 +102,108 @@ class QssBuilder:
         )
 
     @staticmethod
-    def indicator_rule(selector: str, size: tuple, bg_color,
-                       border: str, border_radius: int,
-                       checked_bg_color) -> str:
-        """Собирает QSS для ::indicator и ::indicator:checked.
+    def indicator_rule(selector: str, size: tuple,
+                       border_width: int, border_style: str,
+                       border_color: str, border_radius: int,
+                       state_colors: dict,
+                       hover_selector: str = None) -> str:
+        """Собирает QSS для ::indicator во всех состояниях.
 
         Вход:
-            selector — базовый селектор.
+            selector — базовый селектор ("QCheckBox" или
+                       "QCheckBox#name").
             size — (w, h) квадратика.
-            bg_color — фон индикатора в обычном состоянии.
-            border — CSS-рамка.
-            border_radius — радиус скругления.
-            checked_bg_color — фон в состоянии :checked.
+            border_width — толщина рамки в px.
+            border_style — стиль рамки ("solid").
+            border_color — CSS-цвет рамки (уже to_str).
+            border_radius — радиус скругления в px.
+            state_colors — dict с опциональными ключами:
+                unchecked_bg, checked_bg,
+                unchecked_hover, checked_hover,
+                unchecked_pressed, checked_pressed,
+                disabled_bg.
+                Отсутствие ключа → блок для этого состояния
+                не добавляется.
+            hover_selector — селектор для hover-псевдокласса.
+                             None → f"{selector}:hover".
 
-        Выход: два QSS-блока подряд (обычный + :checked).
+        Выход:
+            QSS-строка. Порядок блоков строго:
+                ::indicator → :checked → :hover → :hover:checked
+                → :pressed → :checked:pressed → :disabled.
+
+        Роль:
+            Расширена с 2 состояний (базовый + checked) до 7.
+            Раньше hover/pressed/disabled у индикатора не было —
+            теперь есть, и все цвета вычисляются снаружи
+            (WidgetStyle.apply_checkbox) через
+            ColorCalculator.indicator_*. QssBuilder только
+            собирает строки. Размер (width/height) и рамка
+            задаются в базовом блоке — в остальных они
+            наследуются.
         """
         base = f"{selector}::indicator"
-        return (
-            f"{base} {{"
-            f" width: {size[0]}px;"
-            f" height: {size[1]}px;"
-            f" background-color: {ColorCalculator.to_str(bg_color)};"
-            f" border: {border};"
-            f" border-radius: {border_radius}px;"
-            f" }}"
-            f" {base}:checked {{"
-            f" background-color: {ColorCalculator.to_str(checked_bg_color)};"
-            f" }}"
+        hover_sel = (
+            hover_selector if hover_selector is not None
+            else f"{selector}:hover"
         )
+        style = ""
+
+        unchecked_bg = state_colors.get("unchecked_bg")
+        if unchecked_bg is not None:
+            style += (
+                f"{base} {{"
+                f" width: {size[0]}px;"
+                f" height: {size[1]}px;"
+                f" background-color: {ColorCalculator.to_str(unchecked_bg)};"
+                f" border: {border_width}px {border_style} {border_color};"
+                f" border-radius: {border_radius}px;"
+                f" }}"
+            )
+
+        checked_bg = state_colors.get("checked_bg")
+        if checked_bg is not None:
+            style += (
+                f" {base}:checked "
+                f"{{ background-color: {ColorCalculator.to_str(checked_bg)}; }}"
+            )
+
+        unchecked_hover = state_colors.get("unchecked_hover")
+        if unchecked_hover is not None:
+            style += (
+                f" {hover_sel}::indicator "
+                f"{{ background-color: {ColorCalculator.to_str(unchecked_hover)}; }}"
+            )
+
+        checked_hover = state_colors.get("checked_hover")
+        if checked_hover is not None:
+            style += (
+                f" {hover_sel}::indicator:checked "
+                f"{{ background-color: {ColorCalculator.to_str(checked_hover)}; }}"
+            )
+
+        unchecked_pressed = state_colors.get("unchecked_pressed")
+        if unchecked_pressed is not None:
+            style += (
+                f" {base}:pressed "
+                f"{{ background-color: {ColorCalculator.to_str(unchecked_pressed)}; }}"
+            )
+
+        checked_pressed = state_colors.get("checked_pressed")
+        if checked_pressed is not None:
+            style += (
+                f" {base}:checked:pressed "
+                f"{{ background-color: {ColorCalculator.to_str(checked_pressed)}; }}"
+            )
+
+        disabled_bg = state_colors.get("disabled_bg")
+        if disabled_bg is not None:
+            style += (
+                f" {base}:disabled "
+                f"{{ background-color: {ColorCalculator.to_str(disabled_bg)}; }}"
+            )
+
+        return style
 
     @staticmethod
     def item_rule(selector: str, padding: str = "2px",

@@ -487,16 +487,22 @@ class BaseServiceWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         """Обработка закрытия окна.
 
-        Вход: event — QCloseEvent.
+        Вход:
+            event — QCloseEvent.
+
         Выход: нет.
-        Роль: пишет debug, чистит состояние через cleanup, снимает
-              active_child у родителя, принимает событие.
+
+        Роль:
+            Пишет debug, чистит состояние через cleanup, снимает
+            active_child у родителя — только если тот указывает
+            именно на это окно (иначе затрём регистрацию другого
+            активного дочернего окна). Затем принимает событие.
         """
         if self.logger:
             self.logger.debug(f"{type(self).__name__}: closeEvent получен")
         self.cleanup()
-        if self.main_window is not None and hasattr(
-            self.main_window, "active_child",
-        ):
+        if (self.main_window is not None
+                and hasattr(self.main_window, "active_child")
+                and self.main_window.active_child is self):
             self.main_window.active_child = None
         event.accept()

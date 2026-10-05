@@ -99,18 +99,33 @@ class StatusLog(QTextEdit):
     def _resolve_bg(bg_color, parent):
         """Возвращает (r, g, b) фона.
 
-        Вход: bg_color — явный цвет или None; parent — виджет-родитель.
-        Выход: кортеж (r, g, b).
-        Роль: при явном bg_color — tuple(bg_color[:3]). Иначе —
-              делегирует в BackgroundResolver.resolve_parent_bg,
-              затем обрезает результат до 3 каналов.
+        Вход:
+            bg_color — явный цвет или None.
+            parent — виджет-родитель.
+
+        Выход:
+            Кортеж (r, g, b).
+
+        Роль:
+            Явный bg_color принимается только если это tuple/list
+            длиной ≥ 3 — иначе аргумент игнорируется и идём к
+            родителю. Результат BackgroundResolver.resolve_parent_bg
+            тоже проверяется: не-кортеж или короткий список →
+            fallback (40, 50, 60).
         """
-        if bg_color is not None:
+        if (bg_color is not None
+                and isinstance(bg_color, (tuple, list))
+                and len(bg_color) >= 3):
             return tuple(bg_color[:3])
+
         resolved = BackgroundResolver.resolve_parent_bg(
             parent, (40, 50, 60),
         )
-        return tuple(resolved[:3])
+        if (isinstance(resolved, (tuple, list))
+                and len(resolved) >= 3):
+            return tuple(resolved[:3])
+        return (40, 50, 60)
+
 
     @staticmethod
     def _calc_border(bg_color):

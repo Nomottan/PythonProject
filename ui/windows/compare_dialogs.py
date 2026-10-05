@@ -16,7 +16,7 @@
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QTableWidget, QHeaderView, QTableWidgetItem,
-    QCheckBox, QApplication, QSizePolicy,
+    QApplication, QSizePolicy,
 )
 from PySide6.QtCore import Qt
 
@@ -159,8 +159,11 @@ class Stage1ReviewDialog(QDialog):
             cand_item.setFlags(cand_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(i, 2, cand_item)
 
-            cb = QCheckBox()
-            cb.setChecked(True)
+            cb = InputWidgetFactory.create_checkbox(
+                self, "", checked=True,
+                bg_color=(30, 20, 35, 0.3),
+                text_color=None,
+            )
             cb.stateChanged.connect(
                 lambda state, row=i: self._on_checkbox_changed(row, state)
             )

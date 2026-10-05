@@ -163,7 +163,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
             cell_l.addWidget(day_lbl)
             cb = InputWidgetFactory.create_checkbox(
                 cell, "", checked=False,
-                bg_color=(0, 0, 0, 0),
+                bg_color=self._field_bg,
             )
             cb.stateChanged.connect(lambda _: self.data_changed.emit())
             cell_l.addWidget(cb)

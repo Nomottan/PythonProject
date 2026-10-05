@@ -104,11 +104,21 @@ class FileHelper:
     def find_files_by_pattern(folder, pattern) -> list:
         """Возвращает файлы в папке по glob-шаблону.
 
-        Вход: folder — папка; pattern — glob-шаблон.
-        Выход: list[Path]. Порядок не сортируется.
+        Вход:
+            folder — папка.
+            pattern — glob-шаблон.
+
+        Выход:
+            list[Path]. Порядок — сортированный (детерминированный).
+
+        Роль:
+            Единая точка поиска по шаблону. Сортировка нужна
+            вызывающему коду, чувствительному к порядку обхода
+            (журналы, статистика), и чтобы результаты не
+            зависели от порядка ФС.
         """
         folder_path = Path(folder)
-        return list(folder_path.glob(pattern))
+        return sorted(folder_path.glob(pattern))
 
     @staticmethod
     def find_sales_files(folder) -> list:

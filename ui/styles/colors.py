@@ -163,6 +163,43 @@ class ColorCalculator:
         return (r, g, b, a)
 
     @staticmethod
+    def _adjust(bg_color, value_fn, alpha=None):
+        """Применяет value_fn к каждому каналу цвета.
+
+        Вход:
+            bg_color — кортеж/строка/None.
+            value_fn — Callable[[int, int], int]; принимает
+                       (channel, avg), возвращает новое значение
+                       канала.
+            alpha — float | None. Если задан — переопределяет
+                    4-й элемент.
+
+        Выход:
+            Кортеж (r, g, b) или (r, g, b, a) — через pack_rgba.
+            None — если bg_color невалиден.
+
+        Роль:
+            Единая точка расчёта производных состояний. Раньше
+            hover/pressed/disabled делали это независимо и
+            по-разному: hover/pressed — по-канально, без avg;
+            disabled — через avg, но без нормализации к RGBA.
+            Теперь — одна формула в одном месте: нормализация
+            через to_rgba, avg по трём каналам, value_fn(c, avg),
+            clamp, pack_rgba. Исключений не бросает: невалидный
+            вход → None.
+        """
+        rgba = ColorCalculator.to_rgba(bg_color)
+        if rgba is None:
+            return None
+        r, g, b, a = rgba
+        avg = (r + g + b) // 3
+        new_r = ColorCalculator.clamp(value_fn(r, avg))
+        new_g = ColorCalculator.clamp(value_fn(g, avg))
+        new_b = ColorCalculator.clamp(value_fn(b, avg))
+        final_a = alpha if alpha is not None else a
+        return ColorCalculator.pack_rgba(new_r, new_g, new_b, final_a)
+
+    @staticmethod
     def hover(bg_color) -> str:
         """Рассчитывает цвет для состояния :hover.
 
@@ -170,25 +207,20 @@ class ColorCalculator:
 
         Выход: CSS-строка rgb/rgba или "" при невалидном входе.
 
-        Роль: осветляет или затемняет базовый цвет на ±25 по
-              каждому каналу. Если c + 25 > 255 — идём вниз,
-              иначе — вверх. При пустом входе — "".
+        Роль: brightness-aware осветление/затемнение.
+              avg = (r + g + b) // 3; при avg < 127 (тёмный фон)
+              каждый канал сдвигается на +25 (светлее), иначе —
+              на -25 (темнее). Раньше решение принималось по
+              каждому каналу отдельно (c + 25, если влезает;
+              иначе c − 25), из-за чего на светлых фонах получался
+              слабый контраст. Теперь направление одно на весь
+              цвет — предсказуемо.
         """
-        rgba = ColorCalculator.to_rgba(bg_color)
-        if rgba is None:
+        value_fn = lambda c, avg: c + 25 if avg < 127 else c - 25
+        adjusted = ColorCalculator._adjust(bg_color, value_fn)
+        if adjusted is None:
             return ""
-        r, g, b, a = rgba
-
-        hover = []
-        for c in (r, g, b):
-            if c + 25 <= 255:
-                hover.append(c + 25)
-            else:
-                hover.append(c - 25)
-
-        return ColorCalculator.to_str(
-            ColorCalculator.pack_rgba(hover[0], hover[1], hover[2], a)
-        )
+        return ColorCalculator.to_str(adjusted)
 
     @staticmethod
     def pressed(bg_color) -> str:
@@ -198,25 +230,15 @@ class ColorCalculator:
 
         Выход: CSS-строка rgb/rgba или "".
 
-        Роль: c − 25, если c ≥ 25, иначе c + 25. Темнее для
-              светлых, светлее для тёмных — эффект «вдавливания».
-              Контрастно к hover.
+        Роль: brightness-aware, инверсно к hover. При avg < 127
+              (тёмный фон) — -25 по каналам (темнее), иначе +25
+              (светлее). Смена поведения — см. hover.
         """
-        rgba = ColorCalculator.to_rgba(bg_color)
-        if rgba is None:
+        value_fn = lambda c, avg: c - 25 if avg < 127 else c + 25
+        adjusted = ColorCalculator._adjust(bg_color, value_fn)
+        if adjusted is None:
             return ""
-        r, g, b, a = rgba
-
-        pressed = []
-        for c in (r, g, b):
-            if c >= 25:
-                pressed.append(c - 25)
-            else:
-                pressed.append(c + 25)
-
-        return ColorCalculator.to_str(
-            ColorCalculator.pack_rgba(pressed[0], pressed[1], pressed[2], a)
-        )
+        return ColorCalculator.to_str(adjusted)
 
     @staticmethod
     def disabled(bg_color) -> str:
@@ -226,21 +248,16 @@ class ColorCalculator:
 
         Выход: CSS-строка rgba или "".
 
-        Роль: avg = (r + g + b) // 3; каждый канал смещается к
-              среднему наполовину. Даёт «выцветший» вид. Alpha
-              принудительно 0.8.
+        Роль: «выцветший» вид — каждый канал смещается к среднему
+              avg на 1/5 разницы. Формула та же, что была, но
+              теперь через _adjust — нормализация входа и
+              упаковка alpha=0.8 в одном месте. Alpha принудительна.
         """
-        rgba = ColorCalculator.to_rgba(bg_color)
-        if rgba is None:
+        value_fn = lambda c, avg: avg + (c - avg) // 5
+        adjusted = ColorCalculator._adjust(bg_color, value_fn, alpha=0.8)
+        if adjusted is None:
             return ""
-        r, g, b, _ = rgba
-        avg = (r + g + b) // 3
-        return ColorCalculator.to_str((
-            avg + (r - avg) // 5,
-            avg + (g - avg) // 5,
-            avg + (b - avg) // 5,
-            0.8,
-        ))
+        return ColorCalculator.to_str(adjusted)
 
     @staticmethod
     def text_for(bg_color, forced=None) -> str:
@@ -285,6 +302,54 @@ class ColorCalculator:
                 )
 
         return ColorCalculator.to_str(tuple(text))
+
+    @staticmethod
+    def indicator_unchecked(bg_color):
+        """Фон индикатора в обычном (не отмеченном) состоянии.
+
+        Вход: bg_color — эффективный фон родителя (кортеж).
+
+        Выход:
+            Кортеж (r, g, b) или (r, g, b, a) — через pack_rgba.
+            None при невалидном входе.
+
+        Роль: на тёмном фоне (avg < 127) индикатор светлее фона
+              в 1.5 раза (c + c//2), на светлом — темнее
+              (c − c//2). Полутон + контраст к подписи.
+        """
+        value_fn = lambda c, avg: c + c // 2 if avg < 127 else c - c // 2
+        return ColorCalculator._adjust(bg_color, value_fn)
+
+    @staticmethod
+    def indicator_checked(bg_color):
+        """Фон индикатора в состоянии :checked.
+
+        Вход: bg_color — эффективный фон родителя.
+
+        Выход: кортеж через pack_rgba или None.
+
+        Роль: мягкий сдвиг на 1/8 канала в ту же сторону, что и
+              indicator_unchecked — отличие checked от unchecked
+              заметное, но не «вырви-глаз». Точка различия — 1/8
+              против 1/2 у unchecked.
+        """
+        value_fn = lambda c, avg: c - c // 8 if avg < 127 else c + c // 8
+        return ColorCalculator._adjust(bg_color, value_fn)
+
+    @staticmethod
+    def indicator_border(bg_color):
+        """Цвет рамки индикатора.
+
+        Вход: bg_color — эффективный фон родителя.
+
+        Выход: кортеж через pack_rgba или None.
+
+        Роль: c − c//5 (на 20% темнее фона) без проверки яркости —
+              рамка всегда темнее, читается как контур квадратика
+              и на светлом, и на тёмном фоне.
+        """
+        value_fn = lambda c, avg: c - c // 5
+        return ColorCalculator._adjust(bg_color, value_fn)
 
     @staticmethod
     def extract_rgb(color) -> Tuple[int, int, int]:

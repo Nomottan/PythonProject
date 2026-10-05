@@ -225,25 +225,91 @@ class WidgetStyle:
                        border_radius=0, padding="0px", font_size=None,
                        font_weight=None,
                        indicator_size=(16, 16),
-                       indicator_bg_color=(200, 200, 200),
-                       indicator_border="1px solid #888888",
-                       indicator_checked_bg_color=(120, 120, 120),
                        indicator_border_radius=3,
+                       indicator_border_width=1,
+                       indicator_border_style="solid",
                        extra_style="") -> None:
         """QSS для QCheckBox.
 
-        Вход: cb — QCheckBox; параметры — стиль основного блока
-              и индикатора.
+        Вход:
+            cb — QCheckBox.
+            bg_color — фон основного блока.
+            text_color — цвет текста; None → контрастный.
+            border, border_radius, padding — стиль.
+            font_size, font_weight — шрифт.
+            indicator_size — (w, h) квадратика-индикатора.
+            indicator_border_radius — скругление индикатора в px.
+            indicator_border_width — толщина рамки индикатора в px.
+            indicator_border_style — стиль рамки ("solid").
+            extra_style — дополнительный CSS.
 
         Выход: нет.
-        Роль: единая сборка QSS чекбокса.
+
+        Роль:
+            Единая сборка QSS чекбокса. Три базовых цвета
+            индикатора (unchecked / checked / border) считаются от
+            эффективного фона родителя через
+            ColorCalculator.indicator_*; hover/pressed/disabled —
+            через ColorCalculator.hover/pressed/disabled от
+            unchecked/checked. Если эффективный фон не удалось
+            получить (None) или он полностью прозрачен
+            (alpha == 0) — fallback (100, 100, 100). Fallback
+            живёт только здесь.
         """
-        text_c = WidgetStyle._effective_text_for(cb, bg_color, text_color)
-        selector = SelectorBuilder.build("QCheckBox", cb.objectName() or None)
+        # Шаг 1. Эффективный фон.
+        effective_bg = BackgroundResolver.resolve_bg_color(cb, bg_color)
+
+        # Шаг 2. Fallback — единственная точка.
+        if effective_bg is None:
+            effective_bg = (100, 100, 100)
+        elif (isinstance(effective_bg, (tuple, list))
+              and len(effective_bg) >= 4
+              and float(effective_bg[3]) == 0.0):
+            effective_bg = (100, 100, 100)
+
+        # Шаг 3. Три базовых цвета индикатора.
+        unchecked_bg = ColorCalculator.indicator_unchecked(effective_bg)
+        checked_bg = ColorCalculator.indicator_checked(effective_bg)
+        border_c = ColorCalculator.indicator_border(effective_bg)
+
+        # Страховка: если _adjust вернул None (невалидный вход,
+        # но fallback уже отработал) — те же (100, 100, 100).
+        if unchecked_bg is None:
+            unchecked_bg = (100, 100, 100)
+        if checked_bg is None:
+            checked_bg = (100, 100, 100)
+        if border_c is None:
+            border_c = (100, 100, 100)
+
+        # Шаг 4. Состояния — через существующие публичные методы.
+        unchecked_hover = ColorCalculator.hover(unchecked_bg)
+        checked_hover = ColorCalculator.hover(checked_bg)
+        unchecked_pressed = ColorCalculator.pressed(unchecked_bg)
+        checked_pressed = ColorCalculator.pressed(checked_bg)
+        disabled_bg = ColorCalculator.disabled(unchecked_bg)
+
+        # Шаг 5. Текст — от эффективного фона, как в варианте А.
+        text_c = WidgetStyle._effective_text_for(
+            cb, effective_bg, text_color,
+        )
+
+        # Шаг 6. Сборка.
+        selector = SelectorBuilder.build(
+            "QCheckBox", cb.objectName() or None)
+
+        # Шаг 6a. Если переданный фон полностью прозрачен — не пишем
+        # background-color в QSS. Иначе Qt рисует у QCheckBox свою
+        # серую подложку (текстовое поле), и оно торчит поверх фона
+        # родителя. Без свойства виджет наследует фон — ничего лишнего.
+        base_bg = bg_color
+        if (isinstance(bg_color, (tuple, list))
+                and len(bg_color) >= 4
+                and float(bg_color[3]) == 0.0):
+            base_bg = None
 
         style = QssBuilder.base_rule(
             selector,
-            bg_color=bg_color,
+            bg_color=base_bg,
             text_color=text_c,
             border=border,
             border_radius=border_radius,
@@ -252,10 +318,24 @@ class WidgetStyle:
             font_weight=font_weight,
         )
         style += QssBuilder.indicator_rule(
-            selector, indicator_size, indicator_bg_color,
-            indicator_border, indicator_border_radius,
-            indicator_checked_bg_color,
+            selector,
+            indicator_size,
+            indicator_border_width,
+            indicator_border_style,
+            ColorCalculator.to_str(border_c),
+            indicator_border_radius,
+            state_colors={
+                "unchecked_bg": unchecked_bg,
+                "checked_bg": checked_bg,
+                "unchecked_hover": unchecked_hover,
+                "checked_hover": checked_hover,
+                "unchecked_pressed": unchecked_pressed,
+                "checked_pressed": checked_pressed,
+                "disabled_bg": disabled_bg,
+            },
+            hover_selector=f"{selector}:hover",
         )
+
         if extra_style:
             style += extra_style
         cb.setStyleSheet(style)

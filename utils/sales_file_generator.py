@@ -54,55 +54,64 @@ class SalesFileGenerator:
                      raw_kiz: str,
                      brand: Optional[str] = None,
                      owner_company: Optional[str] = None) -> Path:
+        """Добавляет строки продажи в файл.
+
+        Вход:
+            from_seller_name — продавец-отправитель (для имени файла).
+            to_seller_name — продавец-получатель (для имени файла).
+            to_seller_inn — ИНН получателя (для имени файла).
+            product_name — наименование продукта (пишется в каждую
+                           строку).
+            raw_kiz — полный КИЗ; KizUtils.clean_kiz_for_storage
+                      может вернуть N сокращённых КИЗов из одной
+                      склеенной ячейки.
+            brand — бренд (не используется, передан для совместимости).
+            owner_company — компания-владелец (не используется,
+                            передан для совместимости).
+
+        Выход:
+            Path — путь к файлу продаж (один и тот же для всех
+                   КИЗов этого направления).
+
+        Роль:
+            Один КИЗ из storage_list → одна строка; N КИЗов → N
+            строк. GTIN и НДС считаются на каждый КИЗ отдельно.
+            Имя файла зависит только от имён продавцов и ИНН —
+            вычисляется один раз до цикла.
+            storage_list пуст → ValueError.
+            WorkbookWriter.append вернул False → RuntimeError.
         """
-        Добавляет строку продажи в файл.
-        :param from_seller_name: продавец-отправитель (для имени файла)
-        :param to_seller_name: продавец-получатель (для имени файла)
-        :param to_seller_inn: ИНН получателя (для имени файла)
-        :param product_name: наименование продукта (записывается в файл)
-        :param raw_kiz: полный КИЗ (из него будет взят сокращённый и GTIN)
-        :param brand: бренд (не используется в новой структуре, но передаётся для совместимости)
-        :param owner_company: компания-владелец (не используется, передаётся для совместимости)
-        :return: путь к файлу
-        """
-        # Получаем сокращённый КИЗ (31 символ).
-        # NEW: передаём logger — детальные сообщения от KizUtils уйдут в debug.
-        storage_list = KizUtils.clean_kiz_for_storage(raw_kiz, logger=self._logger)
+        storage_list = KizUtils.clean_kiz_for_storage(
+            raw_kiz, logger=self._logger,
+        )
         if not storage_list:
-            raise ValueError(f"Не удалось получить сокращённый КИЗ из {raw_kiz[:30]}...")
-        kiz_short = storage_list[0]
+            raise ValueError(
+                f"Не удалось получить сокращённый КИЗ "
+                f"из {raw_kiz[:30]}..."
+            )
 
-        # GTIN – символы с 3 по 16 (индексы 2..15)
-        gtin = kiz_short[2:16] if len(kiz_short) >= 16 else ""
-
-        # ндс 5%
-        vad = "5%"
-
-        # Имя файла
         safe_from = TextUtils.sanitize_filename(from_seller_name)
         safe_to = TextUtils.sanitize_filename(to_seller_name)
         file_name = f"{safe_from} - {safe_to} _ {to_seller_inn}.xlsx"
         file_path = self.work_folder / file_name
 
-        row_data = [
-            product_name,
-            kiz_short,
-            gtin,
-            vad
-        ]
+        for kiz_short in storage_list:
+            gtin = kiz_short[2:16] if len(kiz_short) >= 16 else ""
+            row_data = [product_name, kiz_short, gtin, "5%"]
 
-        ok = WorkbookWriter.append(
-            file_path, row_data, headers=self.headers, logger=self._logger,
-        )
-        if not ok:
-            raise RuntimeError(f"Ошибка записи в {file_path}")
+            ok = WorkbookWriter.append(
+                file_path, row_data,
+                headers=self.headers, logger=self._logger,
+            )
+            if not ok:
+                raise RuntimeError(f"Ошибка записи в {file_path}")
 
         if file_path not in self.created_files:
             self.created_files.append(file_path)
             self._file_to_receiver[file_path] = to_seller_name
 
         key = (from_seller_name, to_seller_name)
-        self._stats[key] = self._stats.get(key, 0) + 1
+        self._stats[key] = self._stats.get(key, 0) + len(storage_list)
 
         return file_path
 

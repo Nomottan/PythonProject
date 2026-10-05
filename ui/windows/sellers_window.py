@@ -411,9 +411,6 @@ class BrandChecklistDialog(BaseEditDialog):
                 self, brand.name, checked=False,
                 bg_color=(0, 0, 0, 0), text_color=None,
                 object_name="brand_checkbox",
-                indicator_bg_color=(100, 80, 70),
-                indicator_checked_bg_color=(150, 200, 250),
-                indicator_border="1px solid #aaaaaa",
             )
             self.checkboxes.append((cb, brand))
             content_layout2.addWidget(cb)
