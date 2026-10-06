@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt
 
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory,
+    ListWidgetFactory, TableWidgetFactory,
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 
@@ -75,10 +76,22 @@ class Stage1ReviewDialog(QDialog):
         content_layout.addWidget(info_label)
 
         # Таблица с переносом текста.
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(
-            ["№", "Товар из листа", "Кандидат из поставки", "Оставить"]
+        self.table = TableWidgetFactory.create_table_widget(
+            self,
+            columns=4,
+            headers=[
+                "№", "Товар из листа", "Кандидат из поставки", "Оставить",
+            ],
+            bg_color=(30, 20, 35, 0.3),
+            text_color=None,
+            border="1px solid #5a4a5c",
+            border_radius=5,
+            padding="2px",
+            font_size=10,
+            header_bg_color=(60, 50, 70, 0.6),
+            header_text_color=None,
+            header_padding="4px",
+            item_padding="4px",
         )
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -101,26 +114,6 @@ class Stage1ReviewDialog(QDialog):
             QHeaderView.ResizeToContents
         )
 
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: rgba(30, 20, 35, 0.3);
-                color: #d4d4d4;
-                border: 1px solid #5a4a5c;
-                border-radius: 5px;
-                padding: 2px;
-                font-size: 10px;
-            }
-            QTableWidget::item {
-                padding: 4px;
-                white-space: normal;
-            }
-            QHeaderView::section {
-                background-color: rgba(60, 50, 70, 0.6);
-                color: #d4d4d4;
-                padding: 4px;
-                border: none;
-            }
-        """)
         self._populate_table()
         content_layout.addWidget(self.table)
 
@@ -376,21 +369,12 @@ class ManualMatchDialog(QDialog):
         content_layout.addLayout(search_layout)
 
         # Список кандидатов.
-        self.list_widget = QListWidget()
-        self.list_widget.setSelectionMode(QListWidget.SingleSelection)
-        self.list_widget.setStyleSheet("""
-            QListWidget {
-                background-color: rgba(30, 20, 35, 0.3);
-                color: #d4d4d4;
-                border: 1px solid #5a4a5c;
-                border-radius: 5px;
-                padding: 5px;
-                font-size: 10px;
-            }
-            QListWidget::item:selected {
-                background-color: rgba(100, 80, 120, 0.8);
-            }
-        """)
+        self.list_widget = ListWidgetFactory.create_list_widget(
+            self,
+            bg_color=(30, 20, 35, 0.3),
+            text_color=None,
+            selection_mode=QListWidget.SingleSelection,
+        )
         self._populate_list(candidates)
         content_layout.addWidget(self.list_widget)
 

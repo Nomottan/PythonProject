@@ -271,7 +271,7 @@ class CompanyDialog(BaseEditDialog):
             draggable=False, close_on_click_outside=True,
             modal=True, center=True,
             on_close=self._save_and_close,
-            width=400, height=350,
+            width=400, height=150,
             log_manager_v2=log_manager_v2,
         )
         self.setAttribute(Qt.WA_DeleteOnClose, True)

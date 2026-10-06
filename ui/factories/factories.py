@@ -26,7 +26,9 @@ from .base_factory import BaseWidgetFactory
 from .button_factory import ButtonFactory, ActionButtonType
 from .input_factory import InputWidgetFactory
 from .element_factory import StatusLabel, LabelFactory
-from .widget_factory import ListWidgetFactory, StatusLogFactory
+from .widget_factory import (
+    ListWidgetFactory, TableWidgetFactory, StatusLogFactory,
+)
 from .layout_factory import LayoutFactory
 from .infrastructure_factory import ThreadFactory, FileDialogFactory
 from .window_factories import WindowFactory, ExtendedWindowFactory
@@ -49,8 +51,8 @@ __all__ = [
     "InputWidgetFactory",
     # Метки
     "StatusLabel", "LabelFactory",
-    # Списки и лог
-    "ListWidgetFactory", "StatusLogFactory",
+    # Списки, таблицы, лог
+    "ListWidgetFactory", "TableWidgetFactory", "StatusLogFactory",
     # Компоновки
     "LayoutFactory",
     # Инфраструктура

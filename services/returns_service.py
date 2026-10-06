@@ -196,7 +196,7 @@ class KizExportService:
         self.kiz_validator = kiz_validator
         self._log_manager_v2 = log_manager_v2
 
-    def export(self, target_dir) -> None:
+    def export(self, target_dir, sellers=None) -> None:
         """Запускает выгрузку КИЗов для возврата.
 
         Вход:

@@ -82,6 +82,39 @@ class WidgetStyle:
         effective = BackgroundResolver.resolve_bg_color(widget, bg_color)
         return ColorCalculator.text_for(effective)
 
+    @staticmethod
+    def _apply_scrollbar(widget, bg_color, width=12, radius=6) -> str:
+        """Собирает QSS-строку для скроллбара виджета.
+
+        Вход:
+            widget — QWidget (для поиска эффективного фона).
+            bg_color — кортеж/список/строка/None.
+            width — толщина скроллбара в px (дефолт 12).
+            radius — радиус скругления в px (дефолт 6).
+
+        Выход:
+            Готовая QSS-строка. Не применяет её — это делает
+            вызывающий метод.
+
+        Роль:
+            Единая точка сборки скроллбара для QTextEdit, QListWidget,
+            QScrollArea, QTableWidget и т.п. Эффективный фон ищется
+            через BackgroundResolver: если bg_color прозрачен
+            (alpha == 0) — берётся у предка или окна; если ничего
+            не нашлось — fallback (100, 100, 100). Fallback живёт
+            только здесь.
+        """
+        effective_bg = BackgroundResolver.resolve_bg_color(widget, bg_color)
+        if effective_bg is None:
+            effective_bg = (100, 100, 100)
+        elif (isinstance(effective_bg, (tuple, list))
+              and len(effective_bg) >= 4
+              and float(effective_bg[3]) == 0.0):
+            effective_bg = (100, 100, 100)
+
+        colors = ScrollbarStyle.palette(effective_bg)
+        return ScrollbarStyle.build_qss(colors, width, radius)
+
     # ---------- Кнопки ----------
 
     @staticmethod
@@ -376,7 +409,11 @@ class WidgetStyle:
         Вход: te — QTextEdit; параметры — стиль.
 
         Выход: нет.
-        Роль: единая сборка QSS многострочного поля.
+
+        Роль:
+            Единая сборка QSS многострочного поля. Скроллбар
+            подбирается через _apply_scrollbar от эффективного
+            фона.
         """
         text_c = WidgetStyle._effective_text_for(te, bg_color, text_color)
         selector = SelectorBuilder.build("QTextEdit", te.objectName() or None)
@@ -389,6 +426,7 @@ class WidgetStyle:
             padding=padding,
             font_size=font_size,
         )
+        style += WidgetStyle._apply_scrollbar(te, bg_color)
         if extra_style:
             style += extra_style
         te.setStyleSheet(style)
@@ -488,8 +526,10 @@ class WidgetStyle:
         Вход: lw — QListWidget; параметры — стиль.
 
         Выход: нет.
-        Роль: единая сборка QSS списка. Добавляет ::item с
-              padding=2px.
+
+        Роль:
+            Единая сборка QSS списка: базовый блок + ::item
+            (padding=2px) + скроллбар через _apply_scrollbar.
         """
         text_c = WidgetStyle._effective_text_for(lw, bg_color, text_color)
         selector = SelectorBuilder.build("QListWidget", lw.objectName() or None)
@@ -503,6 +543,7 @@ class WidgetStyle:
             font_size=font_size,
         )
         style += QssBuilder.item_rule(selector, padding="2px")
+        style += WidgetStyle._apply_scrollbar(lw, bg_color)
         if extra_style:
             style += extra_style
         lw.setStyleSheet(style)
@@ -522,11 +563,13 @@ class WidgetStyle:
 
         Выход: нет.
 
-        Роль: единая сборка QSS скролл-области. Скроллбар
-              подбирается автоматически через ScrollbarStyle.
-              bg_property="background" — сохраняем совместимость
-              с оригиналом: у QScrollArea в проекте фон задаётся
-              через "background", а не "background-color".
+        Роль:
+            Единая сборка QSS скролл-области. Скроллбар идёт через
+            _apply_scrollbar — резолвер сам поднимет эффективный
+            фон, если переданный прозрачен. bg_property="background" —
+            сохраняем совместимость с оригиналом: у QScrollArea в
+            проекте фон задаётся через "background", а не
+            "background-color".
         """
         selector = SelectorBuilder.build(
             "QScrollArea", scroll.objectName() or None)
@@ -538,12 +581,100 @@ class WidgetStyle:
             border_radius=border_radius,
             bg_property="background",
         )
-        colors = ScrollbarStyle.palette(bg_color)
-        style += ScrollbarStyle.build_qss(
-            colors, scrollbar_width, scrollbar_radius)
+        style += WidgetStyle._apply_scrollbar(
+            scroll, bg_color, scrollbar_width, scrollbar_radius,
+        )
         if extra_style:
             style += extra_style
         scroll.setStyleSheet(style)
+
+    @staticmethod
+    def apply_table_widget(tw, bg_color, text_color=None,
+                           border="none", border_radius=5,
+                           padding="2px", font_size=None,
+                           header_bg_color=None,
+                           header_text_color=None,
+                           header_padding="4px",
+                           item_padding="4px",
+                           show_grid=True,
+                           gridline_color=None,
+                           extra_style="") -> None:
+        """QSS для QTableWidget.
+
+        Вход:
+            tw — QTableWidget.
+            bg_color — фон таблицы.
+            text_color — цвет текста; None → контрастный.
+            border, border_radius, padding, font_size — стиль
+                основного блока.
+            header_bg_color — фон QHeaderView::section. None →
+                блок заголовка не добавляется, если и
+                header_text_color тоже None.
+            header_text_color — цвет текста заголовка. None →
+                контрастный от header_bg_color (или от bg_color).
+            header_padding — padding в заголовке.
+            item_padding — padding в ::item.
+            show_grid — показывать линии сетки; setShowGrid.
+            gridline_color — цвет линий; None → свойство
+                gridline-color не добавляется.
+            extra_style — дополнительный CSS.
+
+        Выход: нет.
+
+        Роль:
+            Единая сборка QSS таблицы: базовый блок + опциональный
+            заголовок + ::item + скроллбар. Заголовок добавляется
+            только если задан хотя бы один из header_*-параметров.
+            white-space: normal сюда не входит — это не QSS-свойство
+            для ячеек QTableWidget, перенос строки делается через
+            setWordWrap(True) + resizeRowsToContents().
+        """
+        text_c = WidgetStyle._effective_text_for(tw, bg_color, text_color)
+        selector = SelectorBuilder.build(
+            "QTableWidget", tw.objectName() or None)
+
+        grid_extra = ""
+        if gridline_color is not None:
+            grid_extra = (
+                f" gridline-color: "
+                f"{ColorCalculator.to_str(gridline_color)};"
+            )
+
+        style = QssBuilder.base_rule(
+            selector,
+            bg_color=bg_color,
+            text_color=text_c,
+            border=border,
+            border_radius=border_radius,
+            padding=padding,
+            font_size=font_size,
+            extra_props=grid_extra,
+        )
+
+        if header_bg_color is not None or header_text_color is not None:
+            header_selector = f"{selector} QHeaderView::section"
+            if header_text_color is not None:
+                header_text_c = header_text_color
+            else:
+                header_text_c = WidgetStyle._effective_text_for(
+                    tw,
+                    header_bg_color if header_bg_color is not None
+                    else bg_color,
+                )
+            style += QssBuilder.base_rule(
+                header_selector,
+                bg_color=header_bg_color,
+                text_color=header_text_c,
+                padding=header_padding,
+            )
+
+        style += QssBuilder.item_rule(selector, padding=item_padding)
+        style += WidgetStyle._apply_scrollbar(tw, bg_color)
+
+        if extra_style:
+            style += extra_style
+        tw.setStyleSheet(style)
+        tw.setShowGrid(show_grid)
 
     # ---------- Окно ----------
 

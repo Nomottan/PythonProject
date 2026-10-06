@@ -11,7 +11,8 @@ ListWidgetFactory не наследует BaseWidgetFactory: QSS собирае�
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QListWidget, QFrame, QScrollArea, QSizePolicy, QVBoxLayout,
+    QWidget, QListWidget, QTableWidget, QFrame, QScrollArea,
+    QSizePolicy, QVBoxLayout,
 )
 
 from ui.styles import WidgetStyle
@@ -213,6 +214,88 @@ class ListWidgetFactory:
 
         return scroll_area, content_widget, content_layout
 
+class TableWidgetFactory:
+    """Фабрика для создания QTableWidget со стилем.
+
+    Роль: единая точка создания таблиц. QSS собирается через
+          WidgetStyle.apply_table_widget — базовый блок, опциональный
+          заголовок, ::item, скроллбар. Поведение (selection,
+          edit triggers, section resize) задаётся вызывающим кодом
+          после создания — это специфика конкретного места.
+
+    Публичный API:
+        create_table_widget — QTableWidget с QSS.
+    """
+
+    @staticmethod
+    def create_table_widget(parent, rows=0, columns=0, headers=None,
+                            bg_color=(30, 20, 35, 0.3),
+                            text_color=None, border="none",
+                            border_radius=5, padding="2px",
+                            font_size=None,
+                            header_bg_color=None,
+                            header_text_color=None,
+                            header_padding="4px",
+                            item_padding="4px",
+                            show_grid=True,
+                            gridline_color=None,
+                            fixed_size=None, min_size=None, max_size=None,
+                            object_name=None, cursor_shape=None,
+                            extra_style=""):
+        """Создаёт стилизованный QTableWidget.
+
+        Вход:
+            parent — родительский виджет.
+            rows, columns — начальные размеры.
+            headers — список заголовков (None → не задаём).
+            bg_color, text_color, border, border_radius, padding,
+            font_size — стиль таблицы.
+            header_bg_color, header_text_color, header_padding —
+                стиль QHeaderView::section. Если оба None — блок
+                заголовка не добавляется.
+            item_padding — padding в ::item.
+            show_grid — показывать линии сетки (setShowGrid).
+            gridline_color — цвет линий; None → свойство не
+                добавляется.
+            fixed_size, min_size, max_size — размеры (или None).
+            object_name, cursor_shape — общие настройки.
+            extra_style — дополнительный CSS.
+
+        Выход: QTableWidget с QSS.
+
+        Роль:
+            Не задаёт setSelectionBehavior / setEditTriggers /
+            setSectionResizeMode — это специфика каждого места,
+            делается после создания. Также не делает
+            resizeRowsToContents — вызывается после заполнения
+            ячеек.
+        """
+        table = QTableWidget(parent)
+
+        if rows:
+            table.setRowCount(rows)
+        if columns:
+            table.setColumnCount(columns)
+        if headers:
+            table.setHorizontalHeaderLabels(headers)
+        if object_name:
+            table.setObjectName(object_name)
+        if cursor_shape is not None:
+            table.setCursor(cursor_shape)
+        if fixed_size:
+            table.setFixedSize(*fixed_size)
+        if min_size:
+            table.setMinimumSize(*min_size)
+        if max_size:
+            table.setMaximumSize(*max_size)
+
+        WidgetStyle.apply_table_widget(
+            table, bg_color, text_color, border, border_radius,
+            padding, font_size, header_bg_color, header_text_color,
+            header_padding, item_padding, show_grid, gridline_color,
+            extra_style,
+        )
+        return table
 
 class StatusLogFactory:
     """Фабрика лога статуса (StatusLog).

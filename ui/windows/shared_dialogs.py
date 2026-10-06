@@ -652,11 +652,12 @@ class BrandPickerDialog(BaseEditDialog):
         self._search_edit.textChanged.connect(self._filter_list)
         layout.addWidget(self._search_edit)
 
-        self._list_widget = QListWidget()
-        self._list_widget.setSelectionMode(
-            QListWidget.SelectionMode.SingleSelection
+        self._list_widget = ListWidgetFactory.create_list_widget(
+            self,
+            bg_color=self.bg_color,
+            text_color=None,
+            selection_mode=QListWidget.SelectionMode.SingleSelection,
         )
-        self._style_list()
         self._list_widget.itemSelectionChanged.connect(
             self._on_selection_changed
         )
@@ -681,51 +682,6 @@ class BrandPickerDialog(BaseEditDialog):
         bottom.addWidget(self._btn_confirm)
 
         layout.addLayout(bottom)
-
-    def _style_list(self) -> None:
-        """Оформляет QListWidget через raw QSS.
-
-        Роль: цвета — производные от self.bg_color через
-              ColorCalculator.derive (жёсткие hex-константы
-              не используем). Если в проекте есть готовый
-              WidgetStyle.apply_list_widget — заменить на него.
-        """
-        item_bg = ColorCalculator.derive(
-            self.bg_color,
-            r_fn=lambda r: max(0, r - 20),
-            g_fn=lambda g: max(0, g - 20),
-            b_fn=lambda b: max(0, b - 20),
-            alpha=0.95,
-        )
-        item_sel = ColorCalculator.derive(
-            self.bg_color,
-            r_fn=lambda r: min(255, r + 30),
-            g_fn=lambda g: min(255, g + 30),
-            b_fn=lambda b: min(255, b + 30),
-            alpha=0.95,
-        )
-        text_color = ColorCalculator.derive(
-            self.bg_color,
-            r_fn=lambda r: min(255, r + 180),
-            g_fn=lambda g: min(255, g + 180),
-            b_fn=lambda b: min(255, b + 180),
-        )
-        bg_rgb = f"rgb({item_bg[0]}, {item_bg[1]}, {item_bg[2]})"
-        sel_rgb = f"rgb({item_sel[0]}, {item_sel[1]}, {item_sel[2]})"
-        text_rgb = f"rgb({text_color[0]}, {text_color[1]}, {text_color[2]})"
-
-        self._list_widget.setStyleSheet(
-            f"QListWidget {{"
-            f" background-color: {bg_rgb};"
-            f" color: {text_rgb};"
-            f" border: 1px solid {sel_rgb};"
-            f" border-radius: 4px;"
-            f"}}"
-            f"QListWidget::item:selected {{"
-            f" background-color: {sel_rgb};"
-            f" color: {text_rgb};"
-            f"}}"
-        )
 
     def _populate_list(self) -> None:
         """Заполняет QListWidget брендами.
