@@ -94,6 +94,7 @@ class BaseServiceWindow(QMainWindow):
         self.target_dir = parent.main_config.get("target_dir", None) \
             if parent is not None else None
         self.bg_color = self.BG_COLOR
+        self.service_window = self
 
         # Каркас окна — из фабрики.
         self.main_layout = WindowFactory.setup_child_window(

@@ -20,6 +20,8 @@ from ui.factories.factories import (
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.base.base_edit_dialog import BaseEditDialog
+from ui.base.base_checklist_dialog import ChecklistDialog
+from ui.styles import ColorCalculator, WindowStyle
 from models.models import Seller, Brand
 
 
@@ -54,6 +56,7 @@ class SellersWindow(QMainWindow):
                 domain=self.LOGGER_DOMAIN,
             )
         # Читаем бренды и продавцов через сервис.
+        self.service_window = self
         brands = parent.sellers_brands_service.get_brands_objects()
         brands_dict = {b.name: b for b in brands}
         self.sellers = parent.sellers_brands_service.get_sellers_objects(brands_dict)
@@ -211,6 +214,7 @@ class SellersWindow(QMainWindow):
         self.main_window.open_string_list_dialog(
             f"Ключи — {seller.name}",
             seller.keys,
+            parent=self,
         )
 
     # ---------- Обновление / сохранение ----------
@@ -328,17 +332,18 @@ class CompanyDialog(BaseEditDialog):
         self.seller.company = self.company_edit.text().strip()
 
 
-class BrandChecklistDialog(BaseEditDialog):
+class BrandChecklistDialog(ChecklistDialog):
     """Диалог чек-листа брендов у продавца.
 
     Назначение:
-        Отметить/снять бренды у продавца. OK сохраняет, Отмена
-        не применяет изменения.
+        Отметить/снять бренды у продавца. OK применяет изменения
+        к модели Seller in-memory, Отмена — ничего не делает.
 
     Роль в программе:
-        Открывается из SellersWindow по кнопке «Бренды».
-        Наследник BaseEditDialog: ok_cancel=True. Логика
-        «добавить/удалить бренд» — в _collect_result.
+        Открывается из SellersWindow по кнопке «Бренды» через
+        show(). Наследник ChecklistDialog: каркас, список
+        чекбоксов и сбор результата — в базе. Здесь только
+        логика «бренд ↔ продавец» и цвета.
     """
 
     LOGGER_SOURCE = "BrandChecklistDialog.sellers_window"
@@ -352,80 +357,84 @@ class BrandChecklistDialog(BaseEditDialog):
             parent — SellersWindow.
             seller — Seller, чьи бренды редактируем.
             all_brands — все доступные Brand.
+            log_manager_v2 — LogManagerV2 или None.
         """
         self.seller = seller
         self.all_brands = all_brands
-        # Имена уже привязанных брендов — для сортировки «выбранные сверху».
+        # Имена уже привязанных брендов — для сортировки
+        # «выбранные сверху» через _is_item_checked.
         self.current_names = {b.name for b in seller.brands}
-        self.checkboxes = []  # список (QCheckBox, Brand)
-        self.bg_color = (40, 30, 50, 0.95)
+
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: int(r * 0.95),
+            g_fn=lambda g: int(g * 1.5),
+            b_fn=lambda b: int(b * 1.5),
+            alpha=0.95,
+        )
+
         super().__init__(
-            parent=parent, title=f"Бренды — {seller.name}",
+            parent=parent,
+            title=f"Бренды — {seller.name}",
             bg_color=self.bg_color,
-            close_button=True, ok_cancel=True,
-            draggable=True, close_on_click_outside=True,
-            modal=True, center=True,
-            width=400, height=450,
+            close_button=True,
+            draggable=True,
+            close_on_click_outside=True,
+            modal=True,
+            width=400,
+            height=450,
             log_manager_v2=log_manager_v2,
         )
         self.setAttribute(Qt.WA_DeleteOnClose, True)
 
-    def _build_content(self, layout) -> None:
-        """Строит список чекбоксов брендов.
+    # ---------- Абстрактные методы ChecklistDialog ----------
 
-        Вход: layout — QVBoxLayout из BaseEditDialog.
-        Роль: заголовок, скролл с чекбоксами. Выбранные бренды
-              сверху, невыбранные — снизу.
+    def _get_items(self) -> list:
+        """Полный список брендов для показа."""
+        return self.all_brands
+
+    def _get_item_label(self, item) -> str:
+        """Подпись чекбокса — имя бренда."""
+        return item.name
+
+    def _is_item_checked(self, item) -> bool:
+        """Связан ли бренд с продавцом на момент открытия."""
+        return item.name in self.current_names
+
+    def _apply_result(self, checked: list, unchecked: list) -> None:
+        """Применяет отметки к модели Seller.
+
+        Вход:
+            checked — бренды, отмеченные пользователем.
+            unchecked — бренды, с которых галка снята.
+
+        Выход: нет.
+
+        Роль:
+            Мутация моделей Seller/Brand in-memory. Сохранение
+            в config.json — на SellersWindow.save_and_close
+            (раз в конце работы окна, не по каждому чекбоксу).
+            add_brand/remove_brand поддерживают двустороннюю
+            связь Brand.sellers ↔ Seller.brands.
         """
-        layout.addWidget(LabelFactory.create_header_label(
-            self, f"Бренды — {self.seller.name}",
-        ))
-
-        scroll_area, _, content_layout2 = (
-            ListWidgetFactory.create_scroll_container(
-                self, spacing=2, bg_color=self.bg_color,
-            )
-        )
-        layout.addWidget(scroll_area)
-
-        selected = sorted(
-            [b for b in self.all_brands if b.name in self.current_names],
-            key=lambda b: b.name.lower(),
-        )
-        unselected = sorted(
-            [b for b in self.all_brands if b.name not in self.current_names],
-            key=lambda b: b.name.lower(),
-        )
-
-        for brand in selected:
-            cb = InputWidgetFactory.create_checkbox(
-                self, brand.name, checked=True,
-                bg_color=(0, 0, 0, 0), text_color=None,
-                object_name="brand_checkbox",
-            )
-            self.checkboxes.append((cb, brand))
-            content_layout2.addWidget(cb)
-
-        for brand in unselected:
-            cb = InputWidgetFactory.create_checkbox(
-                self, brand.name, checked=False,
-                bg_color=(0, 0, 0, 0), text_color=None,
-                object_name="brand_checkbox",
-            )
-            self.checkboxes.append((cb, brand))
-            content_layout2.addWidget(cb)
-
-    def _collect_result(self):
-        """Применяет изменения чекбоксов к модели Seller.
-
-        Выход: None.
-        Роль: по каждому чекбоксу — добавляет или удаляет бренд
-              через add_brand/remove_brand (эти методы поддерживают
-              двустороннюю связь).
-        """
-        for cb, brand in self.checkboxes:
-            if cb.isChecked() and brand not in self.seller.brands:
+        for brand in checked:
+            if brand not in self.seller.brands:
                 self.seller.add_brand(brand)
-            elif not cb.isChecked() and brand in self.seller.brands:
+        for brand in unchecked:
+            if brand in self.seller.brands:
                 self.seller.remove_brand(brand)
-        return None
+
+    # ---------- Опциональные hooks ----------
+
+    def _get_header_text(self) -> str:
+        """Заголовок над списком."""
+        return f"Бренды — {self.seller.name}"
+
+    def _get_item_sort_key(self, item) -> str:
+        """Сортировка по имени бренда (регистронезависимо)."""
+        return item.name.lower()
+
+    def _get_checkbox_object_name(self) -> str:
+        """objectName чекбоксов — сохранён из прежней версии."""
+        return "brand_checkbox"

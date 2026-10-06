@@ -45,7 +45,9 @@ class WindowFactory:
                            close_callback=None, frameless=True,
                            stay_on_top=True, translucent_background=True,
                            close_button=True, close_button_color="#fd5e53",
-                           return_layout=True):
+                           return_layout=True,
+                           parent=None,
+                           service_window_override=None):
         """Настраивает дочернее окно.
 
         Вход:
@@ -59,12 +61,25 @@ class WindowFactory:
             close_button — добавлять ли кнопку закрытия.
             close_button_color — цвет кнопки закрытия.
             return_layout — вернуть ли main_layout.
+            parent — Qt-родитель; нужен только для наследования
+                     service_window.
+            service_window_override — явное сервисное окно для
+                     центрирования дочерних окон. Если None —
+                     берётся у parent.
 
         Выход: QVBoxLayout или None.
 
         Роль: строит каркас окна: флаги, центральный виджет с
               фоном и border-radius, top_layout с заголовком и
-              кнопкой закрытия.
+              кнопкой закрытия. Дополнительно устанавливает
+              child.service_window: если наследник уже задал его
+              сам — не трогаем; иначе service_window_override,
+              иначе parent.service_window.
+
+        Центрирование: service_window — источник геометрии для
+        дочерних диалогов, которые хотят центрироваться «в рамках
+        сервисного окна», а не относительно своего прямого
+        Qt-родителя.
 
         REPLACE: QSS центрального виджета и кнопки закрытия
         собираются через WidgetStyle.apply_window_central и
@@ -82,7 +97,6 @@ class WindowFactory:
 
         child.setWindowTitle(title)
 
-        # Центральный виджет — фон и border-radius через WidgetStyle.
         central = QWidget()
         WidgetStyle.apply_window_central(central, bg_color)
         child.setCentralWidget(central)
@@ -110,6 +124,12 @@ class WindowFactory:
             top_layout.addWidget(close_btn)
 
         main_layout.addLayout(top_layout)
+
+        if getattr(child, 'service_window', None) is None:
+            if service_window_override is not None:
+                child.service_window = service_window_override
+            else:
+                child.service_window = getattr(parent, 'service_window', None)
 
         if return_layout:
             return main_layout
@@ -171,10 +191,13 @@ class ExtendedWindowFactory(WindowFactory):
                      modal=False, frameless=True, transparent=True,
                      stay_on_top=True, center=True, on_close=None,
                      return_layout=None, return_content_layout=True,
-                     default_width=400, default_height=350):
+                     default_width=400, default_height=350,
+                     service_window_override=None):
         """Настраивает каркас окна с расширенными возможностями.
 
         Вход — см. поля класса. Все параметры опциональны.
+            service_window_override — явное сервисное окно для
+                центрирования. Если None — берётся у parent.
 
         Выход: content_layout, main_layout или None в зависимости
                от флагов return_*.
@@ -183,7 +206,8 @@ class ExtendedWindowFactory(WindowFactory):
               close_button (опц.), add_button (опц.), content_widget
               для пользовательского содержимого, action_button и
               ok/cancel (опц.), подключает draggable / click_outside /
-              on_close.
+              on_close. Устанавливает window.service_window до
+              центрирования — _center_window уже читает его.
 
         REPLACE: QSS центрального виджета собирается через
         WidgetStyle.apply_window_central.
@@ -317,11 +341,18 @@ class ExtendedWindowFactory(WindowFactory):
         if close_on_click_outside:
             ExtendedWindowFactory._setup_click_outside_close(window)
 
+        # 10. Установка service_window ДО центрирования.
+        if getattr(window, 'service_window', None) is None:
+            if service_window_override is not None:
+                window.service_window = service_window_override
+            else:
+                window.service_window = getattr(parent, 'service_window', None)
+
         # 11. Размер и центрирование.
         window.resize(default_width, default_height)
         window.setMinimumSize(default_width, default_height)
 
-        if center and parent:
+        if center:
             ExtendedWindowFactory._center_window(window, parent)
 
         # 12. Callback при закрытии.
@@ -348,12 +379,44 @@ class ExtendedWindowFactory(WindowFactory):
 
     @staticmethod
     def _center_window(window, parent):
-        """Центрирует окно относительно родителя."""
-        parent_geom = parent.frameGeometry()
+        """Центрирует окно относительно service_window или экрана.
+
+        Вход:
+            window — центрируемое окно.
+            parent — Qt-родитель; используется как fallback
+                     источника геометрии.
+
+        Выход: нет.
+
+        Роль:
+            Источник геометрии — window.service_window, если
+            задан, иначе parent. Если оба None — центрирование
+            от экрана (primaryScreen().availableGeometry()).
+            Если QApplication/screen недоступны — окно не
+            двигается. Это позволяет диалогам открываться без
+            Qt-родителя (например, программно созданным) —
+            без падения.
+        """
+        source = getattr(window, 'service_window', None) or parent
         w = window.width()
         h = window.height()
-        x = parent_geom.x() + (parent_geom.width() - w) // 2
-        y = parent_geom.y() + (parent_geom.height() - h) // 2
+
+        if source is not None:
+            geom = source.frameGeometry()
+            x = geom.x() + (geom.width() - w) // 2
+            y = geom.y() + (geom.height() - h) // 2
+            window.setGeometry(x, y, w, h)
+            return
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        screen = app.primaryScreen()
+        if screen is None:
+            return
+        screen_geom = screen.availableGeometry()
+        x = screen_geom.x() + (screen_geom.width() - w) // 2
+        y = screen_geom.y() + (screen_geom.height() - h) // 2
         window.setGeometry(x, y, w, h)
 
     @staticmethod

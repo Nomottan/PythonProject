@@ -43,7 +43,8 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
                  width=400, height=350, close_button=True, ok_cancel=True,
                  draggable=False, close_on_click_outside=False,
                  modal=True, center=True, on_close=None,
-                 log_manager_v2=None):
+                 log_manager_v2=None,
+                 service_window_override=None):
         """Конструктор.
 
         Вход:
@@ -56,17 +57,16 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
             draggable — перетаскивание за тело.
             close_on_click_outside — закрывать при клике вне.
             modal — модальность.
-            center — центрировать относительно parent.
+            center — центрировать.
             on_close — callback при закрытии.
-            log_manager_v2 — LogManagerV2 или None. Если задан и
-                             LOGGER_SOURCE у наследника — создаётся
-                             self.logger.
+            log_manager_v2 — LogManagerV2 или None.
+            service_window_override — явное сервисное окно для
+                центрирования. Если None — наследуется у parent
+                через фабрику.
 
-        Роль: сохраняет self.bg_color для наследников (расчёт
-                  производных цветов, поиск эффективного фона),
-                  вызывает setup_dialog_frame (из DialogSetupMixin),
-                  получает content_layout и передаёт его
-                  в _build_content.
+        Роль: сохраняет self.bg_color для наследников, создаёт
+              логгер, вызывает setup_dialog_frame и передаёт
+              content_layout в _build_content.
         """
         super().__init__(parent)
         self._result = None
@@ -79,7 +79,6 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
                 domain=self.LOGGER_DOMAIN,
             )
         self.bg_color = bg_color
-        # Настраиваем каркас и получаем layout для контента.
         content_layout = self.setup_dialog_frame(
             parent=parent,
             title=title,
@@ -93,9 +92,9 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
             modal=modal,
             center=center,
             on_close=on_close,
+            service_window_override=service_window_override,
         )
 
-        # Наследник наполняет layout.
         self._build_content(content_layout)
 
     # ---------- Публичный API ----------

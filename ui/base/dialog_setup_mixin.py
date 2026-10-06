@@ -33,27 +33,29 @@ class DialogSetupMixin:
                            width=400, height=350,
                            close_button=True, ok_cancel=True,
                            draggable=False, close_on_click_outside=False,
-                           modal=True, center=True, on_close=None):
+                           modal=True, center=True, on_close=None,
+                           service_window_override=None):
         """Настраивает каркас диалога.
 
         Вход:
             parent — родительское окно.
             title — заголовок.
-            bg_color — цвет фона (кортеж (r, g, b) или (r, g, b, a)).
+            bg_color — цвет фона.
             width, height — размеры по умолчанию.
             close_button — показывать ли крестик.
             ok_cancel — показывать ли кнопки ОК/Отмена.
             draggable — перетаскивание за тело.
             close_on_click_outside — закрывать при клике вне.
             modal — модальность.
-            center — центрировать относительно parent.
+            center — центрировать.
             on_close — callback при закрытии.
+            service_window_override — явное сервисное окно для
+                центрирования. Если None — наследуется у parent.
 
         Выход: content_layout — QVBoxLayout для контента.
 
         Роль: обёртка над ExtendedWindowFactory.setup_window.
-              Кнопки ОК/Отмена замыкаются на self.accept / self.reject —
-              BaseEditDialog переопределяет accept() для валидации.
+              Кнопки ОК/Отмена замыкаются на self.accept / self.reject.
         """
         return ExtendedWindowFactory.setup_window(
             window=self,
@@ -62,8 +64,6 @@ class DialogSetupMixin:
             bg_color=bg_color,
             close_button=close_button,
             ok_cancel=ok_cancel,
-            # Замыкаем колбэки на методы QDialog — BaseEditDialog
-            # переопределит accept() для валидации перед закрытием.
             ok_callback=self.accept if ok_cancel else None,
             cancel_callback=self.reject if ok_cancel else None,
             draggable=draggable,
@@ -74,4 +74,5 @@ class DialogSetupMixin:
             return_content_layout=True,
             default_width=width,
             default_height=height,
+            service_window_override=service_window_override,
         )

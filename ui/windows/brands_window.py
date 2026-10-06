@@ -14,7 +14,7 @@
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QInputDialog, QDialog,
+    QDialog,
 )
 from PySide6.QtCore import Qt
 from ui.styles import ColorCalculator, WindowStyle
@@ -26,6 +26,7 @@ from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
 from ui.windows.message_dialog import NotificationDialog, MessageDialog
 from ui.base.base_edit_dialog import BaseEditDialog
+from ui.base.base_checklist_dialog import ChecklistDialog
 from models.models import Seller, Brand
 
 
@@ -77,7 +78,7 @@ class BrandsWindow(QMainWindow):
             b.sellers.clear()
         brands_dict = {b.name: b for b in self.brands}
         _ = parent.sellers_brands_service.get_sellers_objects(brands_dict=brands_dict)
-
+        self.service_window = self
         # --- Каркас окна ---
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
@@ -342,10 +343,10 @@ class BrandEditDialog(BaseEditDialog):
         right_layout.addWidget(scroll)
 
         add_seller_btn = ButtonFactory.create_button(
-            self, "+ добавить продавца", (100, 80, 120, 0.7),
+            self, "Продавцы", (100, 80, 120, 0.7),
             padding="6px 12px",
         )
-        add_seller_btn.clicked.connect(self._add_seller)
+        add_seller_btn.clicked.connect(self._edit_sellers)
         right_layout.addWidget(add_seller_btn)
         cols_layout.addWidget(right_widget)
 
@@ -451,32 +452,32 @@ class BrandEditDialog(BaseEditDialog):
         row_widget.deleteLater()
         self._save_sellers()
 
-    def _add_seller(self) -> None:
-        """Показывает диалог выбора продавца из ещё не связанных.
+    def _edit_sellers(self) -> None:
+        """Открывает чек-лист продавцов бренда.
 
-        Роль: фильтрует self.sellers, оставляя тех, у кого этого
-              бренда ещё нет. Показывает QInputDialog.getItem.
-              При выборе — добавляет связь и строку.
+        Вход: нет.
+        Выход: нет.
+
+        Роль:
+            Чек-лист открывается в рамках BrandsWindow, а не
+            внутри BrandEditDialog — иначе окно центрируется
+            относительно маленького редактора и обрезается.
+            Родитель — self.parent() (BrandsWindow), с fallback
+            на self, если parent отсутствует. После закрытия
+            обновляем правую колонку BrandEditDialog через
+            _populate_sellers. Сохранение делает сам чек-лист
+            через сервис — _save_sellers здесь не нужен.
         """
-        available = [s for s in self.sellers if self.brand not in s.brands]
-        if not available:
-            NotificationDialog.notify(
-                self,
-                "Все продавцы уже привязаны к этому бренду.",
-                title_text="Информация",
-                bg_color=self.bg_color,
-            )
-            return
-
-        names = [s.name for s in available]
-        item, ok = QInputDialog.getItem(
-            self, "Выбор продавца", "Продавец:", names, 0, False,
+        parent_window = self.parent() if self.parent() is not None else self
+        dialog = SellerChecklistDialog(
+            parent_window,
+            brand=self.brand,
+            all_sellers=self.sellers,
+            main_window=self.main_window,
+            log_manager_v2=self.log_manager_v2,
         )
-        if ok and item:
-            seller = next(s for s in available if s.name == item)
-            self.brand.add_seller(seller)
-            self._add_seller_row(seller)
-            self._save_sellers()
+        dialog.exec()
+        self._populate_sellers()
 
     def _save_sellers(self) -> None:
         """Сохраняет список продавцов с обновлёнными связями.
@@ -570,3 +571,137 @@ class BrandEditDialog(BaseEditDialog):
               изменения» — при True запись не создаётся.
         """
         return self._deleted
+
+class SellerChecklistDialog(ChecklistDialog):
+    """Диалог чек-листа продавцов у бренда.
+
+    Назначение:
+        Отметить/снять продавцов у бренда. OK применяет изменения
+        к модели Brand и сразу сохраняет через
+        sellers_brands_service.
+
+    Роль в программе:
+        Открывается из BrandEditDialog по кнопке «Продавцы»
+        через exec() (модально). Наследник ChecklistDialog:
+        каркас, список чекбоксов и сбор результата — в базе.
+        Здесь только логика «бренд ↔ продавец» + сохранение.
+    """
+
+    LOGGER_SOURCE = "SellerChecklistDialog.brands_window"
+    LOGGER_DOMAIN = "sellers_brands"
+
+    def __init__(self, parent=None, brand=None, all_sellers=None,
+                 main_window=None, log_manager_v2=None) -> None:
+        """Конструктор.
+
+        Вход:
+            parent — родитель (BrandEditDialog).
+            brand — Brand, чьих продавцов редактируем.
+            all_sellers — полный список Seller для показа.
+            main_window — MainWindow; нужен для сохранения через
+                          sellers_brands_service.
+            log_manager_v2 — LogManagerV2 или None.
+
+        Роль:
+            Сохраняет данные для hook-методов, считает bg_color
+            от фона родителя, вызывает super().__init__. Диалог
+            модальный через exec() — WA_DeleteOnClose не ставим,
+            объект локальный.
+        """
+        self.brand = brand
+        self.all_sellers = all_sellers if all_sellers is not None else []
+        self.main_window = main_window
+        if brand is not None:
+            self.current_names = {s.name for s in brand.sellers}
+        else:
+            self.current_names = set()
+
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: int(r * 0.95),
+            g_fn=lambda g: int(g * 1.5),
+            b_fn=lambda b: int(b * 1.5),
+            alpha=0.95,
+        )
+
+        super().__init__(
+            parent=parent,
+            title=f"Продавцы — {brand.name}",
+            bg_color=self.bg_color,
+            close_button=True,
+            draggable=True,
+            close_on_click_outside=True,
+            modal=True,
+            width=400,
+            height=450,
+            log_manager_v2=log_manager_v2,
+        )
+
+    # ---------- Абстрактные методы ChecklistDialog ----------
+
+    def _get_items(self) -> list:
+        """Полный список продавцов для показа."""
+        return self.all_sellers
+
+    def _get_item_label(self, item) -> str:
+        """Подпись чекбокса — имя продавца."""
+        return item.name
+
+    def _is_item_checked(self, item) -> bool:
+        """Связан ли продавец с брендом на момент открытия."""
+        return item.name in self.current_names
+
+    def _apply_result(self, checked: list, unchecked: list) -> None:
+        """Применяет отметки и сохраняет через сервис.
+
+        Вход:
+            checked — продавцы, отмеченные пользователем.
+            unchecked — продавцы, с которых галка снята.
+
+        Выход: нет.
+
+        Роль:
+            Мутирует модели Brand/Seller (add_seller/remove_seller
+            держат двустороннюю связь) и сохраняет весь список
+            продавцов через sellers_brands_service.set_sellers_objects.
+            Отличие от BrandChecklistDialog: диалог модальный,
+            сохранение внутри — родитель (BrandEditDialog) сам
+            продавцов по закрытию не сохраняет.
+            Если main_window недоступен — модели мутируются,
+            сохранение пропускается, в лог идёт warning.
+        """
+        for seller in checked:
+            if seller not in self.brand.sellers:
+                self.brand.add_seller(seller)
+        for seller in unchecked:
+            if seller in self.brand.sellers:
+                self.brand.remove_seller(seller)
+
+        if self.main_window is not None:
+            try:
+                self.main_window.sellers_brands_service.set_sellers_objects(
+                    self.all_sellers,
+                )
+            except Exception as e:
+                if self.logger:
+                    self.logger.critical(
+                        f"Ошибка сохранения продавцов: {e}",
+                        can_influence=False,
+                    )
+        else:
+            if self.logger:
+                self.logger.warning(
+                    "main_window недоступен, изменения не сохранены "
+                    "в config.json"
+                )
+
+    # ---------- Опциональные hooks ----------
+
+    def _get_header_text(self) -> str:
+        """Заголовок над списком."""
+        return f"Продавцы — {self.brand.name}"
+
+    def _get_item_sort_key(self, item) -> str:
+        """Сортировка по имени продавца (регистронезависимо)."""
+        return item.name.lower()

@@ -115,6 +115,7 @@ class _BasePlannerListWindow(QMainWindow):
         # от фона окна.
         self._accent_bg = self._calc_accent_color(bg_color)
         self._accent_text = BaseWidgetFactory.calc_text_color(self._accent_bg)
+        self.service_window = self
 
         main_layout = WindowFactory.setup_child_window(
             self, title, bg_color=self.bg_color,
