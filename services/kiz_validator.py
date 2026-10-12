@@ -4,7 +4,7 @@
 Реализует бизнес-логику для Отчётов МП, ЧЗ МП и Возвратов поверх
 KizStorage. Собственного состояния не хранит — вся память в storage.
 
-Логирование — через публичные каналы storage (info / warning / error),
+Логирование — через публичные каналы storage (report/ warning / error),
 которые транслируются в LoggerV2. Отдельного лог-файла
 kiz_validation.log больше нет: сообщения идут в errors.txt и UI-канал.
 """
@@ -44,7 +44,7 @@ class KizValidator:
 
         Вход: storage — KizStorage с загруженными данными.
         Роль: сохраняет ссылку. Логгера своего нет — используется
-              logger внутри storage (публичные каналы debug/info/
+              logger внутри storage (публичные каналы debug/report/
               warning/error).
         """
         self.storage = storage
@@ -71,12 +71,12 @@ class KizValidator:
 
         Роль:
             Делегирует в KizStorage. Логирование делает сам storage
-            (info о результате). Здесь дополнительно не пишем —
+            (report о результате). Здесь дополнительно не пишем —
             иначе в логе был бы дубль.
 
         REPLACE: было self.storage._log(f"Очистка старых записей:
         удалено {deleted} записей.") — убрано, KizStorage пишет это
-        сам в своём info.
+        сам в своём report.
         """
         return self.storage.clean_old_entries(months)
 
@@ -121,7 +121,7 @@ class KizValidator:
         if sale_date_str is None:
             today_str = datetime.now().strftime("%d-%m-%Y")
             self.storage.add_or_update(kiz, today_str, None)
-            self.storage.info(
+            self.storage.report(
                 f"Списание (ЧЗ_МП): {kiz} – сегодня {today_str}"
             )
             return ValidationResult.ADDED
@@ -141,7 +141,7 @@ class KizValidator:
         # 1. Новый КИЗ — списываем.
         if existing is None:
             self.storage.add_or_update(kiz, sale_str, None)
-            self.storage.info(
+            self.storage.report(
                 f"Списание (новый): {kiz} – продажа {sale_str}"
             )
             return ValidationResult.ADDED
@@ -160,7 +160,7 @@ class KizValidator:
 
         # 3. Продано без возврата — отсев.
         if existing_returned_str is None:
-            self.storage.info(
+            self.storage.report(
                 f"Отсев (продано без возврата): {kiz}, "
                 f"продажа {existing_sold_str}"
             )
@@ -178,13 +178,13 @@ class KizValidator:
 
         if sale_dt > existing_returned_dt:
             self.storage.add_or_update(kiz, sale_str, None)
-            self.storage.info(
+            self.storage.report(
                 f"Списание (возврат был раньше): {kiz}, "
                 f"продажа {sale_str}"
             )
             return ValidationResult.ADDED
         else:
-            self.storage.info(
+            self.storage.report(
                 f"Отсев (дата продажи раньше возврата): {kiz}"
             )
             return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
@@ -213,7 +213,7 @@ class KizValidator:
         # КИЗ есть — обновляем дату возврата.
         return_date = datetime.now().strftime("%d-%m-%Y")
         self.storage.add_or_update(kiz, existing["sold_date"], return_date)
-        self.storage.info(
+        self.storage.report(
             f"Возврат: для КИЗа {kiz} установлена дата возврата "
             f"{return_date}"
         )

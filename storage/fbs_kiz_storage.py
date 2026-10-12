@@ -97,6 +97,17 @@ class KizStorage(DictJsonStorage):
         if self._logger is not None:
             self._logger.info(message)
 
+    def report(self, message: str) -> None:
+        """Пошаговое сообщение журнала.
+
+        Вход: message — текст.
+        Роль: канал для KizValidator — диагностика по каждому КИЗу
+              (списание, отсев, возврат). Не попадает в info-файл
+              домена, идёт в report-журнал LoggerV2.
+        """
+        if self._logger is not None:
+            self._logger.report(message)
+
     def warning(self, message: str) -> None:
         """Предупреждение.
 

@@ -102,10 +102,17 @@ class HandlerV2(ABC):
 
         Вход: callback — callable без аргументов.
         Роль: если мы уже в главном потоке — вызываем сразу.
-              Иначе — через QTimer.singleShot(0, ...): он выполнится
-              в том потоке, где есть event loop (обычно — главный).
+              Иначе — через QTimer.singleShot(0, ...).
+
+        Примечание:
+            Не гарантирует выполнение в UI-потоке при вызове из
+            фонового потока: QTimer.singleShot(0, ...) выполняется
+            в текущем потоке, а не в UI. Использовать только как
+            fallback для окон, у которых нет _ui_*_signal. Для
+            окон с сигналами предпочитать эмит сигнала.
         """
         app = QApplication.instance()
+        ...
         if app is None:
             # Qt ещё не запущен — вызываем как есть.
             callback()
@@ -206,20 +213,33 @@ class NotificationHandler(HandlerV2):
         return record.channel == Channel.NOTIFICATION
 
     def emit(self, record: LogRecordV2) -> None:
-        """Показывает уведомление.
+        """Показывает уведомление в активном окне.
 
         Вход: record — запись.
-        Роль: если active_child есть — вызывает notify(msg) в UI-потоке.
-              Иначе — fallback.
+        Роль:
+            Приоритеты:
+                1. active_child is None → _write_fallback.
+                2. Есть _ui_notify_signal → эмит.
+                3. Есть notify → _run_in_ui_thread (fallback).
+                4. Иначе → _write_fallback.
+            BaseServiceWindow не создаёт _ui_notify_signal и не
+            имеет notify — уходит в _write_fallback. Контракт
+            готов принять окно с сигналом в будущем.
         """
         active_child = self._get_active_child()
-        if active_child is not None:
+        if active_child is None:
+            self._write_fallback(record)
+            return
+        if hasattr(active_child, "_ui_notify_signal"):
+            active_child._ui_notify_signal.emit(record.message)
+            return
+        if hasattr(active_child, "notify"):
             msg = record.message
             self._run_in_ui_thread(
                 lambda: active_child.notify(msg)
             )
-        else:
-            self._write_fallback(record)
+            return
+        self._write_fallback(record)
 
 
 class StatusHandler(HandlerV2):
@@ -234,27 +254,41 @@ class StatusHandler(HandlerV2):
         return record.channel == Channel.STATUS
 
     def emit(self, record: LogRecordV2) -> None:
-        """Обновляет статус.
+        """Обновляет статус активного окна.
 
         Вход: record — запись.
-        Роль: если у active_child есть метод set_status — вызывает его
-              в UI-потоке. Иначе — fallback.
+        Роль:
+            Приоритеты:
+                1. active_child is None → _write_fallback.
+                2. Есть _ui_status_signal → эмит (UI-поток
+                   обеспечивается сигналом).
+                3. Есть set_status → _run_in_ui_thread (fallback
+                   для окон без сигнала).
+                4. Иначе → _write_fallback.
         """
         active_child = self._get_active_child()
-        if active_child is not None and hasattr(active_child, "set_status"):
+        if active_child is None:
+            self._write_fallback(record)
+            return
+        if hasattr(active_child, "_ui_status_signal"):
+            active_child._ui_status_signal.emit(record.message)
+            return
+        if hasattr(active_child, "set_status"):
             msg = record.message
             self._run_in_ui_thread(
                 lambda: active_child.set_status(msg)
             )
-        else:
-            self._write_fallback(record)
+            return
+        self._write_fallback(record)
 
 
 class InfoFileHandler(HandlerV2):
     """Handler Info-файла (Channel.INFO_LOG).
 
     Роль: пишет сводные сообщения домена в
-          work_folder / "Логи" / f"Отчёт от {date}.txt".
+          work_folder / f"Отчёт от {date}.txt" без префикса
+          [ts] [SEVERITY] [source] — только текст сообщения.
+          work_folder уже указывает на папку логов.
     """
 
     def _should_handle(self, record: LogRecordV2) -> bool:
@@ -262,12 +296,16 @@ class InfoFileHandler(HandlerV2):
         return record.channel == Channel.INFO_LOG
 
     def emit(self, record: LogRecordV2) -> None:
-        """Пишет строку в Info-файл."""
+        """Пишет текст сообщения в Info-файл.
+
+        Вход: record — запись.
+        Роль: пишет record.message как есть, без префиксов.
+              _format_line не используется — Info-файл содержит
+              только текст (в т.ч. многострочные сводки).
+        """
         if self._work_folder is None:
             return
-        self._append_to_file(
-            self._info_file_path(), self._format_line(record)
-        )
+        self._append_to_file(self._info_file_path(), record.message)
 
 class InfoUIHandler(HandlerV2):
     """Handler Info-канала в UI (Channel.INFO_LOG).
@@ -286,22 +324,24 @@ class InfoUIHandler(HandlerV2):
         return record.channel == Channel.INFO_LOG
 
     def emit(self, record: LogRecordV2) -> None:
-        """Добавляет сообщение в лог активного окна.
+        """Доставляет info-сообщение в лог активного окна.
 
         Вход: record — запись.
-        Роль: если у active_child есть set_info — вызываем его
-              в UI-потоке. Иначе — молча выходим (файл уже
-              обработан InfoFileHandler).
+        Роль:
+            Если у active_child есть _ui_info_signal — эмитим
+            record.message. Сигнал доставляется в UI-поток
+            автоматически, эмит безопасен из фонового потока.
+            Иначе — молча выходим (InfoFileHandler уже пишет
+            ту же запись в файл).
         """
         active_child = self._get_active_child()
         if active_child is None:
             return
+        if not hasattr(active_child, "_ui_info_signal"):
+            return
         if not hasattr(active_child, "set_info"):
             return
-        msg = record.message
-        self._run_in_ui_thread(
-            lambda: active_child.set_info(msg)
-        )
+        active_child._ui_info_signal.emit(record.message)
 
 class ReportHandler(HandlerV2):
     """Handler журнала сервиса (Channel.REPORT).
@@ -401,21 +441,31 @@ class CriticalHandler(HandlerV2):
         """Пишет в errors.txt и показывает диалог.
 
         Вход: record — запись.
-        Роль: файл пишем сразу, диалог — в UI-потоке.
-              Родитель диалога — active_child (если есть), фон —
-              bg_color active_child. Если окна нет — parent=None,
-              диалог показывается без родителя.
+        Роль:
+            Файл пишется сразу. Диалог:
+                - если у active_child есть _ui_critical_signal —
+                  эмитим (msg, can_influence). Сигнал доставит
+                  в UI-поток и вызовет окно-получателя.
+                - иначе — старая логика через _run_in_ui_thread
+                  и show_dialog с parent = active_child.
         """
-        # 1. Запись в errors.txt.
+        # 1. Запись в errors.txt — без изменений.
         self._append_to_file(
             self._errors_file_path(), self._format_line(record)
         )
 
-        # 2. Диалог в UI-потоке.
+        # 2. Диалог.
         msg = record.message
         can_influence = record.can_influence
-        # REPLACE: parent — active_child; bg_color — из него же.
-        parent = self._get_active_child()
+        active_child = self._get_active_child()
+
+        if (active_child is not None
+                and hasattr(active_child, "_ui_critical_signal")):
+            active_child._ui_critical_signal.emit(msg, can_influence)
+            return
+
+        # Fallback: старая логика через _run_in_ui_thread.
+        parent = active_child
         bg_color = getattr(parent, "bg_color", None) if parent else None
 
         def show_dialog():

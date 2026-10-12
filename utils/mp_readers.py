@@ -43,11 +43,28 @@ class ChzMpEntry:
         full_kiz — полный КИЗ, прошедший очистку.
         storage_kiz — 31-символьный КИЗ для записи в хранилище.
         result — результат KizValidator.validate_for_sale.
+        sheet_name — имя листа, с которого прочитан КИЗ.
     """
     seller_name: str
     full_kiz: str
     storage_kiz: str
     result: ValidationResult
+    sheet_name: str
+
+@dataclass
+class ChzMpReadResult:
+    """Результат чтения одного файла ЧЗ_МП.
+
+    Поля:
+        entries — список прочитанных записей ChzMpEntry.
+        unknown_sheets — имена листов, для которых не нашёлся
+                         продавец.
+        reason — None при успешном чтении (даже если entries пуст).
+                 Непустой — файл пропущен целиком.
+    """
+    entries: List[ChzMpEntry]
+    unknown_sheets: List[str]
+    reason: Optional[str]
 
 
 class MpReportTypeDetector:
@@ -108,6 +125,18 @@ class MpReportData:
     total_unique: int
     skipped_by_type: dict
 
+@dataclass
+class MpReadResult:
+    """Результат чтения одного WB- или Ozon-отчёта.
+
+    Поля:
+        data — MpReportData при успехе, иначе None.
+        reason — None и data is not None — успех.
+                 Непустой и data is None — файл пропущен.
+    """
+    data: Optional[MpReportData]
+    reason: Optional[str]
+
 
 class BaseMpReportReader:
     """База для читателей отчётов МП (WB, Ozon).
@@ -129,7 +158,7 @@ class BaseMpReportReader:
 
     @classmethod
     def read(cls, report_path, sellers, kiz_validator,
-             logger) -> Optional[MpReportData]:
+             logger) -> MpReadResult:
         """Читает один отчёт МП.
 
         Вход:
@@ -139,21 +168,31 @@ class BaseMpReportReader:
             logger — LoggerV2.
 
         Выход:
-            MpReportData или None (файл не открылся, продавец не
-            найден, нет обязательного листа).
+            MpReadResult:
+                data — MpReportData при успехе, иначе None.
+                reason — None при успехе; один из ярлыков
+                         ("продавец не найден", "файл не открылся",
+                         "нет обязательного листа") при пропуске.
+
+        Роль:
+            Единый каркас для WB и Ozon. Исключения не
+            перехватываются — пробрасываются наружу. finally
+            закрывает workbook и сбрасывает статистику KizUtils.
         """
         seller = cls._find_seller(report_path, sellers, logger)
         if seller is None:
-            return None
+            return MpReadResult(data=None, reason="продавец не найден")
 
         wb = cls._open_workbook(report_path, logger)
         if wb is None:
-            return None
+            return MpReadResult(data=None, reason="файл не открылся")
 
         KizUtils.start_stats()
         try:
             if not cls._has_required_sheets(wb, logger):
-                return None
+                return MpReadResult(
+                    data=None, reason="нет обязательного листа"
+                )
 
             occurrences, skipped_by_type = cls._load_occurrences(wb, logger)
             dates = cls._load_dates(wb)
@@ -162,7 +201,10 @@ class BaseMpReportReader:
                 occurrences, dates, kiz_validator, logger, seller,
             )
 
-            return cls._build_result(seller, result_dict, skipped_by_type)
+            result_data = cls._build_result(
+                seller, result_dict, skipped_by_type,
+            )
+            return MpReadResult(data=result_data, reason=None)
         finally:
             try:
                 wb.close()
@@ -352,10 +394,10 @@ class BaseMpReportReader:
     def _log_stats(cls, logger, report_path, stats) -> None:
         """Финальный info-лог со статистикой KizUtils."""
         logger.info(
-            f"{Path(report_path).name}: успешно {stats['processed']}, "
-            f"отброшено коротких {stats['dropped_short']}, "
-            f"без '01' {stats['dropped_no_01']}, "
-            f"транслитерировано {stats['transliterated']}."
+            f"\n{Path(report_path).name}: \n    успешно {stats['processed']}\n "
+            f"    отброшено коротких {stats['dropped_short']}\n"
+            f"    без '01' {stats['dropped_no_01']}\n"
+            f"    транслитерировано {stats['transliterated']}"
         )
 
 
@@ -371,7 +413,7 @@ class ChzMpReportReader:
 
     @staticmethod
     def read(report_path, sellers, kiz_validator,
-             logger: "LoggerV2") -> List[ChzMpEntry]:
+             logger: "LoggerV2") -> ChzMpReadResult:
         """Читает один файл ЧЗ_МП.
 
         Вход:
@@ -381,9 +423,13 @@ class ChzMpReportReader:
             logger — LoggerV2 для пошаговых и сводных сообщений.
 
         Выход:
-            Список ChzMpEntry — по одной записи на каждый
-            валидированный КИЗ. Пустой список, если файл не
-            открылся или ничего не прошло очистку.
+            ChzMpReadResult:
+                entries — валидированные записи ChzMpEntry.
+                unknown_sheets — имена листов, для которых не
+                                 нашёлся продавец.
+                reason — None при успешном чтении (даже если
+                         entries пуст). "файл не открылся", если
+                         WorkbookOpener не смог открыть файл.
 
         Роль:
             Один файл — один вызов. Batch-контекст KizStorage
@@ -392,6 +438,7 @@ class ChzMpReportReader:
             в finally — независимо от того, чем закончилось чтение.
         """
         entries: List[ChzMpEntry] = []
+        unknown_sheets: List[str] = []
         logger.report(f"Обработка ЧЗ_МП: {Path(report_path).name}")
 
         wb = WorkbookOpener.open(
@@ -399,11 +446,18 @@ class ChzMpReportReader:
             read_only=True,
         )
         if wb is None:
-            return entries
+            return ChzMpReadResult(
+                entries=[], unknown_sheets=[],
+                reason="файл не открылся",
+            )
 
         KizUtils.start_stats()
         try:
             for sheet_name in wb.sheetnames:
+                logger.status(
+                    f"Идёт обработка листа {sheet_name} отчёта "
+                    f"со склада {Path(report_path).name}"
+                )
                 seller = ExcelHelper.find_seller_by_sheet_name(
                     wb, sellers, sheet_name
                 )
@@ -412,6 +466,7 @@ class ChzMpReportReader:
                         f"  Лист '{sheet_name}' не соответствует ни одному "
                         f"продавцу – пропущен"
                     )
+                    unknown_sheets.append(sheet_name)
                     continue
 
                 sheet = wb[sheet_name]
@@ -442,6 +497,7 @@ class ChzMpReportReader:
                             full_kiz=full_kiz,
                             storage_kiz=storage_kiz,
                             result=result,
+                            sheet_name=sheet_name,
                         ))
                 logger.report(
                     f"  Лист '{sheet_name}' → продавец '{seller.name}': "
@@ -454,15 +510,18 @@ class ChzMpReportReader:
                 pass
             stats = KizUtils.pop_stats()
             logger.info(
-                f"ЧЗ_МП {Path(report_path).name}: "
-                f"успешно {stats['processed']}, "
-                f"отброшено коротких {stats['dropped_short']}, "
-                f"без '01' {stats['dropped_no_01']}, "
-                f"транслитерировано {stats['transliterated']}."
+                f"\nЧЗ_МП {Path(report_path).name}: \n"
+                f"    успешно: {stats['processed']}\n"
+                f"    отброшено коротких: {stats['dropped_short']}\n"
+                f"    без '01': {stats['dropped_no_01']}, "
+                f"    транслитерировано: {stats['transliterated']}"
             )
 
-        return entries
-
+        return ChzMpReadResult(
+            entries=entries,
+            unknown_sheets=unknown_sheets,
+            reason=None,
+        )
 
 class WBReportReader(BaseMpReportReader):
     """Читатель WB-отчётов МП.

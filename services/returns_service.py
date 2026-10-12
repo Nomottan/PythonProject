@@ -96,11 +96,12 @@ class ReturnsPreparationService:
             "Исходные данные возвратов {date}", ctx.date_str
         )
         copy_dest = ctx.reports_dir / copy_name
-        if not FileHelper.copy_file_with_log(
+        result = FileHelper.copy_file_with_log(
             source_path, copy_dest, logger,
             description="исходный файл", overwrite=True,
-        ):
-            # FileHelper уже написал причину в ctx.log.
+        )
+        if result["status"] != "copied":
+
             return
 
         allowed_companies = TextUtils.get_allowed_companies(sellers)
@@ -268,18 +269,18 @@ class KizExportService:
             data.returns_updated_in_base + data.returns_not_in_base
         )
         logger.info(
-            f"Возвраты: обработано {total_returns} "
-            f"({data.returns_updated_in_base} обновлено в базе, "
+            f"\nВозвраты:    \nобработано {total_returns}\n"
+            f"({data.returns_updated_in_base} обновлено в базе\n"
             f"{data.returns_not_in_base} отсутствует в базе — "
-            f"запись не создана)."
+            f"запись не создана).\n"
         )
 
         kiz_stats = data.kiz_stats or {}
         logger.info(
-            f"Обработка КИЗов: успешно {kiz_stats.get('processed', 0)}, "
-            f"отброшено коротких {kiz_stats.get('dropped_short', 0)}, "
-            f"без '01' {kiz_stats.get('dropped_no_01', 0)}, "
-            f"транслитерировано {kiz_stats.get('transliterated', 0)}."
+            f"\nОбработка КИЗов: \n    успешно {kiz_stats.get('processed', 0)}\n "
+            f"    отброшено коротких: {kiz_stats.get('dropped_short', 0)}\n "
+            f"    без '01': {kiz_stats.get('dropped_no_01', 0)}\n"
+            f"    транслитерировано: {kiz_stats.get('transliterated', 0)}"
         )
 
         logger.report("---Выгрузка завершена.---\n")

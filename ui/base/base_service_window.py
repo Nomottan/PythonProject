@@ -60,7 +60,9 @@ class BaseServiceWindow(QMainWindow):
     BG_COLOR = (50, 50, 50)
     PIPELINE_BUTTONS = ()
     _run_in_ui_signal = Signal(object)
-
+    _ui_info_signal = Signal(str)
+    _ui_status_signal = Signal(str)
+    _ui_critical_signal = Signal(str, bool)
     def __init__(self, parent=None, title="", log_manager_v2=None) -> None:
         """Конструктор.
 
@@ -110,6 +112,44 @@ class BaseServiceWindow(QMainWindow):
             min_height=100, max_height=200,
         )
 
+        # соединения UI-каналов. Эмит в фоновом потоке —
+        # сигнал доставляется в UI-поток автоматически.
+        self._ui_info_signal.connect(self.set_info)
+        self._ui_status_signal.connect(self.set_status)
+        self._ui_critical_signal.connect(self._show_critical_dialog)
+
+    def _show_critical_dialog(self, msg: str, can_influence: bool) -> None:
+        """Показывает критический диалог в UI-потоке.
+
+        Вход:
+            msg — текст сообщения.
+            can_influence — может ли пользователь повлиять
+                            на ситуацию. True → MessageDialog
+                            (вопрос), False → NotificationDialog
+                            (уведомление).
+
+        Выход: нет.
+
+        Роль:
+            Слот _ui_critical_signal. Вызывается в UI-потоке
+            через сигнал — прямой показ QDialog из фонового
+            потока недопустим. parent = self, bg_color = self.bg_color.
+        """
+        from ui.windows.message_dialog import (
+            MessageDialog, NotificationDialog,
+        )
+        if can_influence:
+            MessageDialog.question(
+                parent=self, text=msg,
+                bg_color=self.bg_color,
+                title_text="Критическая ошибка",
+            )
+        else:
+            NotificationDialog.notify(
+                parent=self, text=msg,
+                bg_color=self.bg_color,
+                title_text="Критическая ошибка",
+            )
     # ============================================================
     # Публичные каналы UI (handler'ы V2)
     # ============================================================

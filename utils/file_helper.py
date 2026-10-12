@@ -30,7 +30,7 @@ class FileHelper:
 
     @staticmethod
     def copy_file_with_log(src, dst, logger, description="файл",
-                           overwrite=False) -> bool:
+                           overwrite=False) -> dict:
         """Копирует файл с логированием через LoggerV2.
 
         Вход:
@@ -42,14 +42,21 @@ class FileHelper:
             overwrite — перезаписывать ли существующий файл.
 
         Выход:
-            True — файл скопирован.
-            False — файл уже существует (при overwrite=False) или
-                    ошибка копирования.
+            dict с ключами:
+                status — "copied" | "exists" | "error".
+                         "copied" — успешное копирование.
+                         "exists" — целевой файл существует и
+                                    overwrite=False.
+                         "error"  — исключение при копировании.
+                path   — Path целевого файла.
+                error  — None при "copied"/"exists", str(e) при
+                         "error".
 
         Роль:
             Единая точка копирования. WARNING при пропуске,
             report при успехе, critical при ошибке. Ошибка
-            не пробрасывается: вызывающий код продолжает работу.
+            не пробрасывается — вызывающий код продолжает
+            работу и сам решает по status.
         """
         src_path = Path(src)
         dst_path = Path(dst)
@@ -57,21 +64,21 @@ class FileHelper:
         if not overwrite and dst_path.exists():
             if logger is not None:
                 logger.warning(f"Файл уже существует: {dst_path.name}")
-            return False
+            return {"status": "exists", "path": dst_path, "error": None}
 
         try:
             dst_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_path, dst_path)
             if logger is not None:
                 logger.report(f"Скопирован {description}: {dst_path.name}")
-            return True
+            return {"status": "copied", "path": dst_path, "error": None}
         except Exception as e:
             if logger is not None:
                 logger.critical(
                     f"Ошибка копирования {description}: {e}",
                     can_influence=False,
                 )
-            return False
+            return {"status": "error", "path": dst_path, "error": str(e)}
 
     @staticmethod
     def ensure_file_exists(logger, file_path, description="файл"):

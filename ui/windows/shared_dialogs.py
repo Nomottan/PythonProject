@@ -807,11 +807,14 @@ class SaleDuplicatePickerDialog(BaseEditDialog):
         pass
 
     def _build_content(self, layout) -> None:
-        """Строит заголовок и кнопки по одной на каждый файл.
+        """Строит заголовок и кнопки-получатели в скролл-контейнере.
 
         Вход: layout — QVBoxLayout из BaseEditDialog.
-        Роль: подпись кнопки — имя получателя. Цвет — производный
-              от self.bg_color через ColorCalculator.derive.
+        Роль: заголовок — в основном layout диалога. Кнопки лежат
+              в content_layout скролл-контейнера: при 2–3 файлах
+              скроллбар не появляется, при 4+ — вертикальный
+              скролл. Подпись кнопки — имя получателя, цвет —
+              производный от self.bg_color через ColorCalculator.
               Порядок кнопок совпадает с порядком file_to_receiver.
         """
         layout.addWidget(LabelFactory.create_header_label(
@@ -826,6 +829,14 @@ class SaleDuplicatePickerDialog(BaseEditDialog):
             alpha=0.9,
         )
 
+        scroll, _, content_layout = (
+            ListWidgetFactory.create_scroll_container(
+                self, spacing=4, bg_color=self.bg_color,
+            )
+        )
+
+        layout.addWidget(scroll)
+
         for path, receiver_name in self._file_to_receiver.items():
             btn = ButtonFactory.create_button(
                 self, receiver_name, btn_color,
@@ -835,7 +846,7 @@ class SaleDuplicatePickerDialog(BaseEditDialog):
                 lambda checked=False, p=path: self._on_pick(p)
             )
             self._buttons.append(btn)
-            layout.addWidget(btn)
+            content_layout.addWidget(btn)
 
     def _on_pick(self, path) -> None:
         """Сохраняет выбранный путь и закрывает диалог.

@@ -53,7 +53,22 @@ class PreparationService:
 
     def prepare(self, target_dir, fbs_files=None, mp_files=None,
                 sellers=None):
-        """Запускает подготовку."""
+        """Запускает подготовку.
+
+        Вход:
+            target_dir — корневая папка задачи.
+            fbs_files — список файлов ЧЗ МП.
+            mp_files — список отчётов МП.
+            sellers — список Seller. None → [].
+
+        Выход: нет.
+
+        Роль:
+            Копирует входные файлы в рабочую папку, ведёт пошаговый
+            журнал, эмитит info-сводку по итогам копирования,
+            чистит устаревшие записи КИЗов. UI-статус —
+            «Подготовка завершена» в конце.
+        """
         if sellers is None:
             sellers = []
 
@@ -77,24 +92,93 @@ class PreparationService:
         )
         logger.report(f"Рабочая папка: {ctx.work_folder}")
 
-        self._copy_fbs_files(ctx, logger, fbs_files or [])
-        self._copy_mp_files(ctx, logger, mp_files or [], sellers)
+        logger.info(
+            "\n==================== Этап: Подготовка ====================\n"
+        )
 
+        # warning при пустом входе — проверка входа, до копирования.
+        if not fbs_files and not mp_files:
+            logger.warning("\nНет входных файлов для копирования")
+
+        # сбор статистики по обоим копированиям.
+        stats_fbs = self._copy_fbs_files(ctx, logger, fbs_files or [])
+        stats_mp = self._copy_mp_files(
+            ctx, logger, mp_files or [], sellers,
+        )
+
+        # многострочная info-сводка одним вызовом.
+        copied_fbs = stats_fbs["copied"]
+        copied_mp = stats_mp["copied"]
+        wb = stats_mp["wb"]
+        ozon = stats_mp["ozon"]
+        unrecognized = stats_mp["unrecognized"]
+        broken_dimension = stats_mp["broken_dimension"]
+        exists = stats_fbs["exists"] + stats_mp["exists"]
+        error = stats_fbs["error"] + stats_mp["error"]
+        sellers_wb = stats_mp["sellers_wb"]
+        sellers_ozon = stats_mp["sellers_ozon"]
+
+        lines = []
+        lines.append(f"Скопировано всего: {copied_fbs + copied_mp}")
+        if copied_fbs > 0:
+            lines.append(f"  Отчёты со склада (ЧЗ МП): {copied_fbs}")
+        if wb > 0:
+            lines.append(f"  WB: {wb}")
+        if ozon > 0:
+            lines.append(f"  Ozon: {ozon}")
+        if unrecognized > 0:
+            lines.append(f"  Нераспознанные: {unrecognized}")
+        lines.append(f"Не скопировано: {broken_dimension + exists + error}")
+        if broken_dimension > 0:
+            lines.append(f"  Битый dimension: {broken_dimension}")
+        if exists > 0:
+            lines.append(f"  Уже существует: {exists}")
+        if error > 0:
+            lines.append(f"  Ошибка копирования: {error}")
+        if sellers_wb or sellers_ozon:
+            lines.append("Продавцы:")
+            if sellers_wb:
+                lines.append(
+                    f"  WB: {', '.join(sorted(sellers_wb))}"
+                )
+            if sellers_ozon:
+                lines.append(
+                    f"  Ozon: {', '.join(sorted(sellers_ozon))}"
+                )
+        logger.info("\n".join(lines))
+
+        # info-отбивка конца, 50 знаков =.
+        logger.info("\n==================================================\n")
         logger.report("Подготовка завершена.")
+        logger.status("Подготовка завершена")
 
-        # Очистка устаревших записей КИЗов
+        # Очистка устаревших записей КИЗов.
         self.kiz_validator.load()
         deleted = self.kiz_validator.clean_old_entries(months=1)
         logger.info(f"Очистка старых записей: удалено {deleted}.")
-
     # ---------- Приватные методы ----------
 
-    def _copy_fbs_files(self, ctx: TaskContext, logger, fbs_files) -> None:
-        """Копирует файлы ЧЗ МП в подпапку Отчёты/."""
+    def _copy_fbs_files(self, ctx: TaskContext, logger, fbs_files) -> dict:
+        """Копирует файлы ЧЗ МП в подпапку Отчёты/.
+
+        Вход:
+            ctx — TaskContext.
+            logger — LoggerV2.
+            fbs_files — список путей к файлам ЧЗ МП.
+
+        Выход:
+            dict {"copied", "exists", "error"} — агрегаты по файлам.
+
+        Роль: имя файла формируется через FilenameUtils — первый
+              файл без суффикса, последующие с индексом (i+1).
+        """
+        stats = {"copied": 0, "exists": 0, "error": 0}
         if not fbs_files:
-            return
+            return stats
         for i, src in enumerate(fbs_files):
             src_path = Path(src)
+            logger.status(f"Обрабатывается: {src_path.name}")
+            logger.report(f"\nОбработка файла: {src_path.name}")
             if i == 0:
                 new_name = FilenameUtils.format_with_extension(
                     "ЧЗ_МП_{date}", ctx.date_str
@@ -104,49 +188,94 @@ class PreparationService:
                     "ЧЗ_МП_{date}", ctx.date_str, index=i + 1
                 )
             dst = ctx.reports_dir / new_name
-            FileHelper.copy_file_with_log(
+            result = FileHelper.copy_file_with_log(
                 src_path, dst, logger,
                 description="ЧЗ МП",
                 overwrite=False,
             )
+            if result["status"] == "copied":
+                logger.report(f" Скопировано как: {dst.name}")
+                stats["copied"] += 1
+            elif result["status"] == "exists":
+                logger.report(f" Уже существует: {dst.name}")
+                stats["exists"] += 1
+            else:
+                logger.report(" Не скопировано (ошибка)")
+                stats["error"] += 1
+        return stats
 
     def _copy_mp_files(self, ctx: TaskContext, logger, mp_files,
-                       sellers) -> None:
+                       sellers) -> dict:
         """Копирует отчёты МП в подпапку Отчёты/.
 
-        REPLACE: определяем тип отчёта (WB / Ozon) по первому
-        листу и формируем имя по шаблону Отчёт_WB_... или
-        Отчёт_OZON_.... Старый шаблон ОТЧЁТ МП ПО ... не
-        поддерживается. Неопознанные и неоткрывающиеся файлы
-        копируются как «Неопознанный отчёт {stem} {date}.xlsx».
+        Вход:
+            ctx — TaskContext.
+            logger — LoggerV2.
+            mp_files — список путей к отчётам МП.
+            sellers — список Seller для поиска по имени файла.
+
+        Выход:
+            dict с ключами:
+                copied — всего скопировано (wb + ozon + unrecognized).
+                wb, ozon, unrecognized — из copied по типу.
+                broken_dimension — битый dimension, не копировали.
+                exists, error — не скопировано.
+                sellers_wb, sellers_ozon — set имён продавцов.
+
+        Роль:
+            Тип определяется по первому листу через
+            MpReportTypeDetector. Неопознанные и неоткрывающиеся
+            файлы копируются как «Неопознанный отчёт {stem} {date}».
+            Битый dimension пропускается без копирования.
+            Инвариант: copied == wb + ozon + unrecognized.
         """
+        stats = {
+            "copied": 0, "wb": 0, "ozon": 0, "unrecognized": 0,
+            "broken_dimension": 0, "exists": 0, "error": 0,
+            "sellers_wb": set(), "sellers_ozon": set(),
+        }
         if not mp_files:
-            return
+            return stats
         seller_counters: dict = {}
         for src in mp_files:
             src_path = Path(src)
 
+            # NEW: статус и открытие обработки файла.
+            logger.status(f"Обрабатывается: {src_path.name}")
+            logger.report(f"\nОбработка файла: {src_path.name}")
+
             wb = WorkbookOpener.open(src_path, logger=None, read_only=True)
             if wb is None:
-                logger.warning(f"Не удалось открыть {src_path.name}")
+                # REPLACE: warning — новая формулировка.
+                logger.warning(f"\n{src_path.name}: не открылся")
+                logger.report(" Не открылось")
                 dst = ctx.reports_dir / FilenameUtils.format_with_extension(
                     f"Неопознанный отчёт {src_path.stem} {{date}}",
                     ctx.date_str,
                 )
-                FileHelper.copy_file_with_log(
+                result = FileHelper.copy_file_with_log(
                     src_path, dst, logger,
                     description="неопознанный отчёт", overwrite=False,
                 )
+                if result["status"] == "copied":
+                    logger.report(f" Скопировано как: {dst.name}")
+                    stats["copied"] += 1
+                    stats["unrecognized"] += 1
+                elif result["status"] == "exists":
+                    logger.report(f" Уже существует: {dst.name}")
+                    stats["exists"] += 1
+                else:
+                    logger.report(" Не скопировано (ошибка)")
+                    stats["error"] += 1
                 continue
 
             # Битый dimension — не копируем вообще.
             if ExcelHelper._is_dimension_broken(wb):
                 wb.close()
-                logger.critical(
-                    f"Файл {src_path.name} имеет битый dimension – "
-                    f"пропущен",
-                    can_influence=False,
-                )
+                # REPLACE: было critical — стало warning.
+                logger.warning(f"\n{src_path.name}: битый dimension")
+                logger.report(" Битый dimension — пропущен")
+                stats["broken_dimension"] += 1
                 continue
 
             report_type = MpReportTypeDetector.detect(wb)
@@ -157,23 +286,34 @@ class PreparationService:
 
             # Тип не распознан — копируем как неопознанный.
             if report_type is None:
-                logger.warning(
-                    f"Не удалось определить тип отчёта: {src_path.name}"
-                )
+                # REPLACE: warning — новая формулировка.
+                logger.warning(f"\n{src_path.name}: тип не распознан")
+                logger.report(" Тип не распознан")
                 dst = ctx.reports_dir / FilenameUtils.format_with_extension(
                     f"Неопознанный отчёт {src_path.stem} {{date}}",
                     ctx.date_str,
                 )
-                FileHelper.copy_file_with_log(
+                result = FileHelper.copy_file_with_log(
                     src_path, dst, logger,
                     description="неопознанный отчёт", overwrite=False,
                 )
+                if result["status"] == "copied":
+                    logger.report(f" Скопировано как: {dst.name}")
+                    stats["copied"] += 1
+                    stats["unrecognized"] += 1
+                elif result["status"] == "exists":
+                    logger.report(f" Уже существует: {dst.name}")
+                    stats["exists"] += 1
+                else:
+                    logger.report(" Не скопировано (ошибка)")
+                    stats["error"] += 1
                 continue
 
             # Логируем тип.
             type_label = "WB" if report_type == "wb" else "Ozon"
+            # REPLACE: добавлены два пробела в начале строки.
             logger.report(
-                f"Определён тип отчёта: {type_label} ({src_path.name})"
+                f"  Определён тип отчёта: {type_label} ({src_path.name})"
             )
 
             # Продавца ищем по имени файла.
@@ -185,8 +325,13 @@ class PreparationService:
             # Ключ счётчика — (seller или stem, тип).
             if found_seller:
                 seller_key = found_seller.name
+                logger.report(f" Продавец: {seller_key}")
             else:
                 seller_key = src_path.stem
+                logger.warning(
+                    f"\n{src_path.name}: продавец не определён"
+                )
+                logger.report(" Продавец не определён")
             counter_key = (seller_key, report_type)
 
             idx = seller_counters.get(counter_key, 0) + 1
@@ -207,10 +352,26 @@ class PreparationService:
                 )
 
             dst = ctx.reports_dir / new_name
-            FileHelper.copy_file_with_log(
+            result = FileHelper.copy_file_with_log(
                 src_path, dst, logger,
                 description="отчёт", overwrite=False,
             )
+            if result["status"] == "copied":
+                logger.report(f" Скопировано как: {dst.name}")
+                stats["copied"] += 1
+                stats[report_type] += 1
+                if report_type == "wb":
+                    stats["sellers_wb"].add(seller_key)
+                else:
+                    stats["sellers_ozon"].add(seller_key)
+            elif result["status"] == "exists":
+                logger.report(f" Уже существует: {dst.name}")
+                stats["exists"] += 1
+            else:
+                logger.report(" Не скопировано (ошибка)")
+                stats["error"] += 1
+
+        return stats
 
 class ExportKizService:
     """Сервис выгрузки КИЗов из ЧЗ_МП и отчётов МП в текстовые файлы.
@@ -274,19 +435,46 @@ class ExportKizService:
             work_folder=ctx.logs_dir,
             log_filename="log_выгрузка_кизов.txt",
         )
-
+        logger.status("Выгрузка КИЗов начата")
         logger.report(
-            "=== ВЫГРУЗКА КИЗОВ В ТЕКСТОВЫЕ ФАЙЛЫ "
-            "(с валидацией и очисткой) ==="
+            "\n==================== Этап: Выгрузка КИЗов "
+            "====================\n"
         )
         logger.report(f"Рабочая папка: {ctx.work_folder}")
+        logger.info(
+            "\n==================== Этап: Выгрузка КИЗов "
+            "====================\n"
+        )
 
-        self.kiz_validator.load()
-
+        try:
+            self.kiz_validator.load()
+            if self.kiz_validator.storage.get_all():
+                logger.info(
+                    "Загружены сохранённые данные по ранее "
+                    "списанным КИЗам"
+                )
+            else:
+                logger.info(
+                    "Не получилось загрузить данные — валидация "
+                    "без сохранённой базы"
+                )
+        except Exception:
+            logger.info(
+                "Не получилось загрузить данные — валидация "
+                "без сохранённой базы"
+            )
+        logger.status("Загрузка базы КИЗов для валидации")
         kiz_by_seller: dict[str, set] = {seller.name: set() for seller in sellers}
         prices_by_seller: dict[str, dict] = {seller.name: {} for seller in sellers}
+        missed_files: list = []
+        wb_sellers_with_kiz: set = set()
+        successful_txt: list = []
+        size_before = len(self.kiz_validator.storage.get_all())
+        added_from_chz = 0
+        added_from_wb = 0
+        added_from_ozon = 0
 
-        # Единый батч на оба цикла чтения.
+        # Единый батч на три цикла чтения.
         with self.kiz_validator.batch():
             # ------------------------------------------------------------
             # 1. Обработка ЧЗ_МП — через ChzMpReportReader.
@@ -294,77 +482,216 @@ class ExportKizService:
             chz_files = FileHelper.find_files_by_pattern(
                 ctx.reports_dir, "ЧЗ_МП*.xlsx"
             )
-            for chz_path in chz_files:
-                try:
-                    entries = ChzMpReportReader.read(
-                        report_path=chz_path,
-                        sellers=sellers,
-                        kiz_validator=self.kiz_validator,
-                        logger=logger,
-                    )
-                    # Ридер возвращает и ADDED, и SKIPPED. Фильтруем
-                    # по result — только добавленные КИЗы идут в .txt.
-                    for entry in entries:
-                        if entry.result == ValidationResult.ADDED:
-                            kiz_by_seller[entry.seller_name].add(entry.full_kiz)
-                except Exception as e:
-                    # NEW: ошибка одного файла — в critical, обработка
-                    # остальных продолжается. Накопленные в батче
-                    # изменения сохранятся на выходе из with.
-                    logger.critical(
-                        f"Ошибка обработки файла {Path(chz_path).name}: {e}",
-                        can_influence=False,
-                    )
-                    continue
+            mp_files = FileHelper.find_files_by_pattern(
+                ctx.reports_dir, "Отчёт_WB_*.xlsx"
+            )
+            ozon_files = FileHelper.find_files_by_pattern(
+                ctx.reports_dir, "Отчёт_OZON_*.xlsx"
+            )
+
+            if not chz_files and not mp_files and not ozon_files:
+                logger.info("\nФайлов для обработки не обнаружено.")
+            else:
+                lines = ["\nОбнаружено файлов:"]
+                if chz_files:
+                    lines.append(f"  Отчёты со склада: {len(chz_files)}")
+                if mp_files:
+                    lines.append(f"  WB: {len(mp_files)}")
+                if ozon_files:
+                    lines.append(f"  Ozon: {len(ozon_files)}")
+                logger.info("\n".join(lines))
+
+            if chz_files:
+                logger.status("Обработка отчётов со склада начата")
+                for chz_path in chz_files:
+                    try:
+                        result = ChzMpReportReader.read(
+                            report_path=chz_path,
+                            sellers=sellers,
+                            kiz_validator=self.kiz_validator,
+                            logger=logger,
+                        )
+
+                        if result.reason is not None:
+                            missed_files.append(
+                                (Path(chz_path).name, result.reason)
+                            )
+                            continue
+
+                        for entry in result.entries:
+                            if entry.result == ValidationResult.ADDED:
+                                kiz_by_seller[entry.seller_name].add(entry.full_kiz)
+                        added_from_chz += sum(
+                            1 for e in result.entries
+                            if e.result == ValidationResult.ADDED
+                        )
+                        added_count = sum(
+                            1 for e in result.entries
+                            if e.result == ValidationResult.ADDED
+                        )
+                        lines = [
+                            f"\nОбработка отчёта со склада: "
+                            f"{Path(chz_path).name}"
+                        ]
+                        if result.entries:
+                            lines.append("")
+                            lines.append("Соотнесённые продавцы:")
+                            seen_pairs = set()
+                            for e in result.entries:
+                                pair = (e.sheet_name, e.seller_name)
+                                if pair in seen_pairs:
+                                    continue
+                                seen_pairs.add(pair)
+                                count = sum(
+                                    1 for x in result.entries
+                                    if x.sheet_name == e.sheet_name
+                                )
+                                lines.append(
+                                    f"  {e.sheet_name} -> "
+                                    f"{e.seller_name}. "
+                                    f"КИЗов выгружено {count}"
+                                )
+                        lines.append("")
+                        lines.append(
+                            f"Всего КИЗов в отчёте: {len(result.entries)}"
+                        )
+                        lines.append(
+                            f"Отсеяно (товар не возвращён): "
+                            f"{len(result.entries) - added_count}"
+                        )
+                        if result.unknown_sheets:
+                            lines.append("")
+                            lines.append(
+                                "Страницы не определены: "
+                                f"{', '.join(result.unknown_sheets)}"
+                            )
+                        logger.info("\n\n".join(lines))
+                    except Exception as e:
+                        logger.critical(
+                            f"Ошибка обработки файла {Path(chz_path).name}: {e}",
+                            can_influence=False,
+                        )
+                        missed_files.append(
+                            (Path(chz_path).name, "ошибка чтения")
+                        )
+                        continue
 
             # ------------------------------------------------------------
             # 2. Обработка отчётов МП — через WBReportReader.
             # ------------------------------------------------------------
-            mp_files = FileHelper.find_files_by_pattern(
-                ctx.reports_dir, "Отчёт_WB_*.xlsx"
-            )
-            for mp_path in mp_files:
-                try:
-                    data = WBReportReader.read(
-                        report_path=mp_path,
-                        sellers=sellers,
-                        kiz_validator=self.kiz_validator,
-                        logger=logger,
-                    )
-                    if data is None:
+            if mp_files:
+                logger.status("Обработка отчётов WB начата")
+                wb_blocks: list = []
+                for mp_path in mp_files:
+                    try:
+                        logger.status(f"Обработка отчёта WB: {mp_path.name}")
+                        result = WBReportReader.read(
+                            report_path=mp_path,
+                            sellers=sellers,
+                            kiz_validator=self.kiz_validator,
+                            logger=logger,
+                        )
+
+                        if result.reason is not None:
+                            missed_files.append(
+                                (Path(mp_path).name, result.reason)
+                            )
+                            continue
+
+                        data = result.data
+                        if data is None:
+                            continue
+                        added_from_wb += data.added
+                        # Мерж результатов отчёта в общесервисные структуры.
+                        kiz_by_seller[data.seller.name].update(data.full_kizs)
+                        prices_by_seller[data.seller.name].update(data.prices)
+                        wb_sellers_with_kiz.add(data.seller.name)
+
+                        wb_blocks.append("\n".join([
+                            f"Файл: {Path(mp_path).name}",
+                            f"  Продавец: {data.seller.name}",
+                            f"  Всего уникальных: {data.total_unique}",
+                            f"  Добавлено: {data.added}",
+                            f"  Отсеяно (товар не возвращён): "
+                            f"{data.skipped_no_return + data.skipped_date_before_return}",
+                            f"  Дубликаты в отчёте: {data.skipped_dup}",
+                            f"  Цен собрано: {len(data.prices)}",
+                        ]))
+                    except Exception as e:
+                        logger.critical(
+                            f"Ошибка обработки файла {Path(mp_path).name}: {e}",
+                            can_influence=False,
+                        )
+                        missed_files.append(
+                            (Path(mp_path).name, "ошибка чтения")
+                        )
                         continue
-                    # Мерж результатов отчёта в общесервисные структуры.
-                    kiz_by_seller[data.seller.name].update(data.full_kizs)
-                    prices_by_seller[data.seller.name].update(data.prices)
-                except Exception as e:
-                    logger.critical(
-                        f"Ошибка обработки файла {Path(mp_path).name}: {e}",
-                        can_influence=False,
-                    )
-                    continue
+                if wb_blocks:
+                    logger.info("\n" + "\n\n".join(wb_blocks))
+
             # --- 3. Обработка Ozon-отчётов ---
-            ozon_files = FileHelper.find_files_by_pattern(
-                ctx.reports_dir, "Отчёт_OZON_*.xlsx"
-            )
-            for ozon_path in ozon_files:
-                try:
-                    data = OZONReportReader.read(
-                        report_path=ozon_path,
-                        sellers=sellers,
-                        kiz_validator=self.kiz_validator,
-                        logger=logger,
-                    )
-                    if data is None:
+            if ozon_files:
+                logger.status("Обработка отчётов Ozon начата")
+                ozon_blocks: list = []
+                for ozon_path in ozon_files:
+                    try:
+                        logger.status(f"Обработка отчёта Ozon: {ozon_path.name}")
+                        result = OZONReportReader.read(
+                            report_path=ozon_path,
+                            sellers=sellers,
+                            kiz_validator=self.kiz_validator,
+                            logger=logger,
+                        )
+
+                        if result.reason is not None:
+                            missed_files.append(
+                                (Path(ozon_path).name, result.reason)
+                            )
+                            continue
+
+                        data = result.data
+                        if data is None:
+                            continue
+                        added_from_ozon += data.added
+                        kiz_by_seller[data.seller.name].update(data.full_kizs)
+
+                        ozon_blocks.append("\n".join([
+                            f"Файл: {Path(ozon_path).name}",
+                            f"  Продавец: {data.seller.name}",
+                            f"  Всего уникальных: {data.total_unique}",
+                            f"  Добавлено: {data.added}",
+                            f"  Отсеяно (товар не возвращён): "
+                            f"{data.skipped_no_return + data.skipped_date_before_return}",
+                            f"  Дубликаты в отчёте: {data.skipped_dup}",
+                        ]))
+                    except Exception as e:
+                        logger.critical(
+                            f"Ошибка обработки файла {Path(ozon_path).name}: "
+                            f"{e}",
+                            can_influence=False,
+                        )
+                        missed_files.append(
+                            (Path(ozon_path).name, "ошибка чтения")
+                        )
                         continue
-                    kiz_by_seller[data.seller.name].update(data.full_kizs)
-                    prices_by_seller[data.seller.name].update(data.prices)
-                except Exception as e:
-                    logger.critical(
-                        f"Ошибка обработки файла {Path(ozon_path).name}: "
-                        f"{e}",
-                        can_influence=False,
-                    )
-                    continue
+                if ozon_blocks:
+                    logger.info("\n" + "\n\n".join(ozon_blocks))
+        size_after = len(self.kiz_validator.storage.get_all())
+        info_lines = []
+        info_lines.append("\nЗапись в базу КИЗов:")
+        info_lines.append(f"  Из отчётов со склада: {added_from_chz}")
+        info_lines.append(f"  Из отчётов WB: {added_from_wb}")
+        info_lines.append(f"  Из отчётов Ozon: {added_from_ozon}")
+        total_ops = added_from_chz + added_from_wb + added_from_ozon
+        info_lines.append(f"  Всего операций записи: {total_ops}")
+        delta = size_after - size_before
+        # Плюс — только для неотрицательного delta. Для delta < 0
+        # f-string сам выводит минус (без --5).
+        delta_str = f"{'+' if delta >= 0 else ''}{delta}"
+        info_lines.append(
+            f"База КИЗов: {size_before} → {size_after} ({delta_str})"
+        )
+        logger.info("\n".join(info_lines))
         # ------------------------------------------------------------
         # 3. Сохранение цен из отчётов МП — вне батча.
         # ------------------------------------------------------------
@@ -373,6 +700,28 @@ class ExportKizService:
             logger.report(
                 f"  Цены сохранены в {FbsBufferPrices.FILENAME}"
             )
+            total_prices = sum(
+                len(p) for p in prices_by_seller.values()
+            )
+            if total_prices > 0:
+                logger.status("Цены с отчётов WB сохранены")
+                lines = ["\nСохранение цен из отчётов WB:"]
+                for seller in sellers:
+                    prices = prices_by_seller.get(seller.name) or {}
+                    if prices:
+                        lines.append(f"  {seller.name}: {len(prices)}")
+                no_price_names = [
+                    seller.name for seller in sellers
+                    if seller.name in wb_sellers_with_kiz
+                       and not prices_by_seller.get(seller.name)
+                ]
+                if no_price_names:
+                    lines.append(
+                        f"Без цен: {', '.join(no_price_names)}"
+                    )
+                logger.info("\n".join(lines))
+            else:
+                logger.status("Цены с отчётов WB не обнаружены")
         except (IOError, OSError) as e:
             logger.critical(
                 f"Не удалось сохранить {FbsBufferPrices.FILENAME}: {e}",
@@ -387,20 +736,71 @@ class ExportKizService:
         logger.report("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
         for seller_name, kiz_set in kiz_by_seller.items():
             if not kiz_set:
+                logger.status(
+                    f"Нет КИЗов для продавца {seller_name}"
+                )
                 logger.report(
                     f"  {seller_name}: нет КИЗов – файл не создан"
                 )
+
                 continue
             txt_path = ctx.processing_dir / f"{seller_name}.txt"
-            TextFileWriter.write(
+            ok = TextFileWriter.write(
                 txt_path, header=None, items=sorted(kiz_set), logger=logger,
             )
+            if ok:
+                logger.status(
+                    f"Файл для обработки по продавцу {seller_name} готов"
+                )
+                successful_txt.append(txt_path.name)
             logger.report(
                 f"  {seller_name}: сохранено {len(kiz_set)} КИЗов "
                 f"в {txt_path.name}"
             )
 
-        logger.report("\n=== ВЫГРУЗКА ЗАВЕРШЕНА ===")
+        if successful_txt:
+            lines = ["\nСозданы файлы для обработки:"]
+            for name in successful_txt:
+                lines.append(f"  {name}")
+            logger.info("\n".join(lines))
+
+            # NEW B.12: info-блок пропущенных файлов.
+        if missed_files:
+            lines = ["\nПропущено файлов:"]
+            for file_name, reason in missed_files:
+                lines.append(f"  {file_name} ({reason})")
+            logger.info("\n".join(lines))
+
+            # NEW B.13: продавцы без отчётов — только на непустом прогоне.
+        has_any_files = bool(chz_files or mp_files or ozon_files)
+        if has_any_files:
+            sellers_without_reports = [
+                seller.name for seller in sellers
+                if not kiz_by_seller.get(seller.name)
+                   and not prices_by_seller.get(seller.name)
+            ]
+            if sellers_without_reports:
+                logger.info(
+                    "\nПродавцы без отчётов: "
+                    + ", ".join(sellers_without_reports)
+                )
+
+        # NEW B.14: финальная сводка по КИЗам — только на непустом прогоне.
+        if has_any_files:
+            lines = ["\nСохранено КИЗов по продавцам:"]
+            for seller in sellers:
+                kiz_set = kiz_by_seller.get(seller.name) or set()
+                if kiz_set:
+                    lines.append(f"  {seller.name}: {len(kiz_set)}")
+            logger.info("\n".join(lines))
+
+        if not chz_files and not mp_files and not ozon_files:
+            logger.status("Нет файлов для обработки")
+        logger.report("\n=== ВЫГРУЗКА ЗАВЕРШЕНА ===\n")
+        logger.status(
+            "Обработайте файлы в BestMark и переходите к следующему этапу"
+        )
+        logger.info("\n==================================================\n")
 
 class FilterPreFinalService:
     """Сервис фильтрации предитоговых файлов.
@@ -473,15 +873,42 @@ class FilterPreFinalService:
             work_folder=ctx.logs_dir,
             log_filename="log_фильтрация.txt",
         )
-
-        logger.report("=== ФИЛЬТРАЦИЯ ПРЕДИТОГОВЫХ ФАЙЛОВ ===")
+        logger.status("Сбор данных начат")
+        logger.info(
+            "\n==================== Этап: Сбор данных ====================\n"
+        )
+        logger.report("\n==================== Этап: Сбор данных ====================\n")
         logger.report(f"Рабочая папка: {ctx.work_folder}")
-
-        # NEW: загружаем used_kiz.json — по нему будем считать пересечение.
-        self.kiz_validator.load()
+        logger.status("Загрузка базы КИЗов для валидации")
+        try:
+            self.kiz_validator.load()
+            if self.kiz_validator.storage.get_all():
+                logger.info(
+                    "Загружены сохранённые данные по ранее "
+                    "списанным КИЗам"
+                )
+            else:
+                logger.info(
+                    "Не получилось загрузить данные — валидация "
+                    "без сохранённой базы"
+                )
+        except Exception:
+            logger.info(
+                "Не получилось загрузить данные — валидация "
+                "без сохранённой базы"
+            )
 
         allowed_companies = TextUtils.get_allowed_companies(sellers)
-
+        files_found: int = 0
+        files_not_found: int = 0
+        files_not_opened: list = []
+        sellers_without_files: list = []
+        sellers_without_kiz: list = []
+        total_rows_sum: int = 0
+        total_kept_sum: int = 0
+        total_removed_sum: int = 0
+        status_counts_agg: dict = {}
+        owner_counts_agg: dict = {}
         # ------------------------------------------------------------------
         # 1. Основной цикл: фильтрация строк в предитоговых файлах.
         # ------------------------------------------------------------------
@@ -489,18 +916,22 @@ class FilterPreFinalService:
         for seller in sellers:
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
+                sellers_without_files.append(seller.name)
+                files_not_found += 1
                 logger.report(
                     f"Файл для продавца '{seller.name}' не найден – пропущен"
                 )
                 continue
-
-            logger.report(f"\nОбработка файла: {file_path.name}")
+            files_found += 1
+            logger.status(f"Обработка файла: {file_path.name}")
+            logger.report(f"Обработка файла: {file_path.name}")
 
             wb = WorkbookOpener.open(
                 file_path, logger=logger,
                 description="предитоговый файл", read_only=False,
             )
             if wb is None:
+                files_not_opened.append(f"{seller.name}.xlsx")
                 continue
 
             try:
@@ -521,7 +952,24 @@ class FilterPreFinalService:
                     allowed_owners=allowed_companies,
                     required_status="В ОБОРОТЕ",
                 )
+                total_rows_sum += (
+                        stats['total_kept'] + stats['total_removed']
+                )
+                total_kept_sum += stats['total_kept']
+                total_removed_sum += stats['total_removed']
 
+
+                for status_name, count in stats['status'].items():
+                    status_counts_agg[status_name] = (
+                            status_counts_agg.get(status_name, 0) + count
+                    )
+                for owner_name, count in stats['owner'].items():
+                    owner_counts_agg[owner_name] = (
+                            owner_counts_agg.get(owner_name, 0) + count
+                    )
+
+                if stats['total_kept'] == 0:
+                    sellers_without_kiz.append(seller.name)
                 logger.report(f"  Всего строк: {sheet.max_row - 1}")
                 if stats['status']:
                     logger.report("  Удалено по статусу:")
@@ -556,6 +1004,73 @@ class FilterPreFinalService:
                 file_path, headers, rows_for_write,
                 sheet_name=original_sheet_title, logger=logger,
             )
+            logger.info(
+                f"\nОбработка файла: {seller.name}.xlsx — "
+                f"сохранено {stats['total_kept']} строк"
+            )
+        lines = ["\nФильтрация строк:"]
+        lines.append(f"  Продавцов обработано: {len(sellers)}")
+        lines.append(f"  Файлов найдено: {files_found}")
+        lines.append(f"  Файлов не найдено: {files_not_found}")
+        lines.append(f"  Всего строк: {total_rows_sum}")
+        lines.append(f"  Оставлено: {total_kept_sum}")
+        lines.append(
+            f"  Удалено по статусу: {sum(status_counts_agg.values())}"
+        )
+        lines.append(
+            f"  Удалено по владельцу: {sum(owner_counts_agg.values())}"
+        )
+        logger.info("\n".join(lines))
+
+        #разбивка по статусам. Только при непустом agg.
+        if status_counts_agg:
+            lines = ["\nУдалено по статусам:"]
+            for status_name in sorted(
+                    status_counts_agg.keys(), key=lambda x: x.lower()
+            ):
+                lines.append(
+                    f'  "{status_name}": {status_counts_agg[status_name]}'
+                )
+            logger.info("\n".join(lines))
+
+        #разбивка по владельцам.
+        empty_owner_count = owner_counts_agg.get("(пусто)", 0)
+        other_owners = {
+            k: v for k, v in owner_counts_agg.items() if k != "(пусто)"
+        }
+        if other_owners or empty_owner_count > 0:
+            lines = ["\nУдалено по владельцам (не из списка продавцов):"]
+            for owner_name in sorted(
+                    other_owners.keys(), key=lambda x: x.lower()
+            ):
+                lines.append(f'  "{owner_name}": {other_owners[owner_name]}')
+            if empty_owner_count > 0:
+                lines.append(
+                    f"  Без указания владельца: {empty_owner_count}"
+                )
+            logger.info("\n".join(lines))
+
+        # два отдельных info для продавцов без файлов/КИЗов.
+        if sellers_without_files:
+            logger.info(
+                f"\nПродавцы без файлов: "
+                f"{', '.join(sellers_without_files)}"
+            )
+        if sellers_without_kiz:
+            logger.info(
+                f"\nПродавцы без КИЗов после фильтрации: "
+                f"{', '.join(sellers_without_kiz)}"
+            )
+
+        # файлы, которые не открылись.
+        if files_not_opened:
+            logger.info(
+                f"\nНе открылись файлы: {', '.join(files_not_opened)}"
+            )
+
+        # статус перед вторым циклом — только если sellers непуст.
+        if sellers:
+            logger.status("Сбор КИЗов из отфильтрованных файлов")
 
         # ------------------------------------------------------------------
         # 2. Второй цикл — сбор пар {kiz: (норм_ключ, сырая_строка)} из
@@ -643,23 +1158,35 @@ class FilterPreFinalService:
         logger.report(
             f"requires_saving=False → удалено: {stats['deleted']}"
         )
-        if stats["top_deleted"]:
-            logger.report(
-                "Топ-10 брендов по количеству удалённых КИЗов:"
-            )
-            for i, (brand_name, count) in enumerate(
-                stats["top_deleted"], start=1,
-            ):
-                logger.report(f"  {i}. {brand_name}: {count}")
+
+        # info-сводка — дополнительно, после report-блока.
+        lines = ["\nСводка по фильтрации КИЗов:"]
+        lines.append(
+            f"  Всего уникальных КИЗов в предитоговых файлах: "
+            f"{total_in_files}"
+        )
+        lines.append(
+            f"  Из них есть в used_kiz.json: {stats['total']}"
+        )
+        lines.append(f"  С пустым брендом: {stats['empty_brand']}")
+        lines.append(
+            f"  С неизвестным брендом: {stats['unknown_brand']}"
+        )
+        lines.append(f"  Распознано брендов: {stats['recognized']}")
+        lines.append(f"  сохранено: {stats['saved']}")
+        lines.append(f"  удалено: {stats['deleted']}")
+        logger.info("\n".join(lines))
 
         if brands_unknown:
             if self._brand_unknown_resolver is None:
-                logger.report(
-                    f"UI-обработка неизвестных брендов недоступна: "
+                logger.warning(
+                    f"\nUI-обработка неизвестных брендов недоступна: "
                     f"{len(brands_unknown)} ключей остаются "
                     f"неизвестными"
                 )
             else:
+                # NEW A.5: статус перед разрешением.
+                logger.status("Запрос решений по неизвестным брендам")
                 try:
                     result = self._brand_unknown_resolver(brands_unknown)
                 except Exception as e:
@@ -667,13 +1194,18 @@ class FilterPreFinalService:
                         f"Ошибка обработки неизвестных брендов: {e}",
                         can_influence=False,
                     )
+                    # NEW B.10: info о завершении с ошибкой.
+                    logger.info(
+                        "\nОбработка неизвестных брендов завершилась "
+                        "ошибкой"
+                    )
                 else:
                     if isinstance(result, dict) and all(
                             key in result
                             for key in ("total", "resolved", "skipped")
                     ):
-                        logger.report(
-                            f"Разрешение неизвестных брендов: всего "
+                        logger.info(
+                            f"\nРазрешение неизвестных брендов: всего "
                             f"{result['total']}, разрешено "
                             f"{result['resolved']}, пропущено "
                             f"{result['skipped']}"
@@ -683,12 +1215,17 @@ class FilterPreFinalService:
                             "Callback неизвестных брендов вернул "
                             "некорректный результат"
                         )
+                        logger.info(
+                            "\nОбработка неизвестных брендов вернула "
+                            "некорректный результат"
+                        )
 
         # ------------------------------------------------------------------
         # 5. Удаление из used_kiz.json — одним batch-контекстом.
         # ------------------------------------------------------------------
         if to_delete:
             X = len(used_kiz_keys)
+            logger.status("Удаление записей из базы КИЗов")
             with self.kiz_validator.batch():
                 deleted = self.kiz_validator.remove_kizs(to_delete)
             Y = X - deleted
@@ -697,11 +1234,24 @@ class FilterPreFinalService:
                     f"remove_kizs: запрошено удалить {len(to_delete)}, "
                     f"реально удалено {deleted} – расхождение"
                 )
-            logger.info(
-                f"used_kiz.json: было {X}, стало {Y}, удалено {deleted}"
-            )
+            lines = [
+                "\nБаза КИЗов:",
+                f"  Было: {X}",
+                f"  Стало: {Y}",
+                f"  Удалено: {deleted}",
+            ]
+            logger.info("\n".join(lines))
 
         logger.report("\n=== ФИЛЬТРАЦИЯ ЗАВЕРШЕНА ===")
+
+        #info-отбивка конца, 50 знаков =.
+        logger.info("\n==================================================\n")
+
+        # финальный статус этапа.
+        logger.status(
+            "Сбор данных завершён. Можете переходить к этапу "
+            "формирования файлов продаж."
+        )
 
 class GenerateSalesService:
     """Сервис формирования файлов продаж.
@@ -745,38 +1295,56 @@ class GenerateSalesService:
             subfolders=["Логи", "Отчёты", "Обработка", "Продажи"],
         )
 
-        # Логгер V2 с историческим именем файла.
         logger = self._log_manager_v2.create_logger_v2(
             source="GenerateSalesService.sells_fbs_service",
             domain="chz_mp",
             work_folder=ctx.logs_dir,
             log_filename="log_продажи.txt",
         )
+        logger.status("Формирование файлов продаж начато")
 
+        logger.info(
+            "\n==================== Этап: Продажи ====================\n"
+        )
         logger.report("=== ФОРМИРОВАНИЕ ФАЙЛОВ ПРОДАЖ ===")
         logger.report(f"Рабочая папка: {ctx.work_folder}")
 
         sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
+        files_found = 0
+        files_not_found = 0
+        files_not_opened = 0
+        files_empty = 0
+        sellers_without_files = []
+        own_kiz_count = 0
+        invalid_rows_count = 0
+        unknown_owner_count = 0
 
         for seller in sellers:
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
+                # NEW A.2: файла нет — учёт.
+                files_not_found += 1
+                sellers_without_files.append(seller.name)
                 logger.report(
                     f"Файл для продавца '{seller.name}' не найден – пропущен"
                 )
                 continue
 
+            files_found += 1
+            logger.status(f"Обработка файла: {seller.name}.xlsx")
             logger.report(f"\nОбработка файла: {file_path.name}")
             wb = WorkbookOpener.open(
                 file_path, logger=logger,
                 description="предитоговый файл", read_only=True,
             )
             if wb is None:
+                files_not_opened += 1
                 continue
 
             try:
                 sheet = wb.active
                 if sheet.max_row < 2:
+                    files_empty += 1
                     logger.report(
                         "  Файл пуст (только заголовки) – пропущен"
                     )
@@ -788,6 +1356,7 @@ class GenerateSalesService:
                 ):
                     prefinal = PreFinalRow.from_row(row)
                     if prefinal is None:
+                        invalid_rows_count += 1
                         logger.report(
                             f"  Строка {row_idx}: некорректные данные "
                             f"(нет КИЗа или владельца) – пропущена"
@@ -799,6 +1368,7 @@ class GenerateSalesService:
                         prefinal.owner_company, sellers
                     )
                     if owner_seller is None:
+                        unknown_owner_count += 1
                         logger.report(
                             f"  Строка {row_idx}: владелец "
                             f"'{prefinal.owner_company}' не найден "
@@ -807,6 +1377,7 @@ class GenerateSalesService:
                         continue
 
                     if owner_seller.name == seller.name:
+                        own_kiz_count += 1
                         continue
 
                     sales_gen.add_sale_row(
@@ -820,6 +1391,34 @@ class GenerateSalesService:
                     )
             finally:
                 wb.close()
+
+        lines = ["\nОбработка файлов продавцов:"]
+        lines.append(f"  Продавцов обработано: {len(sellers)}")
+        lines.append(f"  Файлов найдено: {files_found}")
+        lines.append(f"  Файлов не найдено: {files_not_found}")
+        lines.append(f"  Файлов не открылось: {files_not_opened}")
+        lines.append(f"  Файлов пустых: {files_empty}")
+        if sellers_without_files:
+            lines.append(
+                f"  Продавцов без файлов: "
+                f"{', '.join(sellers_without_files)}"
+            )
+        logger.info("\n".join(lines))
+
+        logger.info(
+            f"\nСвои КИЗы (владелец = текущий продавец): {own_kiz_count}"
+        )
+
+        if invalid_rows_count > 0:
+            logger.warning(
+                f"\nНекорректных строк (нет КИЗа или владельца): "
+                f"{invalid_rows_count}"
+            )
+        if unknown_owner_count > 0:
+            logger.warning(
+                f"\nСтрок с неизвестным владельцем: {unknown_owner_count}"
+            )
+
 
         # ---- УДАЛЕНИЕ ПУСТЫХ ФАЙЛОВ ПРОДАЖ ----
         logger.report("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
@@ -843,7 +1442,7 @@ class GenerateSalesService:
 
         # ---- ПОИСК И РАЗРЕШЕНИЕ ДУБЛЕЙ КИЗОВ ----
         logger.report("\n--- ПРОВЕРКА ДУБЛЕЙ КИЗОВ ---")
-
+        logger.status("Проверка дублей КИЗов")
         intra_file, inter_file = KizDuplicatesFinder.find(
             ctx.sales_dir, logger,
         )
@@ -851,6 +1450,7 @@ class GenerateSalesService:
         # 6.4 — intra-file дедупликация.
         intra_files_count = len(intra_file)
         intra_deleted_rows = 0
+        logger.status("Удаление дублей внутри файлов")
         for file_path in intra_file:
             deleted = SalesFileRowsReader.remove_duplicates_in_file(
                 file_path, logger,
@@ -871,12 +1471,15 @@ class GenerateSalesService:
                     f"UI-обработка дублей недоступна: {inter_count} "
                     f"КИЗов остаются в нескольких файлах"
                 )
+                logger.status("UI-обработка дублей недоступна")
             else:
+                logger.status("Обработка межфайловых дублей")
                 for kiz, file_paths in inter_file.items():
                     file_to_receiver = {
                         p: (sales_gen.get_receiver_name(p) or p.name)
                         for p in file_paths
                     }
+                    logger.status(f"Разрешение дубля: {kiz}")
                     try:
                         chosen = self._duplicate_keeper_resolver(
                             kiz, file_to_receiver,
@@ -914,12 +1517,10 @@ class GenerateSalesService:
                         f"удалён из {removed_names}"
                     )
 
-        # 6.7 — второй remove_empty_files: только если что-то менялось.
         empty_removed_after = 0
         if intra_files_count > 0 or inter_count > 0:
             empty_removed_after = sales_gen.remove_empty_files()
 
-        # 6.8 — report-сводка.
         logger.report(
             f"Найдено внутрифайловых дублей: {intra_files_count} файлов, "
             f"удалено {intra_deleted_rows} строк"
@@ -934,8 +1535,20 @@ class GenerateSalesService:
         logger.report(
             f"После чистки удалено пустых файлов: {empty_removed_after}"
         )
+        lines = ["\nДубли КИЗов:"]
+        lines.append(
+            f"  Внутрифайловых: {intra_files_count} файлов, "
+            f"удалено {intra_deleted_rows} строк"
+        )
+        lines.append(f"  Межфайловых: {inter_count} КИЗов")
+        lines.append(f"  Разрешено в пользу файла: {resolved_count}")
+        lines.append(f"  Удалено вхождений: {removed_occurrences}")
+        logger.info("\n".join(lines))
 
         logger.report("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
+        logger.info("\n==================================================\n")
+        logger.status("Формирование файлов продаж завершено")
+
 
 class FinalizePricesService:
     """Сервис внесения цен и финализации итоговых файлов.
@@ -1040,23 +1653,74 @@ class FinalizePricesService:
             work_folder=ctx.logs_dir,
             log_filename="log_цены.txt",
         )
-
+        logger.status("Внесение цен и финализация начато")
+        logger.info(
+            "\n==================== Этап: Цены ====================\n"
+        )
         logger.report("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
         logger.report(f"Рабочая папка: {ctx.work_folder}")
-
-        self.kiz_validator.load()
-
+        logger.status("Загрузка базы КИЗов для валидации")
+        try:
+            self.kiz_validator.load()
+            if self.kiz_validator.storage.get_all():
+                logger.info(
+                    "Загружены сохранённые данные по ранее "
+                    "списанным КИЗам"
+                )
+            else:
+                logger.warning(
+                    "\nНе получилось загрузить данные — валидация "
+                    "без сохранённой базы"
+                )
+        except Exception:
+            logger.warning(
+                "\nНе получилось загрузить данные — валидация "
+                "без сохранённой базы"
+            )
+        logger.status("Загрузка цен из отчётов WB")
         # Цены из отчётов читаем один раз — до цикла по продавцам.
         all_prices = self._load_prices_from_json(
             ctx.processing_dir, logger
         )
+        if all_prices:
+            logger.info(
+                f"\nЦены из отчётов WB загружены: "
+                f"{len(all_prices)} продавцов"
+            )
+        else:
+            logger.info(
+                "\nЦены из отчётов WB не обнаружены — средние "
+                "будут взяты из сохранённых или запрошены"
+            )
+
+        sellers_processed = 0
+        sellers_skipped_ready = 0
+        sellers_skipped_no_file = 0
+        sellers_skipped_no_requester = 0
+        sellers_skipped_cancelled = 0
+        sellers_with_error = 0
+        sellers_without_files = []
+        average_changes = {}  # {seller_name: (old, new)}
+        cluster_totals = {}  # {seller_name: total_clusters}
+        cluster_filled = {}  # {seller_name: filled_rows}
+        total_clusters = 0
+        total_processed = 0
+        total_skipped_no_numeric = 0
+        total_skipped_all_numeric = 0
+        total_cluster_filled = 0
+        per_seller_stage1 = {}  # {seller_name: stage1_count}
+        per_seller_stage2 = {}  # {seller_name: stage2_stats.filled_rows}
+        per_seller_stage3 = {}  # {seller_name: stage3_count}
+        total_stage1 = 0
+        total_stage2 = 0
+        total_stage3 = 0
 
         for seller in sellers:
             price_map = all_prices.get(seller.name, {})
             prices_list = list(price_map.values())
 
-            logger.report(f"\nПродавец '{seller.name}'")
-
+            logger.report(f"\nОбработка продавца: {seller.name}")
+            logger.status(f"Обработка продавца: {seller.name}")
             # ---- 1. Определяем среднюю через резолвер. ----
             decision = AveragePriceResolver.resolve(
                 saved_prices, seller.name, prices_list
@@ -1065,26 +1729,40 @@ class FinalizePricesService:
             if decision.need_dialog:
                 # Ни цен из отчёта, ни сохранённых цен вообще нет.
                 if self._price_requester is None:
+                    sellers_skipped_no_requester += 1
                     logger.warning(
                         f"Не могу запросить цену без UI-callback, "
                         f"пропускаю продавца '{seller.name}'"
                     )
                     continue
-
+                logger.status(
+                    f"Запрос цены для продавца: {seller.name}"
+                )
                 user_price = self._price_requester(seller.name)
                 if user_price is None:
+                    sellers_skipped_cancelled += 1
                     logger.report(
                         f"  Пользователь отменил ввод для продавца "
                         f"'{seller.name}' – пропускаем"
                     )
                     continue
                 average_price = user_price
+                old_price = saved_prices.get(seller.name)
+                if old_price != average_price:
+                    average_changes[seller.name] = (
+                        old_price, average_price,
+                    )
                 saved_prices[seller.name] = average_price
                 logger.report(
                     f"  Пользователь ввёл цену: {average_price}"
                 )
             else:
                 average_price = decision.price
+                old_price = saved_prices.get(seller.name)
+                if old_price != average_price:
+                    average_changes[seller.name] = (
+                        old_price, average_price,
+                    )
                 # Различаем источник в логе для диагностики.
                 if prices_list:
                     logger.report(
@@ -1117,6 +1795,7 @@ class FinalizePricesService:
                 logger=logger,
                 header=PriceFiller.HEADER_KIZ,
             ):
+                sellers_skipped_ready += 1
                 logger.report(
                     f"ИТОГ {seller.name} уже создан и обработан "
                     f"ранее – пропускаем."
@@ -1124,19 +1803,28 @@ class FinalizePricesService:
                 saved_prices[seller.name] = average_price
                 continue
 
-            # ---- 3. Предатоговый файл в «Обработке». ----
+            # ---- 3. Предитоговый файл в «Обработке». ----
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
+                # NEW D: счётчик skip-no-file + сбор имён.
+                sellers_skipped_no_file += 1
+                sellers_without_files.append(seller.name)
                 logger.report(
                     f"Файл для продавца '{seller.name}' не найден – пропущен"
                 )
                 continue
 
             # ---- 4. Копирование в корень как ИТОГ. ----
-            FileHelper.copy_file_with_log(
+            result = FileHelper.copy_file_with_log(
                 file_path, new_path, logger,
                 description="итоговый файл", overwrite=True,
             )
+            if result["status"] != "copied":
+                logger.warning(
+                    f"\n{new_path.name}: не удалось скопировать "
+                    f"({result['status']})"
+                )
+                continue
             logger.report(f"Файл скопирован в корень: {new_path.name}")
 
             # ---- 5. Открытие ИТОГа и три этапа через PriceFiller. ----
@@ -1159,10 +1847,14 @@ class FinalizePricesService:
                 stage1_count = PriceFiller.fill_from_report(
                     sheet, price_map
                 )
+                per_seller_stage1[seller.name] = stage1_count
+                total_stage1 += stage1_count
                 logger.report(
                     f"  Установлено цен из отчёта: {stage1_count}"
                 )
-
+                logger.status(
+                    f"Подстановка цен по GTIN для {seller.name}"
+                )
                 # Этап 2 — кластеры GTIN.
                 stage2_stats = PriceFiller.fill_by_gtin_clusters(sheet)
                 logger.report(
@@ -1183,11 +1875,23 @@ class FinalizePricesService:
                     f"  Установлено цен по кластерам GTIN: "
                     f"{stage2_stats.filled_rows}"
                 )
-
+                cluster_totals[seller.name] = stage2_stats.total_clusters
+                cluster_filled[seller.name] = stage2_stats.filled_rows
+                total_clusters += stage2_stats.total_clusters
+                total_processed += stage2_stats.processed
+                total_skipped_no_numeric += stage2_stats.skipped_no_numeric
+                total_skipped_all_numeric += stage2_stats.skipped_all_numeric
+                total_cluster_filled += stage2_stats.filled_rows
+                per_seller_stage2[seller.name] = stage2_stats.filled_rows
                 # Этап 3 — генерация по средней.
+                logger.status(
+                    f"Генерация цен по средней для {seller.name}"
+                )
                 stage3_count = PriceFiller.fill_by_average(
                     sheet, average_price
                 )
+                per_seller_stage3[seller.name] = stage3_count
+                total_stage3 += stage3_count
                 logger.report(
                     f"  Сгенерировано цен по средней: {stage3_count}"
                 )
@@ -1198,10 +1902,12 @@ class FinalizePricesService:
                     f"  Итоговый файл сохранён: {new_path.name}"
                 )
                 saved_prices[seller.name] = average_price
+                sellers_processed += 1
 
             except Exception as e:
                 # Ошибка обработки одного файла не должна валить
                 # весь прогон — остальные продавцы продолжают.
+                sellers_with_error += 1
                 logger.critical(
                     f"Ошибка обработки файла {new_path.name}: {e}",
                     can_influence=False,
@@ -1212,5 +1918,121 @@ class FinalizePricesService:
                 except Exception:
                     pass
 
+        lines = ["\nОбработка продавцов:"]
+        lines.append(f"  Продавцов обработано: {sellers_processed}")
+        lines.append(
+            f"  Пропущено (ИТОГ уже готов): {sellers_skipped_ready}"
+        )
+        lines.append(
+            f"  Пропущено (нет файла): {sellers_skipped_no_file}"
+        )
+        lines.append(
+            f"  Пропущено (нет UI-callback): "
+            f"{sellers_skipped_no_requester}"
+        )
+        lines.append(
+            f"  Пропущено (отменено пользователем): "
+            f"{sellers_skipped_cancelled}"
+        )
+        lines.append(f"  Обработано с ошибкой: {sellers_with_error}")
+        if sellers_without_files:
+            lines.append(
+                f"  Продавцов без файлов: "
+                f"{', '.join(sellers_without_files)}"
+            )
+        logger.info("\n".join(lines))
+
+        # NEW B.5: изменения средних цен — только если были изменения.
+        # old_display — str(old) если old is not None, иначе "—".
+        if average_changes:
+            lines = ["\nИзменения средних цен:"]
+            for seller_name, (old, new) in average_changes.items():
+                old_display = str(old) if old is not None else "—"
+                lines.append(f"  {seller_name}: {old_display} → {new}")
+            logger.info("\n".join(lines))
+
+        # NEW B.6: расширенный отчёт по кластерам GTIN.
+        lines = ["\nКластеры GTIN:"]
+        # Блок «По продавцам» — только для продавцов, дошедших
+        # до fill_by_gtin_clusters, с total_clusters > 0.
+        per_seller_lines = []
+        for seller in sellers:
+            if seller.name not in cluster_totals:
+                continue
+            total_c = cluster_totals[seller.name]
+            if total_c == 0:
+                continue
+            filled = cluster_filled.get(seller.name, 0)
+            per_seller_lines.append(
+                f"    {seller.name}: {total_c} кластеров, "
+                f"{filled} цен"
+            )
+        if per_seller_lines:
+            lines.append("  По продавцам:")
+            lines.extend(per_seller_lines)
+            lines.append("")
+        lines.append(f"  Всего кластеров: {total_clusters}")
+        lines.append(f"  Обработано (распределено): {total_processed}")
+        lines.append(
+            f"  Пропущено (нет числовых): {total_skipped_no_numeric}"
+        )
+        lines.append(
+            f"  Пропущено (все числовые): {total_skipped_all_numeric}"
+        )
+        lines.append(f"  Установлено цен: {total_cluster_filled}")
+        logger.info("\n".join(lines))
+
+        # NEW B.7: расширенный отчёт о внесённых ценах.
+        # total_stage2 не заполнялся отдельно — используем
+        # total_cluster_filled как источник «По кластерам GTIN».
+        total_stage2_effective = total_cluster_filled
+        total_all = total_stage1 + total_stage2_effective + total_stage3
+        pct1 = (
+            round(total_stage1 * 100 / total_all) if total_all > 0 else 0
+        )
+        pct2 = (
+            round(total_stage2_effective * 100 / total_all)
+            if total_all > 0 else 0
+        )
+        pct3 = (
+            round(total_stage3 * 100 / total_all) if total_all > 0 else 0
+        )
+        lines = ["\nУстановлено цен:"]
+        lines.append(f"  Из отчёта: {total_stage1} ({pct1}%)")
+        lines.append(
+            f"  По кластерам GTIN: {total_stage2_effective} ({pct2}%)"
+        )
+        lines.append(f"  По средней: {total_stage3} ({pct3}%)")
+        lines.append(f"  Всего: {total_all}")
+        # Блок «По продавцам» — только для продавцов, дошедших
+        # до wb.save (успешно завершённых), с total > 0.
+        per_seller_lines = []
+        for seller in sellers:
+            s1 = per_seller_stage1.get(seller.name, 0)
+            s2 = per_seller_stage2.get(seller.name, 0)
+            s3 = per_seller_stage3.get(seller.name, 0)
+            total_s = s1 + s2 + s3
+            if total_s == 0:
+                continue
+            per_seller_lines.append(
+                f"    {seller.name}: {total_s} "
+                f"(отчёт {s1} / GTIN {s2} / средняя {s3})"
+            )
+        if per_seller_lines:
+            lines.append("")
+            lines.append("  По продавцам:")
+            lines.extend(per_seller_lines)
+        logger.info("\n".join(lines))
+
         logger.report("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
+
+        # NEW B.8: info-отбивка конца, 50 знаков =.
+        logger.info("\n==================================================\n")
+
+        # NEW A.8: финальный статус этапа.
+        logger.status(
+            "Внесение цен и финализация завершены. "
+            "Работа с отчётами завершена"
+        )
+
         return saved_prices
