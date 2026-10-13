@@ -13,7 +13,7 @@
     свою раскладку и обработчики шагов.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from ui.base.base_service_window import BaseServiceWindow
@@ -25,6 +25,7 @@ from ui.widgets.path_selector import PathSelector
 from services.returns_service import (
     ReturnsPreparationService, KizExportService, KizTransferService,
 )
+from ui.windows.returns_dialogs import PriorityResolutionDialog
 from utils.log_tools.decorators import log_button_action
 
 
@@ -256,7 +257,10 @@ class ReturnsWindow(BaseServiceWindow):
             self.set_status("Сначала выберите файл")
             return
 
-        service = ReturnsPreparationService(self.log_manager_v2)
+        service = KizTransferService(
+            self.log_manager_v2,
+            priority_resolver=self._request_priority_resolution,
+        )
         if self.logger:
             self.logger.debug(
                 "on_prepare: ReturnsPreparationService создан"
@@ -271,6 +275,49 @@ class ReturnsWindow(BaseServiceWindow):
             step_name="on_prepare",
             enable_after=self.btn_export_kiz,
         )
+
+    def _request_priority_resolution(self, conflicts) -> dict:
+        """Callback от KizTransferService: разрешить конфликты брендов.
+
+        Вход:
+            conflicts — {brand_key: {"raw_brand": str,
+                                     "candidates": [Seller]}}.
+
+        Выход:
+            {brand_key: Seller}.
+
+        Роль: делегирует открытие диалога в UI-поток через
+              _run_in_ui_blocking. Вызывается из фонового потока
+              сервиса — прямой показ QDialog там недопустим.
+        """
+        if self.logger:
+            self.logger.debug(
+                f"_request_priority_resolution: "
+                f"конфликтов {len(conflicts)}"
+            )
+        return self._run_in_ui_blocking(
+            lambda: self._open_priority_dialog(conflicts)
+        )
+
+    @Slot(object)
+    def _open_priority_dialog(self, conflicts) -> dict:
+        """Открывает PriorityResolutionDialog в UI-потоке.
+
+        Вход:
+            conflicts — {brand_key: {"raw_brand": str,
+                                     "candidates": [Seller]}}.
+
+        Выход:
+            {brand_key: Seller} — выбранные продавцы для каждого
+            конфликтного бренда.
+        """
+        dialog = PriorityResolutionDialog(
+            parent=self,
+            conflicts=conflicts,
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        return dialog.get_resolution()
 
     @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
     def on_export_kiz(self) -> None:

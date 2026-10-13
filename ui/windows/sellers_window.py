@@ -18,6 +18,7 @@ from ui.factories.factories import (
     LabelFactory, InputWidgetFactory, LayoutFactory,
     ListWidgetFactory, ButtonFactory,
 )
+from ui.windows.shared_dialogs import StringListDialog
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.base.base_checklist_dialog import ChecklistDialog
@@ -137,7 +138,7 @@ class SellersWindow(QMainWindow):
         layout.addWidget(brands_btn)
 
         keys_btn = ButtonFactory.create_button(
-            self, "Ключи", (40, 60, 70, 0.7),
+            self, "Доп", (40, 60, 70, 0.7),
             fixed_size=(30, 30), padding="8px 1px", font_size="8",
         )
         keys_btn.clicked.connect(lambda: self._edit_keys(seller))
@@ -210,12 +211,25 @@ class SellersWindow(QMainWindow):
         dialog.show()
 
     def _edit_keys(self, seller: Seller) -> None:
-        """Открывает диалог редактирования ключей."""
-        self.main_window.open_string_list_dialog(
-            f"Ключи — {seller.name}",
-            seller.keys,
+        """Открывает диалог редактирования ключей продавца.
+
+        Роль: диалог создаётся здесь, а не через MainWindow —
+              это окно знает и про seller, и про log_manager_v2.
+              Пробрасывает seller — диалог покажет приоритет.
+        """
+        if self.logger:
+            self.logger.debug(
+                f"_edit_keys: seller={seller.name}, "
+                f"priority={seller.priority}"
+            )
+        dialog = StringListDialog(
             parent=self,
+            title=f"Дополнительно — {seller.name}",
+            strings=seller.keys,
+            seller=seller,
+            log_manager_v2=self.log_manager_v2,
         )
+        dialog.show()
 
     # ---------- Обновление / сохранение ----------
 

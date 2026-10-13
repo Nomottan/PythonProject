@@ -384,6 +384,11 @@ class ReturnsTransferRow:
         owner_company_str — исходная строка владельца из файла
                             (передаётся в add_sale_row для
                             совместимости контракта).
+        brand_key — нормализованный ключ бренда; используется
+                    сервисом для сопоставления pending-строки
+                    с решением пользователя. Для конфликтных
+                    строк — обязателен; для обычных — тот же
+                    нормализованный ключ, что нашёлся в маппинге.
     """
     from_seller_name: str
     to_seller_name: str
@@ -392,6 +397,7 @@ class ReturnsTransferRow:
     raw_kiz: str
     brand: str
     owner_company_str: str
+    brand_key: str
 
 
 @dataclass
@@ -404,12 +410,23 @@ class ReturnsTransferData:
 
     Поля:
         rows — список ReturnsTransferRow, прошедших все проверки.
+        pending_rows — список ReturnsTransferRow с конфликтным
+                       брендом; to_seller_name="" и to_seller_inn="",
+                       заполняет сервис после решения пользователя.
+        conflicts — dict {brand_key: {"raw_brand": str,
+                                      "candidates": list[Seller]}}.
+                    raw_brand заполняется при первой встрече строки
+                    с этим ключом. candidates — продавцы с
+                    одинаковым максимальным приоритетом, порядок
+                    стабилен (по оригинальному порядку sellers).
         total_rows — сколько строк обработано (после фильтра по
                      длине; до остальных проверок).
         unique_brands — set уникальных непустых брендов,
                         встреченных в файле.
     """
     rows: list
+    pending_rows: list
+    conflicts: dict
     total_rows: int
     unique_brands: set
 
@@ -454,23 +471,89 @@ class ReturnsTransferReader:
         )
         if wb is None:
             return ReturnsTransferData(
-                rows=[], total_rows=0, unique_brands=set(),
+                rows=[], pending_rows=[], conflicts={},
+                total_rows=0, unique_brands=set(),
             )
 
+
+        #сортировка по приоритету
+        sellers_sorted = sorted(
+            enumerate(sellers),
+            key=lambda pair: (-pair[1].priority, pair[0]),
+        )
+        sellers_order = [s for _, s in sellers_sorted]
+        logger.debug(
+            f"ReturnsTransferReader: sellers_order — "
+            f"{[s.name for s in sellers_order]}"
+        )
+
         # Маппинги: нормализованная компания → Seller,
-        # нормализованный ключ бренда → Seller.
+        # нормализованный ключ бренда → Seller.,
         company_to_seller = TextUtils.build_key_mapping(
             sellers,
             key_extractor=lambda s: s.company,
             logger=logger,
         )
-        key_to_seller = TextUtils.build_key_mapping(
-            sellers,
-            key_extractor=lambda s: s.get_brand_keys(),
-            logger=logger,
-        )
+
+        # brand_key_to_sellers — все кандидаты на ключ:
+        # {норм_ключ: [(Seller, idx), ...]}, idx — позиция в
+        # оригинальном списке sellers.
+        brand_key_to_sellers: dict = {}
+        for idx, seller in enumerate(sellers):
+            for key in seller.get_brand_keys():
+                normalized = TextUtils.normalize(key)
+                if not normalized:
+                    continue
+                brand_key_to_sellers.setdefault(normalized, []).append(
+                    (seller, idx)
+                )
+
+        # Разрешение единственных владельцев + сбор конфликтов.
+        # Конфликт = 2+ продавца на один нормализованный ключ
+        # с одинаковым максимальным приоритетом.
+        key_to_seller: dict = {}
+        conflicts: dict = {}
+        for key, contenders in brand_key_to_sellers.items():
+            unique: dict = {}
+            for seller, idx in contenders:
+                if seller.name not in unique:
+                    unique[seller.name] = (seller, idx)
+            sellers_list = list(unique.values())
+            max_priority = max(s.priority for s, _ in sellers_list)
+            top = [
+                (s, i) for s, i in sellers_list
+                if s.priority == max_priority
+            ]
+            if len(top) == 1:
+                winner = top[0][0]
+                key_to_seller[key] = winner
+                if len(sellers_list) > 1:
+                    losers = [
+                        s for s, _ in sellers_list
+                        if s is not winner
+                    ]
+                    losers_str = ", ".join(
+                        f"{s.name} (приоритет {s.priority})"
+                        for s in losers
+                    )
+                    logger.report(
+                        f"Бренд '{key}': {winner.name} "
+                        f"(приоритет {winner.priority}) побеждает "
+                        f"{losers_str}"
+                    )
+            else:
+                top_sorted = sorted(top, key=lambda x: x[1])
+                conflicts[key] = {
+                    "raw_brand": "",
+                    "candidates": [s for s, _ in top_sorted],
+                }
+
+        if conflicts:
+            logger.report(f"Конфликтных брендов: {len(conflicts)}")
+
 
         rows_out: list = []
+        pending_rows: list = []
         total_rows = 0
         unique_brands: set = set()
 
@@ -491,9 +574,7 @@ class ReturnsTransferReader:
                     )
                     continue
 
-                # Собираем уникальные бренды — до проверок, как в
-                # исходном сервисе (там бренд учитывался, даже
-                # если строка потом отбрасывалась).
+                # Собираем уникальные бренды — до проверок
                 if parsed.brand:
                     unique_brands.add(parsed.brand)
 
@@ -501,6 +582,45 @@ class ReturnsTransferReader:
                     continue
 
                 brand_key = TextUtils.normalize(parsed.brand)
+                if brand_key in conflicts:
+                    if not conflicts[brand_key]["raw_brand"]:
+                        conflicts[brand_key]["raw_brand"] = parsed.brand
+                    norm_owner = TextUtils.normalize(
+                        parsed.owner_company
+                    )
+                    owner_seller = company_to_seller.get(norm_owner)
+                    if owner_seller is None:
+                        logger.report(
+                            f"Строка {row_idx}: владелец "
+                            f"'{parsed.owner_company}' не найден – "
+                            f"пропущена"
+                        )
+                        continue
+                    has_brand = any(
+                        TextUtils.normalize(k) == brand_key
+                        for brand_obj in owner_seller.brands
+                        for k in brand_obj.keys
+                    )
+                    if has_brand:
+                        logger.report(
+                            f"Строка {row_idx}: бренд "
+                            f"'{parsed.brand}' уже есть у "
+                            f"{owner_seller.name} – пропущена"
+                        )
+                        continue
+                    pending_rows.append(ReturnsTransferRow(
+                        from_seller_name=owner_seller.name,
+                        to_seller_name="",
+                        to_seller_inn="",
+                        product_name=parsed.product_name,
+                        raw_kiz=parsed.kiz,
+                        brand=parsed.brand,
+                        owner_company_str=parsed.owner_company,
+                        brand_key=brand_key,
+                    ))
+                    continue
+
+
                 seller_brand = key_to_seller.get(brand_key)
                 if seller_brand is None:
                     logger.report(
@@ -541,6 +661,7 @@ class ReturnsTransferReader:
                     raw_kiz=parsed.kiz,
                     brand=parsed.brand,
                     owner_company_str=parsed.owner_company,
+                    brand_key=brand_key,
                 ))
         finally:
             try:

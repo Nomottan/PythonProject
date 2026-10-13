@@ -46,9 +46,15 @@ class StringListDialog(BaseEditDialog):
     Роль в программе:
         Открывается из SellersWindow по кнопке «Ключи» через show().
         Наследник BaseEditDialog: каркас — из базового класса.
+        При seller is not None дополнительно показывает приоритет
+        продавца (combo 1/2/3) и сохраняет его в модель.
     """
 
-    def __init__(self, parent=None, title="Редактирование", strings=None):
+    LOGGER_SOURCE = "StringListDialog.shared_dialogs"
+    LOGGER_DOMAIN = "sellers_brands"
+
+    def __init__(self, parent=None, title="Редактирование",
+                 strings=None, seller=None, log_manager_v2=None):
         """Конструктор.
 
         Вход:
@@ -56,42 +62,102 @@ class StringListDialog(BaseEditDialog):
             title — заголовок диалога.
             strings — список строк для редактирования. Мутируется
                       in-place при сохранении.
+            seller — Seller или None. Если задан, диалог показывает
+                     блок приоритета (label + combo) и сохраняет
+                     выбранный приоритет в seller.priority.
+            log_manager_v2 — LogManagerV2 или None. Прокидывается
+                     в BaseEditDialog; без него self.logger = None.
 
-        Роль: сохраняет ссылку на список и заголовок до super(),
-              чтобы _build_content мог их использовать.
+        Роль: сохраняет ссылки до super(), чтобы _build_content
+              мог их использовать. Фон диалога — производный от
+              родителя.
         """
         self.strings = strings if strings is not None else []
-        # Сохраняем заголовок — он используется в _build_content
-        # для лейбла.
         self._title = title
+        self._seller = seller
+
+        # Фон диалога — производный от родителя по формуле пользователя
+        # (r//2, g//1.5, b//1.3). Fallback (40, 30, 50) — если у родителя
+        # нет bg_color. Заменяет прежний хардкод (40, 30, 50, 0.95).
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r // 2,
+            g_fn=lambda g: int(g // 1.5),
+            b_fn=lambda b: int(b // 1.3),
+            alpha=0.95,
+        )
 
         super().__init__(
             parent=parent,
             title=title,
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=self.bg_color,
             close_button=False,
-            ok_cancel=False,      # своя кнопка «Готово» в _build_content
+            ok_cancel=False,
             draggable=True,
             close_on_click_outside=True,
-            # modal=False: диалог открывается через show() без exec(),
-            # как и раньше.
             modal=False,
             center=True,
             width=400,
             height=350,
+            log_manager_v2=log_manager_v2,
         )
 
+        if self.logger:
+            seller_name = self._seller.name if self._seller else "—"
+            self.logger.debug(
+                f"StringListDialog.__init__: seller={seller_name}, "
+                f"строк={len(self.strings)}"
+            )
+
     def _build_content(self, layout) -> None:
-        """Строит содержимое: заголовок, список, кнопка «Готово».
+        """Строит содержимое диалога.
 
         Вход: layout — QVBoxLayout из BaseEditDialog.
+
+        Роль: заголовок; при seller — второй заголовок и блок
+              приоритета; список ключей; кнопка «Готово».
+              Порядок виджетов строго сверху вниз.
         """
         layout.addWidget(LabelFactory.create_header_label(self, self._title))
+
+        if self._seller is not None:
+            layout.addWidget(
+                LabelFactory.create_header_label(
+                    self, "Ключи для распознавания",
+                )
+            )
 
         self.list_widget = EditableListWidget(
             self, initial_items=self.strings,
         )
         layout.addWidget(self.list_widget)
+
+        if self._seller is not None:
+            layout.addWidget(
+                LabelFactory.create_label(
+                    self, "Приоритет",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                )
+            )
+            element_bg = ColorCalculator.derive(
+                self.bg_color,
+                r_fn=lambda r: r - r // 5,
+                g_fn=lambda g: g - g // 5,
+                b_fn=lambda b: b - b // 5,
+                alpha=1.0,
+            )
+            # current_index = priority - 1 (1 → 0, 2 → 1, 3 → 2).
+            self._combo = InputWidgetFactory.create_combo_box(
+                self,
+                items=["Низкий", "Средний", "Высокий"],
+                current_index=self._seller.priority - 1,
+                bg_color=element_bg,
+            )
+            self._combo.currentIndexChanged.connect(
+                self._on_priority_changed,
+            )
+            layout.addWidget(self._combo)
 
         ok_btn = ButtonFactory.create_button(
             self, "Готово", (70, 120, 90, 0.8), fixed_size=(200, 30),
@@ -101,14 +167,41 @@ class StringListDialog(BaseEditDialog):
         ok_btn.clicked.connect(self.accept)
         LayoutFactory.add_centered_widget(layout, ok_btn)
 
+    def _on_priority_changed(self, index: int) -> None:
+        """Debug-лог смены приоритета.
+
+        Вход: index — новый индекс combo (0..2).
+
+        Роль: модель не трогаем — она пишется только при
+              _collect_result.
+        """
+        if self.logger:
+            self.logger.debug(
+                f"Выбран приоритет: {index + 1}"
+            )
+
     def _collect_result(self):
         """Сохраняет изменения в self.strings (мутация in-place).
 
         Выход: None.
-        Роль: использует срез [:] — чтобы не подменять ссылку,
-              которую держит вызывающий код.
+
+        Роль:
+            Список строк пишется всегда. Если задан seller и combo
+            создан — обновляется seller.priority. Проверка
+            hasattr(self, "_combo") защищает ветку seller is None
+            и случай отсутствия combo. Запись в модель — только
+            через accept() (кнопка «Готово»).
         """
         self.strings[:] = self.list_widget.get_items()
+        if self._seller is not None and hasattr(self, "_combo"):
+            new_priority = self._combo.currentIndex() + 1
+            self._seller.priority = new_priority
+            if self.logger:
+                self.logger.debug(
+                    f"Сохранение: seller={self._seller.name}, "
+                    f"priority={new_priority}, "
+                    f"строк={len(self.strings)}"
+                )
         return None
 
 

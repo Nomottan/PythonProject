@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QCheckBox, QComboBox, QTextEdit, QSpinBox,
     QDateTimeEdit, QAbstractSpinBox, QDateEdit,
 )
-
-from ui.styles import WidgetStyle
+from ui.styles import WidgetStyle, ColorCalculator
+from ui.factories.base_factory import BaseWidgetFactory
 
 
 class InputWidgetFactory:
@@ -183,20 +183,45 @@ class InputWidgetFactory:
         return combo
 
     @staticmethod
-    def create_default_line_edit(parent, text="", **kwargs):
+    def create_default_line_edit(parent, text="", bg_color=None,
+                                 bg_modifier=None, **kwargs):
         """Создаёт QLineEdit с тёмным стилем по умолчанию.
 
         Вход:
             parent — родитель.
             text — начальный текст.
+            bg_color — фон. None → резолвится от родителя через
+                       BaseWidgetFactory.resolve_element_bg. Раньше
+                       был хардкод (60, 50, 70, 0.9).
+            bg_modifier — опциональный (dr, dg, db) — прибавка
+                       к каналам bg_color. Применяется после
+                       резолва. alpha сохраняется из bg_color.
             **kwargs — дополнительные параметры в create_line_edit.
 
         Выход: QLineEdit.
+
+        Роль: тонкая обёртка над create_line_edit с фокусом на
+              фоне — единая точка резолва и, при необходимости,
+              покомпонентного сдвига.
         """
+        if bg_color is None:
+            bg_color = BaseWidgetFactory.resolve_element_bg(parent)
+
+        if bg_modifier is not None:
+            dr, dg, db = bg_modifier[:3]
+            r, g, b = bg_color[:3]
+            new_r = ColorCalculator.clamp(r + dr)
+            new_g = ColorCalculator.clamp(g + dg)
+            new_b = ColorCalculator.clamp(b + db)
+            if len(bg_color) == 4:
+                bg_color = (new_r, new_g, new_b, bg_color[3])
+            else:
+                bg_color = (new_r, new_g, new_b)
+
         return InputWidgetFactory.create_line_edit(
             parent,
             text=text,
-            bg_color=(60, 50, 70, 0.9),
+            bg_color=bg_color,
             text_color=None,
             border="1px solid #5a4a5c",
             border_radius=3,

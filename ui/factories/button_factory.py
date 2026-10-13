@@ -14,7 +14,8 @@ from typing import Optional, Tuple
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 
-from ui.styles import WidgetStyle
+from ui.styles import WidgetStyle, ColorCalculator
+from ui.factories.base_factory import BaseWidgetFactory
 
 
 class ActionButtonType(Enum):
@@ -77,7 +78,7 @@ class ButtonFactory:
                       font_weight=None, extra_style="", checkable=False,
                       checked=False, tooltip=None, min_size=None,
                       max_size=None, hover_color=None, pressed_color=None,
-                      disabled_color=None):
+                      disabled_color=None, bg_modifier=None):
         """Создаёт стилизованную QPushButton.
 
         Вход:
@@ -119,6 +120,21 @@ class ButtonFactory:
         if checkable:
             btn.setCheckable(True)
             btn.setChecked(checked)
+        # Резолв фона от родителя, если не задан явно.
+        if bg_color is None:
+            bg_color = BaseWidgetFactory.resolve_element_bg(parent)
+
+        # Покомпонентный сдвиг фона.
+        if bg_modifier is not None:
+            dr, dg, db = bg_modifier[:3]
+            r, g, b = bg_color[:3]
+            new_r = ColorCalculator.clamp(r + dr)
+            new_g = ColorCalculator.clamp(g + dg)
+            new_b = ColorCalculator.clamp(b + db)
+            if len(bg_color) == 4:
+                bg_color = (new_r, new_g, new_b, bg_color[3])
+            else:
+                bg_color = (new_r, new_g, new_b)
 
         WidgetStyle.apply_button(
             btn, bg_color, text_color, padding, border_radius, border,

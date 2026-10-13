@@ -304,16 +304,24 @@ class KizTransferService:
         prepare_transfer(target_dir, sellers).
     """
 
-    def __init__(self, log_manager_v2) -> None:
+    def __init__(self, log_manager_v2, priority_resolver=None) -> None:
         """Конструктор.
 
         Вход:
             log_manager_v2 — LogManagerV2.
+            priority_resolver — Callable[[dict], dict[str, Seller]]
+                или None. Принимает conflicts (см. формат
+                ReturnsTransferData.conflicts), возвращает
+                {brand_key: Seller}. Вызов — только в UI-потоке
+                (сервис сам не открывает диалог). При None —
+                конфликты не разрешаются, строки из pending_rows
+                пропускаются с warning.
 
-        Роль: сохраняет ссылку. Логгер создаётся в начале
+        Роль: сохраняет ссылки. Логгер создаётся в начале
               prepare_transfer.
         """
         self._log_manager_v2 = log_manager_v2
+        self._priority_resolver = priority_resolver
 
     def prepare_transfer(self, target_dir, sellers) -> None:
         """Запускает подготовку передач КИЗов.
@@ -345,6 +353,8 @@ class KizTransferService:
             log_filename="log_продажи.txt",
         )
 
+        logger.debug("KizTransferService.prepare_transfer: старт")
+        logger.status("Подготовка передач КИЗов начата")
         logger.report(
             f"=== Подготовка передач КИЗов начата "
             f"{ctx.today.strftime('%d.%m.%Y %H:%M')} ==="
@@ -362,10 +372,58 @@ class KizTransferService:
         # Генератор продаж — с логгером V2, чтобы debug-сообщения
         # не терялись.
         sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
-
+        logger.status("Чтение файла возвратов")
         # Reader возвращает готовые строки передач и агрегаты.
         data = ReturnsTransferReader.read(source_file, sellers, logger)
+        all_rows = list(data.rows)
 
+        if data.conflicts:
+            logger.status("Разрешение конфликтов брендов")
+            if self._priority_resolver is None:
+                logger.warning(
+                    f"Конфликтов: {len(data.conflicts)}. "
+                    f"UI-резолвер не передан — строки пропущены: "
+                    f"{len(data.pending_rows)}"
+                )
+            else:
+                try:
+                    resolution = self._priority_resolver(
+                        data.conflicts
+                    )
+                except Exception as e:
+                    logger.critical(
+                        f"Ошибка резолвера приоритетов: {e}",
+                        can_influence=False,
+                    )
+                    resolution = None
+
+                if isinstance(resolution, dict):
+                    for pending_row in data.pending_rows:
+                        selected = resolution.get(
+                            pending_row.brand_key
+                        )
+                        if selected is None:
+                            logger.warning(
+                                f"Конфликт по бренду "
+                                f"'{pending_row.brand}' не "
+                                f"разрешён — строка пропущена"
+                            )
+                            continue
+                        pending_row.to_seller_name = selected.name
+                        pending_row.to_seller_inn = selected.inn
+                        all_rows.append(pending_row)
+                    logger.info(
+                        f"\nРазрешено конфликтов: "
+                        f"{len(resolution)}"
+                    )
+                else:
+                    logger.warning(
+                        f"Резолвер вернул некорректный результат "
+                        f"— строки пропущены: "
+                        f"{len(data.pending_rows)}"
+                    )
+
+        logger.status("Генерация файлов продаж")
         # Прогон готовых строк через генератор — без дополнительных
         # проверок: всё уже проверено в reader'е.
         for transfer in data.rows:
@@ -401,5 +459,24 @@ class KizTransferService:
                 )
         else:
             logger.report("  Нет строк для передачи между продавцами")
+        if data.conflicts:
+            total_c = len(data.conflicts)
+            if self._priority_resolver is not None:
+                resolved_c = 0
+                if isinstance(locals().get("resolution"), dict):
+                    resolved_c = len(resolution)
+            else:
+                resolved_c = 0
+            skipped_c = total_c - resolved_c
+            if skipped_c < 0:
+                skipped_c = 0
+            logger.info(
+                f"\nКонфликты брендов:\n"
+                f"  Всего: {total_c}\n"
+                f"  Разрешено: {resolved_c}\n"
+                f"  Пропущено: {skipped_c}"
+            )
 
         logger.report("Подготовка передач завершена.\n")
+        logger.status("Подготовка передач завершена")
+        logger.debug("KizTransferService.prepare_transfer: выход")

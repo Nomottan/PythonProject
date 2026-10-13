@@ -400,23 +400,6 @@ class MainWindow(QMainWindow):
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
     # ============================================================
-    def open_string_list_dialog(self, title, strings, parent=None):
-        """Открывает StringListDialog для редактирования списка строк.
-
-        Вход:
-            title — заголовок диалога.
-            strings — список строк; мутируется диалогом in-place.
-            parent — родительское окно. None → MainWindow (обратная
-                совместимость). При передаче другого окна диалог
-                наследует его service_window для центрирования.
-
-        Роль:
-            Создаёт диалог и показывает через show() без exec().
-            Модальность StringListDialog остаётся modal=False.
-        """
-        dialog = StringListDialog(parent or self, title, strings)
-        dialog.show()
-
     @log_button_action(
         "open_datetime_window",
         "Ошибка при открытии окна 'Планировщик': {e}",

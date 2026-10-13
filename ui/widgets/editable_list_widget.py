@@ -1,6 +1,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit
 from ui.factories.factories import ListWidgetFactory, ButtonFactory, InputWidgetFactory
+from ui.styles import WindowStyle
 
 class EditableListWidget(QWidget):
     """
@@ -8,9 +9,31 @@ class EditableListWidget(QWidget):
     Используется в StringListDialog, BrandEditDialog и подобных.
     """
     def __init__(self, parent=None, initial_items=None,
-                 add_text="+ Добавить", bg_color=(25, 25, 45)):
+                 add_text="+ Добавить", bg_color=None):
+        """Конструктор.
+
+        Вход:
+            parent — родительский виджет.
+            initial_items — начальный список строк. None → [].
+            add_text — подпись кнопки добавления.
+            bg_color — фон виджета. None → берётся от родителя
+                       через WindowStyle.resolve_parent_bg с
+                       fallback (25, 25, 45). Явный цвет —
+                       используется как есть.
+
+        Роль: при bg_color=None виджет сам резолвит фон от
+              родителя (тенденция «дочерние окна тянут цвет
+              родителя»). Существующие вызовы без bg_color
+              получают улучшение — фон от родителя вместо
+              хардкода.
+        """
         super().__init__(parent)
         self.items = initial_items or []
+        if bg_color is None:
+            bg_color = WindowStyle.resolve_parent_bg(
+                parent, (25, 25, 45),
+            )
+
         self._build_ui(add_text, bg_color)
 
     def _build_ui(self, add_text, bg_color):
@@ -26,7 +49,7 @@ class EditableListWidget(QWidget):
 
         # Кнопка добавления
         add_btn = ButtonFactory.create_button(
-            self, add_text, (100, 80, 120, 0.7), padding="6px 12px"
+            self, add_text, None, padding="6px 12px",
         )
         add_btn.clicked.connect(self.add_item)
         layout.addWidget(add_btn)

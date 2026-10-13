@@ -284,22 +284,17 @@ class ColorCalculator:
 
         r, g, b, _ = rgba
         avg = (r + g + b) // 3
-        if avg > 128:
-            target = avg - 128
+        if avg < 127:
+            edge = 255
+            factor = 80
         else:
-            target = avg + 127
-
-        text = []
-        for c in (r, g, b):
-            if target >= c:
-                text.append(
-                    ColorCalculator.clamp(target + (target - c) // 10)
-                )
-
-            else:
-                text.append(
-                    ColorCalculator.clamp(target - (c - target) // 10)
-                )
+            edge = 0
+            factor = -140
+        text = (
+            ColorCalculator.clamp(int(r + (r + edge) * factor // 200)),
+            ColorCalculator.clamp(int(g + (g + edge) * factor // 200)),
+            ColorCalculator.clamp(int(b + (b + edge) * factor // 200))
+        )
 
         return ColorCalculator.to_str(tuple(text))
 
@@ -336,18 +331,53 @@ class ColorCalculator:
         avg = (r + g + b) // 3
         extra = max(0, int(extra_contrast))
         if avg < 127:
-            text = (
-                ColorCalculator.clamp(r + r // 2 + r * extra // 100),
-                ColorCalculator.clamp(g + g // 2 + g * extra // 100),
-                ColorCalculator.clamp(b + b // 2 + b * extra // 100),
-            )
+            edge = 255
+            factor = 100 + extra
         else:
-            text = (
-                ColorCalculator.clamp(r // 2 - r * extra // 100),
-                ColorCalculator.clamp(g // 2 - g * extra // 100),
-                ColorCalculator.clamp(b // 2 - b * extra // 100),
-            )
+            edge = 0
+            factor = -(100 + extra)
+        text = (
+            ColorCalculator.clamp(r + (r + edge) * factor // 200),
+            ColorCalculator.clamp(g + (g + edge) * factor // 200),
+            ColorCalculator.clamp(b + (b + edge) * factor // 200)
+        )
         return ColorCalculator.to_str(text)
+
+    @staticmethod
+    def element_bg_for(bg_color) -> tuple:
+        """Производный цвет элемента от фона родителя.
+
+        Вход:
+            bg_color — кортеж/список/строка или None.
+
+        Выход:
+            Кортеж (r, g, b) при a == 1.0 либо (r, g, b, a) —
+            через pack_rgba.
+
+        Роль:
+            Формула:
+                rgba = to_rgba(bg_color);
+                avg = (r + g + b) // 3;
+                edge = 255 if avg < 127 else 0;
+                sign = 1 if avg < 127 else -1;
+                c' = clamp(c + (c + edge) * sign // 8).
+            На тёмном фоне каждый канал движется к белому на 1/8
+            расстояния до 255. На светлом — к чёрному на 1/8
+            расстояния до 0. Цветность (соотношение каналов)
+            сохраняется, к серому не усредняется.
+            При невалидном входе — fallback (63, 63, 63, 1.0).
+        """
+        rgba = ColorCalculator.to_rgba(bg_color)
+        if rgba is None:
+            return (63, 63, 63, 1.0)
+        r, g, b, a = rgba
+        avg = (r + g + b) // 3
+        edge = 255 if avg < 127 else 0
+        sign = 1 if avg < 127 else -1
+        new_r = ColorCalculator.clamp(r + (r + edge) * sign // 8)
+        new_g = ColorCalculator.clamp(g + (g + edge) * sign // 8)
+        new_b = ColorCalculator.clamp(b + (b + edge) * sign // 8)
+        return ColorCalculator.pack_rgba(new_r, new_g, new_b, a)
 
     @staticmethod
     def indicator_unchecked(bg_color):

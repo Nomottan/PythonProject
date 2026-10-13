@@ -80,13 +80,48 @@ class Brand:
         return f"<Brand: {self.name}>"
 
 class Seller:
-    """Модель продавца."""
-    def __init__(self, name: str, inn: str = "", keys: list = None, brands: list = None, company: str = ""):
+    """Модель продавца.
+
+    Поля:
+        name — имя продавца.
+        inn — ИНН.
+        keys — ключи для распознавания.
+        brands — связанные объекты Brand.
+        company — юр. лицо.
+        priority — приоритет при разрешении конфликтов КИЗов:
+                   1 — низкий, 2 — средний (дефолт), 3 — высокий.
+                   Существующие записи без priority получают 2.
+    """
+
+    @staticmethod
+    def _safe_priority(value) -> int:
+        """Приводит priority к int в [1, 3] с fallback 2.
+
+        Вход: value — любое значение из JSON (int, str, None, ...).
+        Выход: int 1, 2 или 3. Дефолт 2 — при любом невалидном входе.
+
+        Роль:
+            Защита от битого JSON по аналогии с Brand.from_dict
+            (там — через `is not False`). Здесь: try int, затем
+            clamp [1, 3]; любой сбой или выход за диапазон → 2.
+        """
+        try:
+            p = int(value)
+        except (TypeError, ValueError):
+            return 2
+        if p < 1 or p > 3:
+            return 2
+        return p
+
+    def __init__(self, name: str, inn: str = "", keys: list = None,
+                 brands: list = None, company: str = "",
+                 priority: int = 2):
         self.name = name
         self.inn = inn
         self.company = company
         self.keys = keys if keys is not None else []
-        self.brands = brands if brands is not None else []   # список объектов Brand
+        self.brands = brands if brands is not None else []
+        self.priority = priority
 
     def add_brand(self, brand: Brand):
         """Добавляет бренд и синхронизирует обратную сторону.
@@ -129,6 +164,7 @@ class Seller:
             "company": self.company,
             "keys": self.keys,
             "brands": [b.name for b in self.brands],
+            "priority": self.priority,
         }
 
     @classmethod
@@ -136,16 +172,18 @@ class Seller:
         """
         Создание объекта из словаря с возможностью восстановления связей.
         Если передан brands_by_name, то поле brands заполняется объектами Brand.
+        priority читается через Seller._safe_priority: битый JSON → 2.
         """
-        seller = cls(name = data["name"],
-                     inn = data.get("inn", ""),
+        seller = cls(name=data["name"],
+                     inn=data.get("inn", ""),
                      company=data.get("company", ""),
-                     keys = data.get("keys", []))
+                     keys=data.get("keys", []),
+                     priority=cls._safe_priority(data.get("priority", 2)))
         if brands_by_name:
             for brand_name in data.get("brands", []):
                 brand = brands_by_name.get(brand_name)
                 if brand:
-                    seller.add_brand(brand)       # устанавливает двустороннюю связь
+                    seller.add_brand(brand)
         return seller
 
     def __repr__(self):

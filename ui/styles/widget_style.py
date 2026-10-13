@@ -472,7 +472,7 @@ class WidgetStyle:
             view_text = view_item_text_color
         else:
             view_text = ColorCalculator.item_text_for(
-                view_bg, extra_contrast=100,
+                view_bg, extra_contrast=0,
             )
 
         # Шаг 5. Selection.
@@ -499,6 +499,7 @@ class WidgetStyle:
         )
 
         # Шаг 8. Сборка QSS.
+
         style = QssBuilder.base_rule(
             selector,
             bg_color=bg_color,
@@ -508,6 +509,10 @@ class WidgetStyle:
             padding=padding,
             font_size=font_size,
             font_family=font_family,
+        )
+        style += (
+            f" {selector}:focus, {selector}:on, {selector}:pressed "
+            f"{{ border: {border}; outline: none; }}"
         )
         # ::drop-down — видимая кнопка с фоном и скруглением.
         dd_extra = (
@@ -538,15 +543,35 @@ class WidgetStyle:
             bg_color=view_bg,
             text_color=view_text,
             border="none",
+            extra_props="outline: 0;",
         )
         style += QssBuilder.base_rule(
             f"{selector} QAbstractItemView::item",
             padding="4px",
             border_radius=border_radius,
         )
+        view_rgba = ColorCalculator.to_rgba(view_bg)
+        sel_bg_rgba = ColorCalculator.to_rgba(sel_bg)
+        if view_rgba is not None and sel_bg_rgba is not None:
+            _vr, _vg, _vb, _ = view_rgba
+            _sbr, _sbg, _sbb, _ = sel_bg_rgba
+            hover_bg = ColorCalculator.to_str((
+                ColorCalculator.clamp((_vr + _sbr) // 2),
+                ColorCalculator.clamp((_vg + _sbg) // 2),
+                ColorCalculator.clamp((_vb + _sbb) // 2),
+            ))
+        else:
+            hover_bg = sel_bg
+        style += (
+            f" {selector} QAbstractItemView::item:hover "
+            f"{{ background-color: {hover_bg}; }}"
+        )
+        sel_rgba = ColorCalculator.to_rgba(sel_text)
+
         style += (
             f" {selector} QAbstractItemView::item:selected "
-            f"{{ background-color: {sel_bg}; color: {sel_text}; }}"
+            f"{{ background-color: {sel_bg}; color: {sel_text}; "
+            f"border: 1px solid {sel_text}; outline: none; }}"
         )
 
         if extra_style:

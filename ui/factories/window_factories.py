@@ -456,6 +456,13 @@ class ExtendedWindowFactory(WindowFactory):
             if not window.isVisible():
                 return False
 
+            # Открыт popup (раскрытый QComboBox, QMenu и т. п.) —
+            # клик по нему формально вне rect() диалога, но это
+            # не «клик вне окна»: не закрываем.
+            if QApplication.activePopupWidget() is not None:
+                return False
+
+
             local_pos = window.mapFromGlobal(event.globalPosition().toPoint())
             if window.rect().contains(local_pos):
                 return False
