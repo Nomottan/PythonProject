@@ -472,6 +472,7 @@ class KizFilterDetailsWriter:
         Вход:
             details — словарь {"kiz_from_fbs": set[str],
                                "files": [{"name": str,
+                                          "source_name": str,
                                           "total": int,
                                           "duplicates": set[str],
                                           "filtered": set[str]}, ...]}.
@@ -507,6 +508,9 @@ class KizFilterDetailsWriter:
 
         for file_info in details["files"]:
             logger.report(f"Файл: {file_info['name']}")
+            logger.report(
+                f"  Источник: {file_info.get('source_name', '—')}"
+            )
             logger.report(
                 f"  Всего КИЗов в файле: {file_info['total']}"
             )

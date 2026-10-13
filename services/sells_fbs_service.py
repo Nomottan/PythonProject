@@ -23,7 +23,8 @@ from utils.excel_helper import (
 from utils.txt_helper import TextFileWriter
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper, FilenameUtils
-from utils.parsers import PreFinalRow
+from utils.parsers import DateParser, PreFinalRow
+from datetime import datetime
 from utils.price_utils import AveragePriceResolver, PriceFiller
 from utils.mp_readers import (
     ChzMpReportReader, WBReportReader, OZONReportReader,
@@ -391,7 +392,7 @@ class ExportKizService:
     Публичный API:
         export(target_dir, sellers).
     """
-
+    _SOURCE_LABELS = {0: "ЧЗ МП", 1: "WB", 2: "Ozon"} #ярлыки приоритетов для разрешения дублей
     def __init__(self, kiz_validator, log_manager_v2) -> None:
         """Конструктор.
 
@@ -470,6 +471,7 @@ class ExportKizService:
         wb_sellers_with_kiz: set = set()
         successful_txt: list = []
         size_before = len(self.kiz_validator.storage.get_all())
+        kiz_owners: dict = {}
         added_from_chz = 0
         added_from_wb = 0
         added_from_ozon = 0
@@ -521,6 +523,11 @@ class ExportKizService:
                         for entry in result.entries:
                             if entry.result == ValidationResult.ADDED:
                                 kiz_by_seller[entry.seller_name].add(entry.full_kiz)
+                                kiz_owners.setdefault(entry.full_kiz, []).append(
+                                    (entry.seller_name,
+                                     ctx.today.strftime("%d.%m.%Y"),
+                                     0)
+                                )
                         added_from_chz += sum(
                             1 for e in result.entries
                             if e.result == ValidationResult.ADDED
@@ -607,6 +614,13 @@ class ExportKizService:
                         prices_by_seller[data.seller.name].update(data.prices)
                         wb_sellers_with_kiz.add(data.seller.name)
 
+                        for full_kiz in data.full_kizs:
+                            kiz_owners.setdefault(full_kiz, []).append(
+                                (data.seller.name,
+                                 data.kiz_dates.get(full_kiz),
+                                 1)
+                            )
+
                         wb_blocks.append("\n".join([
                             f"Файл: {Path(mp_path).name}",
                             f"  Продавец: {data.seller.name}",
@@ -654,7 +668,12 @@ class ExportKizService:
                             continue
                         added_from_ozon += data.added
                         kiz_by_seller[data.seller.name].update(data.full_kizs)
-
+                        for full_kiz in data.full_kizs:
+                            kiz_owners.setdefault(full_kiz, []).append(
+                                (data.seller.name,
+                                 data.kiz_dates.get(full_kiz),
+                                 2)
+                            )
                         ozon_blocks.append("\n".join([
                             f"Файл: {Path(ozon_path).name}",
                             f"  Продавец: {data.seller.name}",
@@ -677,6 +696,71 @@ class ExportKizService:
                 if ozon_blocks:
                     logger.info("\n" + "\n\n".join(ozon_blocks))
         size_after = len(self.kiz_validator.storage.get_all())
+        # ---- Разрешение конфликтов КИЗов между продавцами ----
+        logger.status("Проверка дублей КИЗов между продавцами")
+        conflict_count = 0
+        per_seller_lost: dict = {}
+        for kiz, owners in kiz_owners.items():
+            if len(owners) <= 1:
+                continue
+            unique_sellers = {o[0] for o in owners}
+            if len(unique_sellers) <= 1:
+                continue
+            winner = self._pick_winner(owners, sellers)
+            if winner is None:
+                continue
+            conflict_count += 1
+            winner_owner = next(o for o in owners if o[0] == winner)
+            winner_date = (
+                winner_owner[1] if winner_owner[1] else "дата неизвестна"
+            )
+            winner_label = self._SOURCE_LABELS.get(
+                winner_owner[2], str(winner_owner[2])
+            )
+            for loser in unique_sellers:
+                if loser == winner:
+                    continue
+                kiz_by_seller[loser].discard(kiz)
+                per_seller_lost[loser] = per_seller_lost.get(loser, 0) + 1
+                if winner_owner[2] == 0:
+                    logger.report(
+                        f"\nКИЗ {kiz}: у '{loser}' (не определяли) и "
+                        f"'{winner}' ({winner_date}, src={winner_label}) "
+                        f"→ оставлен у '{winner}'"
+                    )
+                else:
+                    loser_owner = next(o for o in owners if o[0] == loser)
+                    loser_date = (
+                        loser_owner[1] if loser_owner[1]
+                        else "дата неизвестна"
+                    )
+                    loser_label = self._SOURCE_LABELS.get(
+                        loser_owner[2], str(loser_owner[2])
+                    )
+                    logger.report(
+                        f"\nКИЗ {kiz}: у '{loser}' ({loser_date}, "
+                        f"src={loser_label}) и '{winner}' ({winner_date}, "
+                        f"src={winner_label}) → оставлен у '{winner}'"
+                    )
+
+        if conflict_count > 0:
+            logger.warning(
+                f"\nНайдено конфликтов КИЗов между продавцами: "
+                f"{conflict_count}"
+            )
+            lines = ["\nКонфликты КИЗов между продавцами:"]
+            lines.append(f"  Всего конфликтов: {conflict_count}")
+            lines.append(f"  Продавцов затронуто: {len(per_seller_lost)}")
+            if per_seller_lost:
+                lines.append("")
+                lines.append("  По продавцам (потеряно КИЗов):")
+                for seller in sellers:
+                    if seller.name in per_seller_lost:
+                        lines.append(
+                            f"    {seller.name}: "
+                            f"{per_seller_lost[seller.name]}"
+                        )
+            logger.info("\n".join(lines))
         info_lines = []
         info_lines.append("\nЗапись в базу КИЗов:")
         info_lines.append(f"  Из отчётов со склада: {added_from_chz}")
@@ -801,6 +885,53 @@ class ExportKizService:
             "Обработайте файлы в BestMark и переходите к следующему этапу"
         )
         logger.info("\n==================================================\n")
+
+    @classmethod
+    def _pick_winner(cls, owners, sellers):
+        """Определяет продавца-победителя для конфликтного КИЗа.
+
+        Вход:
+            owners — list[tuple[seller_name: str, date_str: str | None,
+                     source_priority: int]]. Гарантируется len(owners)
+                     >= 2 и len({o[0] for o in owners}) >= 2.
+            sellers — list[Seller]. Порядок семантичен: используется
+                      как тай-брейкер.
+
+        Выход:
+            str — имя продавца-победителя; None при пустом owners.
+
+        Роль:
+            Т6: ЧЗ МП побеждает жёстко, без сравнения дат. Иначе —
+            единый ключ: позже > раньше, меньше priority лучше
+            (0 > 1 > 2), меньше индекс в sellers лучше.
+            None-даты → datetime.min.
+        """
+        if not owners:
+            return None
+
+        seller_names = [s.name for s in sellers]
+
+        def seller_index(name):
+            if name in seller_names:
+                return seller_names.index(name)
+            return len(seller_names)
+
+        chz_owners = [o for o in owners if o[2] == 0]
+        if chz_owners:
+            winner_chz = min(
+                chz_owners, key=lambda o: seller_index(o[0])
+            )
+            return winner_chz[0]
+
+        def sort_key(owner):
+            dt = DateParser.parse_any(
+                owner[1], DateParser.KIZ_FORMATS
+            )
+            if dt is None:
+                dt = datetime.min
+            return (dt, -owner[2], -seller_index(owner[0]))
+
+        return max(owners, key=sort_key)[0]
 
 class FilterPreFinalService:
     """Сервис фильтрации предитоговых файлов.

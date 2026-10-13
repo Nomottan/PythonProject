@@ -22,7 +22,7 @@ from PySide6.QtCore import QTimer, Qt
 
 from ui.windows import (
     ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
-    StringListDialog, PlannerWindow
+    StringListDialog, PlannerWindow, KizBySellersWindow
 )
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
 from ui.widgets.planner_quick_view import PlannerQuickView
@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self.brands_window = None
         self.returns_window = None
         self.compare_window = None
+        self.kiz_by_sellers_window = None
         self.planner_window = None
 
         # --- KizStorage (used_kiz.json) ---
@@ -173,6 +174,7 @@ class MainWindow(QMainWindow):
             ("btn_brands", "Бренды", (80, 100, 130), "8px 16px", None),
             ("btn_chz_mp", "Подготовка к списанию кодов по отчётам", (70, 90, 100, 0.8), "8px 16px", None),
             ("btn_returns", "Подготовка к возврату в оборот", (70, 90, 100, 0.8), "8px 16px", None),
+            ("btn_kiz_by_sellers", "Продажи КИЗов", (70, 90, 100, 0.8), "8px 16px", None),
             ("btn_compare", "Сравнение поставок", (100, 90, 70, 0.8), "8px 16px", None),
         ]
 
@@ -181,6 +183,7 @@ class MainWindow(QMainWindow):
             "btn_brands": "open_brands_window",
             "btn_chz_mp": "open_chz_mp_window",
             "btn_returns": "open_returns_window",
+            "btn_kiz_by_sellers": "open_kiz_by_sellers_window",
             "btn_compare": "open_compare_window",
         }
 
@@ -226,6 +229,7 @@ class MainWindow(QMainWindow):
             self,
             self.btn_chz_mp,
             self.btn_returns,
+            self.btn_kiz_by_sellers,
             self.btn_compare,
             alignment=Qt.AlignCenter,
             spacing=10
@@ -370,6 +374,29 @@ class MainWindow(QMainWindow):
             self.compare_window.activateWindow()
             self.logger.debug("open_compare_window: окно активировано")
 
+    @log_button_action(
+        "open_kiz_by_sellers_window",
+        "Ошибка при открытии окна 'Продажи КИЗов': {e}",
+    )
+    def open_kiz_by_sellers_window(self):
+        if (self.kiz_by_sellers_window is None
+                or not self.kiz_by_sellers_window.isVisible()):
+            self.kiz_by_sellers_window = KizBySellersWindow(
+                self, log_manager_v2=self.log_manager_v2,
+            )
+            WindowFactory.show_child_window(
+                self, self.kiz_by_sellers_window,
+            )
+            self.logger.debug(
+                "open_kiz_by_sellers_window: окно создано заново"
+            )
+        else:
+            self.kiz_by_sellers_window.raise_()
+            self.kiz_by_sellers_window.activateWindow()
+            self.logger.debug(
+                "open_kiz_by_sellers_window: окно активировано"
+            )
+
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
     # ============================================================
@@ -413,7 +440,8 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         for child in (self.chz_mp_window, self.sellers_window,
                       self.brands_window, self.returns_window,
-                      self.compare_window, self.planner_window):
+                      self.compare_window, self.kiz_by_sellers_window,
+                      self.planner_window):
             if child and child.isVisible():
                 parent_rect = self.frameGeometry()
                 child.setGeometry(10, 10,

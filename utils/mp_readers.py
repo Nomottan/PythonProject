@@ -114,6 +114,10 @@ class MpReportData:
         skipped_date_before_return — дата продажи раньше возврата.
         total_unique — всего уникальных storage_kiz в отчёте.
         skipped_by_type — dict {operation_type: count}.
+        kiz_dates — {full_kiz: sale_date_str} — дата продажи КИЗа,
+                    нормализованная к "%d.%m.%Y". None, если исходную
+                    дату не удалось распарсить. Fallback (сегодняшняя
+                    дата) НЕ применяется — значение либо дата, либо None.
     """
     seller: "Seller"
     added: int
@@ -124,6 +128,7 @@ class MpReportData:
     skipped_date_before_return: int
     total_unique: int
     skipped_by_type: dict
+    kiz_dates: dict
 
 @dataclass
 class MpReadResult:
@@ -282,7 +287,28 @@ class BaseMpReportReader:
         """
         raise NotImplementedError
 
-    # ---------- Общая валидация ----------
+    @staticmethod
+    def _normalize_kiz_date_to_dotted(date_str) -> Optional[str]:
+        """Нормализует строку даты КИЗа к "%d.%m.%Y".
+
+        Вход: date_str — строка или None.
+        Выход: строка "%d.%m.%Y" или None.
+
+        Роль: единая точка приведения даты продажи КИЗа
+              к виду, принятому в отчётах. Fallback
+              не применяется — что не распарсилось, то
+              остаётся None.
+        """
+        if not date_str:
+            return None
+        dt = DateParser.parse_any(
+            date_str, DateParser.KIZ_FORMATS
+        )
+        if dt is None:
+            return None
+        return dt.strftime("%d.%m.%Y")
+
+        # ---------- Общая валидация ----------
 
     @classmethod
     def _validate_occurrences(cls, occurrences, dates, kiz_validator,
@@ -301,6 +327,7 @@ class BaseMpReportReader:
         skipped_date_before_return = 0
         prices: dict = {}
         full_kizs: set = set()
+        kiz_dates: dict = {}
 
         for storage_kiz, _entries in occurrences.items():
             def key_func(entry):
@@ -325,6 +352,11 @@ class BaseMpReportReader:
                 added += 1
                 if cls.COLLECT_PRICES and chosen.price is not None:
                     prices[storage_kiz] = int(chosen.price)
+                kiz_dates[chosen.full_kiz] = (
+                    cls._normalize_kiz_date_to_dotted(
+                        chosen.sale_date_str
+                    )
+                )
             elif result == ValidationResult.SKIPPED_NO_RETURN:
                 skipped_no_return += 1
             elif result == ValidationResult.SKIPPED_DATE_BEFORE_RETURN:
@@ -348,6 +380,7 @@ class BaseMpReportReader:
             "prices": prices,
             "full_kizs": full_kizs,
             "total_unique": total_unique,
+            "kiz_dates": kiz_dates,
         }
 
     @classmethod
@@ -388,6 +421,7 @@ class BaseMpReportReader:
             skipped_date_before_return=result_dict["skipped_date_before_return"],
             total_unique=result_dict["total_unique"],
             skipped_by_type=skipped_by_type,
+            kiz_dates=result_dict["kiz_dates"],
         )
 
     @classmethod
