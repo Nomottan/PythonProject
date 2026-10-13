@@ -17,6 +17,7 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory,
     ListWidgetFactory, LayoutFactory,
 )
+from ui.styles import WidgetStyle
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.base.base_edit_dialog import BaseEditDialog
@@ -416,30 +417,14 @@ class BrandDetailWindow(BaseEditDialog):
         combo = InputWidgetFactory.create_combo_box(
             dialog, items=brand_names, current_index=0,
         )
-        combo.setStyleSheet("""
-            QComboBox {
-                background-color: rgba(60, 50, 70, 0.9);
-                color: #d4d4d4;
-                border: 1px solid #5a4a5c;
-                border-radius: 3px;
-                padding: 3px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid #d4d4d4;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: rgba(60, 50, 70, 0.95);
-                color: #d4d4d4;
-                selection-background-color: rgba(100, 80, 120, 0.8);
-                selection-color: #ffffff;
-                border: 1px solid #5a4a5c;
-            }
-        """)
+        WidgetStyle.apply_combo_box(
+            combo,
+            bg_color=(60, 50, 70, 0.9),
+            text_color=None,
+            border="1px solid #5a4a5c",
+            border_radius=3,
+            padding="3px",
+        )
         content_layout.addWidget(combo)
 
         btn_layout = QHBoxLayout()

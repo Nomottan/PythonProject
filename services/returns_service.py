@@ -375,9 +375,6 @@ class KizTransferService:
                 to_seller_inn=transfer.to_seller_inn,
                 product_name=transfer.product_name,
                 raw_kiz=transfer.raw_kiz,
-                # REPLACE: раньше передавался seller_brand (Seller),
-                # что противоречило контракту параметра owner_company.
-                # Теперь передаём исходную строку владельца.
                 owner_company=transfer.owner_company_str,
                 brand=transfer.brand,
             )

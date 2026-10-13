@@ -7,8 +7,7 @@
 """
 
 from PySide6.QtWidgets import QTextEdit
-from ui.styles import ColorCalculator, BackgroundResolver
-from ui.factories.base_factory import BaseWidgetFactory
+from ui.styles import ColorCalculator, BackgroundResolver, WidgetStyle
 
 class StatusLog(QTextEdit):
     """Лог статуса: read-only QTextEdit со стилем под фон окна.
@@ -53,32 +52,26 @@ class StatusLog(QTextEdit):
         """
         super().__init__(parent)
 
-        # Разрешаем фон: явный → parent.bg_color → parent.window().bg_color.
         resolved_bg = self._resolve_bg(bg_color, parent)
-        # Рамка: явная → авто-расчёт от фона.
         resolved_border = (
             border_color if border_color is not None
             else self._calc_border(resolved_bg)
         )
 
-        # QSS: фон с alpha 0.3 — полупрозрачный относительно окна.
-        bg_str = BaseWidgetFactory.color_to_str(
-            (*resolved_bg[:3], 0.3)
-        )
-        border_str = BaseWidgetFactory.color_to_str(resolved_border)
+        border_str = ColorCalculator.to_str(resolved_border)
 
         self.setReadOnly(True)
-        self.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {bg_str};
-                color: #d4d4d4;
-                border: 1px solid {border_str};
-                border-radius: 5px;
-                padding: 5px;
-                font-family: {font_family};
-                font-size: {font_size}px;
-            }}
-        """)
+        WidgetStyle.apply_text_edit(
+            self,
+            bg_color=(*resolved_bg[:3], 0.3),
+            text_color=None,
+            border=f"1px solid {border_str}",
+            border_radius=5,
+            padding="5px",
+            font_size=font_size,
+            font_family=font_family,
+            extra_style="",
+        )
         self.setMinimumHeight(min_height)
         self.setMaximumHeight(max_height)
 

@@ -21,7 +21,6 @@ from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
 )
-from ui.styles import ColorCalculator
 from ui.widgets.path_selector import PathSelector
 from ui.windows.kiz_by_sellers_dialogs import KizBySellersDialog
 from utils.log_tools.decorators import log_button_action
@@ -116,8 +115,8 @@ class KizBySellersWindow(BaseServiceWindow):
             self, self.btn_accumulate, self.btn_open_distribute,
             spacing=8,
         ))
-        center.addWidget(self.status_log)
         center.addStretch(1)
+        center.addWidget(self.status_log)
         self.main_layout.addLayout(center)
 
         if self.logger:

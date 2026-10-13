@@ -304,6 +304,52 @@ class ColorCalculator:
         return ColorCalculator.to_str(tuple(text))
 
     @staticmethod
+    def item_text_for(bg_color, extra_contrast=0) -> str:
+        """Цвет текста для элементов списка — светлее/темнее фона на 50%.
+
+        Вход:
+            bg_color — кортеж/список (3 или 4 элемента) или строка
+                       любого формата, поддерживаемого to_rgba.
+
+        Выход:
+            CSS-строка цвета текста. При невалидном входе —
+            fallback "#ffffff" (как у text_for).
+
+        Роль:
+            Формула отличается от text_for (там — «инверсия по
+            яркости» через целевое значение + по-канальное
+            смещение). Здесь — простая арифметика:
+                avg = (r + g + b) // 3.
+                Тёмный фон (avg < 127) → clamp(c + c // 2) — светлее.
+                Светлый фон (avg >= 127) → clamp(c // 2) — темнее.
+            Применяется к элементам выпадающих списков
+            (QComboBox QAbstractItemView), где нужен «мягкий»
+            контраст к подложке, а не инверсия.
+
+        REPLACE: новый метод — расширение API для apply_combo_box.
+        """
+        rgba = ColorCalculator.to_rgba(bg_color)
+        if rgba is None:
+            return "#ffffff"
+
+        r, g, b, _ = rgba
+        avg = (r + g + b) // 3
+        extra = max(0, int(extra_contrast))
+        if avg < 127:
+            text = (
+                ColorCalculator.clamp(r + r // 2 + r * extra // 100),
+                ColorCalculator.clamp(g + g // 2 + g * extra // 100),
+                ColorCalculator.clamp(b + b // 2 + b * extra // 100),
+            )
+        else:
+            text = (
+                ColorCalculator.clamp(r // 2 - r * extra // 100),
+                ColorCalculator.clamp(g // 2 - g * extra // 100),
+                ColorCalculator.clamp(b // 2 - b * extra // 100),
+            )
+        return ColorCalculator.to_str(text)
+
+    @staticmethod
     def indicator_unchecked(bg_color):
         """Фон индикатора в обычном (не отмеченном) состоянии.
 

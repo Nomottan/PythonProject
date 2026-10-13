@@ -79,7 +79,7 @@ class KizBySellersDialog(BaseEditDialog):
             modal=True,
             center=True,
             width=500,
-            height=250,
+            height=180,
             log_manager_v2=log_manager_v2,
         )
 
@@ -95,6 +95,14 @@ class KizBySellersDialog(BaseEditDialog):
         Роль: заголовок, строка выбора файла, комбобокс продавцов,
               кнопка запуска (изначально disabled).
         """
+        element_bg = ColorCalculator.derive(
+            self.bg_color,
+            r_fn=lambda r: r - r // 5,
+            g_fn=lambda g: g - g // 5,
+            b_fn=lambda b: b - b // 5,
+            alpha=1.0,
+        )
+
         layout.addWidget(
             LabelFactory.create_header_label(
                 self, "Распределить продажи",
@@ -103,14 +111,14 @@ class KizBySellersDialog(BaseEditDialog):
 
         row = QHBoxLayout()
         self._file_btn = ButtonFactory.create_button(
-            self, "...", (100, 90, 70, 0.8), fixed_size=(35, 28),
+            self, "...", element_bg, fixed_size=(35, 28),
         )
         self._file_btn.clicked.connect(self._on_pick_file)
         row.addWidget(self._file_btn)
 
         self._file_label = LabelFactory.create_label(
             self, "Файл не выбран",
-            bg_color=(0, 0, 0, 0),
+            bg_color=element_bg,
             alignment=Qt.AlignLeft | Qt.AlignVCenter,
         )
         row.addWidget(self._file_label, stretch=1)
@@ -118,13 +126,13 @@ class KizBySellersDialog(BaseEditDialog):
 
         self._combo = InputWidgetFactory.create_combo_box(
             self, items=[s.name for s in self._sellers],
-            bg_color=self.bg_color,
+            bg_color=element_bg,
         )
         self._combo.currentIndexChanged.connect(self._on_seller_changed)
         layout.addWidget(self._combo)
 
         self._btn_distribute = ButtonFactory.create_button(
-            self, "Распределить продажи", (70, 120, 90, 0.8),
+            self, "Распределить продажи", element_bg,
         )
         self._btn_distribute.clicked.connect(self._on_distribute)
         self._btn_distribute.setEnabled(False)

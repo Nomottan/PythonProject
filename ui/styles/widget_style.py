@@ -16,7 +16,7 @@ from .scrollbar import ScrollbarStyle
 from .window import WindowStyle
 from .selectors import SelectorBuilder
 from .bg_resolver import BackgroundResolver
-
+from pathlib import Path
 
 class WidgetStyle:
     """Фасад стилей.
@@ -376,16 +376,129 @@ class WidgetStyle:
     @staticmethod
     def apply_combo_box(combo, bg_color, text_color=None, border="none",
                         border_radius=3, padding="3px", font_size=None,
-                        font_family=None, extra_style="") -> None:
+                        font_family=None, extra_style="",
+                        *,
+                        drop_down_border_radius=None,
+                        drop_down_width=20,
+                        view_bg_color=None,
+                        view_item_text_color=None,
+                        selection_bg_color=None,
+                        selection_text_color=None) -> None:
         """QSS для QComboBox.
 
-        Вход: combo — QComboBox; параметры — стиль.
+        Вход:
+            combo — QComboBox.
+            bg_color — фон основного блока.
+            text_color — цвет текста. None → контрастный.
+            border, border_radius, padding — стиль основного блока.
+            font_size, font_family — шрифт.
+            extra_style — дополнительный CSS.
+
+        Keyword-only:
+            drop_down_border_radius — радиус скругления кнопки
+                                      раскрытия.
+                                      None → border_radius.
+            drop_down_width — ширина кнопки раскрытия в px.
+                              По умолчанию 20. None → свойство
+                              width не задаётся (Qt-дефолт).
+            view_bg_color — фон выпадающего списка.
+                            None → derive(effective_bg,
+                            r-20%, g-20%, b-20%, alpha=1.0).
+            view_item_text_color — цвет текста элементов.
+                                   None → item_text_for(view_bg,
+                                   extra_contrast=10).
+            selection_bg_color — фон выделенного элемента.
+                                 None → hover(view_bg).
+            selection_text_color — цвет текста выделенного.
+                                   None → text_for(view_bg).
 
         Выход: нет.
-        Роль: единая сборка QSS выпадающего списка.
+
+        Роль:
+            Единая сборка QSS выпадающего списка. Блоки идут в
+            порядке: база → ::drop-down → ::down-arrow →
+            QAbstractItemView → QAbstractItemView::item →
+            QAbstractItemView::item:selected → extra_style.
+
+            ::drop-down — фон view_bg, скругление dd_radius,
+            ширина drop_down_width: визуально читается как кнопка
+            со стрелкой.
+
+            ::down-arrow — SVG-иконка ui/styles/icons/arrow_down.svg
+            через image: url(...). CSS-трюк с border в Qt QSS не
+            работает (прозрачные стороны не склеиваются в
+            треугольник), поэтому используется иконка.
+            Отступ справа — margin-right: 1px.
+
+            Невыделенные элементы (QAbstractItemView::item)
+            получают view_text с item_text_for(extra_contrast=10) —
+            читаемость повышена на 10% по каналам.
+
+        Отличие от text_for / item_text_for:
+            Цвет текста основного блока (text_c) — через
+            _effective_text_for → text_for (инверсия по яркости).
+            Цвет текста элементов выпадающего списка (view_text)
+            — через item_text_for (светлее/темнее фона на 50%,
+            плюс дополнительный контраст 100%).
         """
-        text_c = WidgetStyle._effective_text_for(combo, bg_color, text_color)
-        selector = SelectorBuilder.build("QComboBox", combo.objectName() or None)
+        # Шаг 1. Эффективный фон — единая точка fallback.
+        effective_bg = BackgroundResolver.resolve_bg_color(combo, bg_color)
+        if effective_bg is None:
+            effective_bg = (100, 100, 100)
+        elif (isinstance(effective_bg, (tuple, list))
+              and len(effective_bg) >= 4
+              and float(effective_bg[3]) == 0.0):
+            effective_bg = (100, 100, 100)
+
+        # Шаг 2. Text основного блока — как было.
+        text_c = WidgetStyle._effective_text_for(
+            combo, bg_color, text_color,
+        )
+
+        # Шаг 3. Фон выпадающего списка.
+        if view_bg_color is not None:
+            view_bg = view_bg_color
+        else:
+            view_bg = ColorCalculator.derive(
+                effective_bg,
+                r_fn=lambda r: r - r // 5,
+                g_fn=lambda g: g - g // 5,
+                b_fn=lambda b: b - b // 5,
+                alpha=1.0,
+            )
+
+        # Шаг 4. Текст элементов.
+        if view_item_text_color is not None:
+            view_text = view_item_text_color
+        else:
+            view_text = ColorCalculator.item_text_for(
+                view_bg, extra_contrast=100,
+            )
+
+        # Шаг 5. Selection.
+        if selection_bg_color is not None:
+            sel_bg = selection_bg_color
+        else:
+            sel_bg = ColorCalculator.hover(view_bg)
+
+        if selection_text_color is not None:
+            sel_text = selection_text_color
+        else:
+            sel_text = ColorCalculator.text_for(view_bg)
+
+        # Шаг 6. Радиус стрелки.
+        dd_radius = (
+            drop_down_border_radius
+            if drop_down_border_radius is not None
+            else border_radius
+        )
+
+        # Шаг 7. Селектор.
+        selector = SelectorBuilder.build(
+            "QComboBox", combo.objectName() or None,
+        )
+
+        # Шаг 8. Сборка QSS.
         style = QssBuilder.base_rule(
             selector,
             bg_color=bg_color,
@@ -396,17 +509,68 @@ class WidgetStyle:
             font_size=font_size,
             font_family=font_family,
         )
+        # ::drop-down — видимая кнопка с фоном и скруглением.
+        dd_extra = (
+            f"width: {drop_down_width}px;"
+            if drop_down_width is not None
+            else ""
+        )
+        style += QssBuilder.base_rule(
+            f"{selector}::drop-down",
+            bg_color=view_bg,
+            border="none",
+            border_radius=dd_radius,
+            extra_props=dd_extra,
+        )
+        arrow_path = (
+                Path(__file__).parent / "icons" / "arrow_down.svg"
+        ).as_posix()
+        style += (
+            f" {selector}::down-arrow {{"
+            f" image: url('{arrow_path}');"
+            f" width: 12px;"
+            f" height: 12px;"
+            f" margin-right: 1px;"
+            f" }}"
+        )
+        style += QssBuilder.base_rule(
+            f"{selector} QAbstractItemView",
+            bg_color=view_bg,
+            text_color=view_text,
+            border="none",
+        )
+        style += QssBuilder.base_rule(
+            f"{selector} QAbstractItemView::item",
+            padding="4px",
+            border_radius=border_radius,
+        )
+        style += (
+            f" {selector} QAbstractItemView::item:selected "
+            f"{{ background-color: {sel_bg}; color: {sel_text}; }}"
+        )
+
         if extra_style:
             style += extra_style
+
         combo.setStyleSheet(style)
 
     @staticmethod
     def apply_text_edit(te, bg_color, text_color=None, border="none",
                         border_radius=5, padding="5px", font_size=None,
-                        extra_style="") -> None:
+                        extra_style="",
+                        *, font_family=None) -> None:
         """QSS для QTextEdit.
 
-        Вход: te — QTextEdit; параметры — стиль.
+        Вход:
+            te — QTextEdit.
+            bg_color — фон.
+            text_color — цвет текста. None → контрастный
+                         (через _effective_text_for).
+            border, border_radius, padding — стиль.
+            font_size — размер шрифта.
+            extra_style — дополнительный CSS.
+            font_family — семейство шрифта (keyword-only).
+                          None → Qt-дефолт.
 
         Выход: нет.
 
@@ -425,6 +589,7 @@ class WidgetStyle:
             border_radius=border_radius,
             padding=padding,
             font_size=font_size,
+            font_family=font_family,
         )
         style += WidgetStyle._apply_scrollbar(te, bg_color)
         if extra_style:
