@@ -8,7 +8,7 @@
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QDialog
+from PySide6.QtWidgets import QWidget, QHBoxLayout
 from PySide6.QtCore import Qt
 
 from ui.base.base_task_dialog import BaseTaskDialog
@@ -238,11 +238,7 @@ class NewTaskDialog(BaseTaskDialog):
                 "Хотите продолжить создание задачи?",
                 bg_color=self.bg_color,
             )
-            if result == QDialog.Rejected:
-                # «Нет» — пользователь передумал создавать задачу.
-                # reject() закроет NewTaskDialog с результатом Rejected,
-                # и в PlannerWindow._on_new_task ветка создания
-                # не сработает.
+            if result == "no":
                 self.reject()
             return False
 

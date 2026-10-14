@@ -25,6 +25,7 @@ from ui.widgets.path_selector import PathSelector
 from services.returns_service import (
     ReturnsPreparationService, KizExportService, KizTransferService,
 )
+from ui.windows.message_dialog import MessageDialog, NotificationDialog
 from ui.windows.returns_dialogs import PriorityResolutionDialog
 from utils.log_tools.decorators import log_button_action
 
@@ -257,10 +258,7 @@ class ReturnsWindow(BaseServiceWindow):
             self.set_status("Сначала выберите файл")
             return
 
-        service = KizTransferService(
-            self.log_manager_v2,
-            priority_resolver=self._request_priority_resolution,
-        )
+        service = ReturnsPreparationService(self.log_manager_v2)
         if self.logger:
             self.logger.debug(
                 "on_prepare: ReturnsPreparationService создан"
@@ -274,7 +272,33 @@ class ReturnsWindow(BaseServiceWindow):
             finish_message="Подготовка завершена.",
             step_name="on_prepare",
             enable_after=self.btn_export_kiz,
+            on_success=self._on_prepare_finished,
         )
+
+    def _on_prepare_finished(self, result) -> None:
+        """Реакция на завершение prepare.
+
+        Вход:
+            result — dict {new, old, dup, saved} или None.
+
+        Роль: если saved == 0 — показать NotificationDialog.
+              Во всех остальных случаях (в том числе result is None) —
+              ничего не делаем, сводка уже ушла в status_log.
+        """
+        if not result:
+            return
+        saved = result.get("saved", 0)
+        if saved == 0:
+            NotificationDialog.notify(
+                parent=self,
+                text=(
+                    "Новых КИЗов не обнаружено — все строки "
+                    "исходного файла уже были в прошлых отчётах. "
+                    "Файл возвратов оставлен без изменений."
+                ),
+                title_text="Нет новых КИЗов",
+                bg_color=self.bg_color,
+            )
 
     def _request_priority_resolution(self, conflicts) -> dict:
         """Callback от KizTransferService: разрешить конфликты брендов.
@@ -326,7 +350,9 @@ class ReturnsWindow(BaseServiceWindow):
             return
 
         service = KizExportService(
-            self.main_window.kiz_validator, self.log_manager_v2,
+            self.main_window.kiz_validator,
+            self.log_manager_v2,
+            overwrite_requester=self._request_export_mode,
         )
         if self.logger:
             self.logger.debug("on_export_kiz: KizExportService создан")
@@ -340,6 +366,57 @@ class ReturnsWindow(BaseServiceWindow):
             step_name="on_export_kiz",
             enable_after=self.btn_prepare_transfer,
         )
+
+    def _request_export_mode(self) -> bool | None:
+        """Callback от KizExportService: спросить режим записи .txt.
+
+        Выход:
+            True — перезаписать.
+            False — дополнить.
+            None — отмена.
+
+        Роль: вызывается из фонового потока сервиса. Открытие
+              диалога делегируется в UI-поток через
+              _run_in_ui_blocking.
+        """
+        return self._run_in_ui_blocking(self._show_export_mode_dialog)
+
+    @Slot()
+    def _show_export_mode_dialog(self) -> bool | None:
+        """Открывает диалог выбора режима записи в UI-потоке.
+
+        Выход:
+            True / False / None — см. _request_export_mode.
+            None — пользователь отменил или аварийное закрытие.
+
+        Роль: три кнопки. «Перезаписать» → True, «Дополнить» →
+              False, «Отмена» → None. Ключ "cancel" возвращается
+              кнопкой «Отмена» (последняя, привязана к Esc).
+              None также — при аварийном закрытии (Alt+F4).
+        """
+        text = (
+            "Уже имеются файлы для возвратов. Если предыдущие КИЗы "
+            "ты в оборот вернул, то нужно перезаписать. Иначе дополним "
+            "файлы новыми для того чтоб сразу всё ввести в оборот. "
+            "\n\n====   Итак, вопрос: Нужна ли перезапись?   ===="
+        )
+        buttons = [
+            ("Перезаписать", "overwrite", None),
+            ("Дополнить", "append", None),
+            ("Отмена", "cancel", None),
+        ]
+        result = MessageDialog.question(
+            self,
+            text=text,
+            buttons=buttons,
+            title_text="Режим записи",
+            bg_color=self.bg_color,
+        )
+        if result == "overwrite":
+            return True
+        if result == "append":
+            return False
+        return None
 
     @log_button_action(
         "btn_prepare_transfer",

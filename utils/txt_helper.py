@@ -63,3 +63,40 @@ class TextFileWriter:
                     can_influence=False,
                 )
             return False
+
+    @staticmethod
+    def read(path, logger=None) -> list | None:
+        """Читает .txt-файл в список непустых строк.
+
+        Вход:
+            path — путь к файлу (Path или str).
+            logger — LoggerV2 или None.
+
+        Выход:
+            list[str] — непустые строки без краевых пробелов и \\n,
+            если файл прочитан. None — файла нет или ошибка чтения.
+
+        Роль:
+            Дополнение к write: тот перезаписывает файл, этот —
+            читает построчно. None означает «прочитать не удалось»;
+            вызывающий сам решает, что делать (создать файл заново,
+            дополнить, пропустить). Отсутствие файла штатно —
+            без логов. Ошибка чтения — logger.critical.
+        """
+        path_obj = Path(path)
+        if not path_obj.is_file():
+            return None
+        try:
+            content = path_obj.read_text(encoding="utf-8")
+            return [
+                line.strip()
+                for line in content.splitlines()
+                if line.strip()
+            ]
+        except Exception as e:
+            if logger is not None:
+                logger.critical(
+                    f"Ошибка чтения {path_obj.name}: {e}",
+                    can_influence=False,
+                )
+            return None

@@ -14,7 +14,6 @@
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QDialog,
 )
 from PySide6.QtCore import Qt
 from ui.styles import ColorCalculator, WindowStyle
@@ -515,7 +514,7 @@ class BrandEditDialog(BaseEditDialog):
             title_text="Подтверждение удаления",
             bg_color=self.bg_color,
         )
-        if reply != QDialog.Accepted:
+        if reply != "yes":
             return
 
         # 1. Отвязываем бренд от всех продавцов.

@@ -172,7 +172,7 @@ class BrandMappingsWindow(BaseEditDialog):
             title_text="Подтверждение удаления",
             bg_color=self.bg_color,
         )
-        if reply == QDialog.Accepted:
+        if reply == "yes":
             del self.mappings[brand_name]
             self._populate_list()
 
@@ -186,7 +186,7 @@ class BrandMappingsWindow(BaseEditDialog):
             title_text="Подтверждение удаления",
             bg_color=self.bg_color,
         )
-        if reply == QDialog.Accepted:
+        if reply == "yes":
             self.mappings.clear()
             self._populate_list()
 
@@ -346,7 +346,7 @@ class BrandDetailWindow(BaseEditDialog):
             title_text="Подтверждение удаления",
             bg_color=self.bg_color,
         )
-        if reply != QDialog.Accepted:
+        if reply != "yes":
             return
 
         # Удаляем из локального словаря.
@@ -379,7 +379,7 @@ class BrandDetailWindow(BaseEditDialog):
                 title_text="Нет брендов",
                 bg_color=self.bg_color,
             )
-            if reply == QDialog.Accepted:
+            if reply == "yes":
                 main_window = self.parent_window.parent_window.main_window
                 if hasattr(main_window, 'open_brands_window'):
                     main_window.open_brands_window()

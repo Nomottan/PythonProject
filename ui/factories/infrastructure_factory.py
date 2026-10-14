@@ -37,7 +37,8 @@ class ThreadFactory:
             target_func — функция для выполнения в потоке.
             args — позиционные аргументы для target_func.
             kwargs — именованные аргументы.
-            on_finished — вызывается в главном потоке при успехе.
+            on_finished — вызывается в главном потоке при успехе
+                          с результатом target_func.
             error_callback — вызывается в главном потоке при ошибке,
                              получает строку исключения.
 
@@ -57,11 +58,12 @@ class ThreadFactory:
                 btn.setEnabled(False)
 
         thread_error = None
+        thread_result = None
 
         def wrapper():
-            nonlocal thread_error
+            nonlocal thread_error, thread_result
             try:
-                target_func(*args, **kwargs)
+                thread_result = target_func(*args, **kwargs)
             except Exception as e:
                 thread_error = str(e)
 
@@ -80,7 +82,7 @@ class ThreadFactory:
                     if error_callback:
                         error_callback(thread_error)
                 elif on_finished:
-                    on_finished()
+                    on_finished(thread_result)
 
         check()
 

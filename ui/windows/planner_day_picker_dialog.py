@@ -5,8 +5,6 @@
 превью выбранных чисел. Вопрос про 29/30/31 задаётся в _validate.
 """
 
-from PySide6.QtWidgets import QDialog
-
 from ui.widgets.planner_day_picker_widget import PlannerDayPickerWidget
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.windows.message_dialog import MessageDialog
@@ -89,9 +87,8 @@ class PlannerDayPickerDialog(BaseEditDialog):
                 title_text="Последний день",
                 bg_color=(70, 80, 90),
             )
-            self._use_last_day = (reply == QDialog.Accepted)
+            self._use_last_day = (reply == "yes")
         return True
-
     # ---------- Публичный API ----------
 
     def get_selected(self) -> list:

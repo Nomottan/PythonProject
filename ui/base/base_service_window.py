@@ -355,8 +355,9 @@ class BaseServiceWindow(QMainWindow):
             step_name — префикс для logger.debug/critical.
             enable_after — QPushButton для включения после успеха
                            (None — включать нечего).
-            on_success — callable() без аргументов — вызывается в
-                         UI-потоке после успеха. None — не вызывать.
+            on_success — callable(result) — вызывается в UI-потоке
+                         после успеха, получает результат
+                         target_method. None — не вызывать.
 
         Выход: нет.
 
@@ -367,13 +368,13 @@ class BaseServiceWindow(QMainWindow):
         self.set_status(start_message)
         self.set_info(start_message)
 
-        def on_finished():
+        def on_finished(result=None):
             self.set_status(finish_message)
             self.set_info(finish_message)
             if enable_after is not None:
                 enable_after.setEnabled(True)
             if on_success is not None:
-                on_success()
+                on_success(result)
             if self.logger:
                 self.logger.debug(f"{step_name}: фоновый поток завершён")
 

@@ -122,7 +122,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
                     title_text="Уже восстановлена",
                     bg_color=self.bg_color,
                 )
-                if reply != QDialog.Accepted:
+                if reply != "yes":
                     return
 
         # 2. Диалоги редактирования при восстановлении.
@@ -154,7 +154,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
             title_text="Подтверждение удаления",
             bg_color=self.bg_color,
         )
-        if reply == QDialog.Accepted:
+        if reply == "yes":
             self.service.delete_forever(task.task_id)
             self._reload_tasks()
 
