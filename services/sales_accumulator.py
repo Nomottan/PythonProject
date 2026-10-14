@@ -24,12 +24,17 @@ import traceback
 from pathlib import Path
 
 from utils.context import TaskContext
-from utils.file_helper import FileHelper
-from utils.excel_helper import ExcelHelper, WorkbookWriter
+from utils.file_helper import FileHelper, FilenameUtils
+from utils.excel_helper import (
+    ExcelHelper, WorkbookWriter, WorkbookOpener,
+)
 from utils.sales_file_generator import (
     SalesFileKizReader, SalesFileRowsReader, KizFilterDetailsWriter,
+    SalesFileGenerator,
 )
-
+from utils.kiz_utils import KizUtils
+from utils.parsers import PreFinalRow
+from utils.text_utils import TextUtils
 class SalesAccumulatorService:
     """Сервис аккумуляции продаж.
 
@@ -54,10 +59,16 @@ class SalesAccumulatorService:
         """
         self._log_manager_v2 = log_manager_v2
 
-    def accumulate(self, target_dir: str) -> None:
+    def accumulate(self, target_dir: str, sellers=None) -> None:
         """Аккумулирует файлы продаж из всех источников в одну папку.
 
-        Вход: target_dir — корневая папка задачи.
+        Вход:
+            target_dir — корневая папка задачи.
+            sellers — список Seller. None → []. Нужен для этапа
+                      сверки аккумулированных продаж с ИТОГ-файлами
+                      ЧЗ_МП: без него _verify_against_itogs не
+                      сможет разобрать имена файлов продаж.
+
         Выход: нет.
 
         Роль:
@@ -68,7 +79,12 @@ class SalesAccumulatorService:
             целиком, остальные фильтруются по пулу КИЗов.
             Ошибка на источнике не прерывает прогон — critical и
             continue.
+            После аккумуляции — сверка с ИТОГ-файлами ЧЗ_МП
+            (_verify_against_itogs), если папка ЧЗ_МП существует.
         """
+        if sellers is None:
+            sellers = []
+
         ctx = TaskContext(
             target_dir,
             "Продажи_{date}",
@@ -153,6 +169,20 @@ class SalesAccumulatorService:
                 "log_фильтрация_КИЗов.txt"
             )
 
+        # ---- Сверка аккумулированных продаж с ИТОГ-файлами ЧЗ_МП ----
+        verify_stats = None
+        chz_folder = base_path / f"ЧЗ_МП_{ctx.date_str}"
+        if not chz_folder.is_dir():
+            logger.info(
+                "ЧЗ_МП не найдена — сверка с ИТОГ-файлами "
+                "не требуется"
+                )
+        else:
+            verify_stats = self._verify_against_itogs(
+                chz_folder, sales_folder, sellers,
+                ctx.date_str, logger,
+            )
+
         lines = ["\nАккумуляция продаж:"]
         lines.append(
             f"  Источников обработано: {len(per_source_stats)}"
@@ -172,6 +202,48 @@ class SalesAccumulatorService:
         lines.append(f"  Всего КИЗов в пуле: {len(kiz_pool)}")
         lines.append(f"  Всего дублей отброшено: {total_duplicates}")
         logger.info("\n".join(lines))
+        if verify_stats is not None:
+            lines = ["\nПроверка против ИТОГ-файлов:"]
+            lines.append(
+                f"  ИТОГ-файлов найдено: {verify_stats['itogs_found']}"
+            )
+            lines.append(
+                f"  Файлов продаж проверено: "
+                f"{verify_stats['sales_checked']}"
+            )
+            lines.append(
+                f"  КИЗов проверено: {verify_stats['kiz_checked']}"
+            )
+            lines.append(
+                f"  Удалено (ИТОГ у отправителя): "
+                f"{verify_stats['kiz_removed']}"
+            )
+            lines.append(
+                f"  Переоформлено (ИТОГ у третьего): "
+                f"{verify_stats['kiz_reregistered']}"
+            )
+            lines.append(
+                f"  Пустых файлов удалено: "
+                f"{verify_stats['empty_files_removed']}"
+            )
+            if verify_stats["per_seller_removed"]:
+                lines.append("  Потери по продавцам:")
+                for seller in sellers:
+                    if seller.name in verify_stats["per_seller_removed"]:
+                        lines.append(
+                            f"    {seller.name}: "
+                            f"{verify_stats['per_seller_removed'][seller.name]}"
+                        )
+            if verify_stats["per_seller_added"]:
+                lines.append("  Получено по продавцам:")
+                for seller in sellers:
+                    if seller.name in verify_stats["per_seller_added"]:
+                        lines.append(
+                            f"    {seller.name}: "
+                            f"{verify_stats['per_seller_added'][seller.name]}"
+                        )
+            logger.info("\n".join(lines))
+
 
         logger.status("Аккумуляция завершена")
         logger.report("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
@@ -444,3 +516,348 @@ class SalesAccumulatorService:
             "kiz_added_to_pool": kiz_added,
             "kiz_duplicates": kiz_duplicates,
         }
+
+    def _verify_against_itogs(self, chz_folder, sales_folder,
+                              sellers, date_str, logger) -> dict:
+        """Сверка аккумулированных продаж с ИТОГ-файлами продавцов.
+
+        Вход:
+            chz_folder — Path к папке ЧЗ_МП_{date} — источник
+                         ИТОГ-файлов.
+            sales_folder — Path к папке «Продажи_{date}» — файлы
+                           продаж, где сверяем КИЗы.
+            sellers — список Seller — нужен для разбора имён
+                      файлов продаж и для переоформлений.
+            date_str — строка даты для сборки имени ИТОГ-файла
+                       через FilenameUtils.
+            logger — LoggerV2.
+
+        Выход:
+            verify_stats — dict со счётчиками и per-seller
+            агрегатами (8 ключей).
+
+        Роль:
+            Для КИЗа из файла A → B ищет ИТОГ-файл, в котором КИЗ
+            встречается, короткозамкнуто: B → A → остальные
+            (алфавит). X == B — оставить; X == A — удалить из
+            A → B; X — третий — удалить из A → B, переоформить
+            в A → X.
+            Порядок применения: переоформления → удаления →
+            удаление опустевших файлов.
+        """
+        verify_stats = {
+            "itogs_found": 0,
+            "sales_checked": 0,
+            "kiz_checked": 0,
+            "kiz_removed": 0,
+            "kiz_reregistered": 0,
+            "empty_files_removed": 0,
+            "per_seller_removed": {},
+            "per_seller_added": {},
+        }
+        logger.status("Проверка КИЗов против ИТОГ-файлов")
+        logger.debug(
+            f"_verify_against_itogs: вход, sellers={len(sellers)}, "
+            f"sales_folder={sales_folder}"
+        )
+
+        itog_cache: dict = {}
+        to_remove: dict = {}  # {file_path: set[storage_kiz]}
+        to_reregister: list = []  # [{"from_seller": str,
+        #   "to_seller": Seller,
+        #   "kiz": str,
+        #   "product_name": str}]
+
+        sales_files = FileHelper.find_files_by_pattern(
+            sales_folder, "*.xlsx",
+        )
+
+        for file_path in sales_files:
+            parsed_names = TextUtils.parse_sales_filename(
+                file_path.name, sellers,
+            )
+            if parsed_names is None:
+                logger.warning(
+                    f"Файл продаж {file_path.name}: имя не распознано "
+                    f"— пропущен"
+                )
+                continue
+            from_seller, to_seller = parsed_names
+            A = from_seller.name
+            B = to_seller.name
+
+            logger.status(f"Сверка: {file_path.name}")
+
+            wb = WorkbookOpener.open(
+                file_path, logger=logger, read_only=True,
+                description="файл продаж",
+            )
+            if wb is None:
+                logger.warning(
+                    f"Файл продаж {file_path.name} не открылся"
+                )
+                continue
+
+            # Читаем sales_data = {kiz: product_name} из файла продаж.
+            sales_data: dict = {}
+            try:
+                sheet = wb.active
+                kiz_col = SalesFileKizReader.KIZ_COLUMN_INDEX
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    if len(row) <= kiz_col:
+                        continue
+                    raw_kiz = row[kiz_col]
+                    if not raw_kiz:
+                        continue
+                    storage_list = KizUtils.clean_kiz_for_storage(
+                        raw_kiz, logger=None,
+                    )
+                    if not storage_list:
+                        continue
+                    k = storage_list[0]
+                    product_name = row[0] if row else ""
+                    sales_data[k] = product_name
+            finally:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+            if not sales_data:
+                continue
+
+            verify_stats["sales_checked"] += 1
+            verify_stats["kiz_checked"] += len(sales_data)
+            file_matched_total = 0
+            remaining = set(sales_data.keys())
+
+            # Шаг 1. B — оставить (только вычитаем из remaining).
+            itog_b = self._load_itog_set(
+                chz_folder, B, date_str, itog_cache, logger,
+            )
+            if itog_b:
+                remaining -= (remaining & itog_b)
+
+            # Шаг 2. A — удалить.
+            itog_a = self._load_itog_set(
+                chz_folder, A, date_str, itog_cache, logger,
+            )
+            if itog_a:
+                matched_a = remaining & itog_a
+                if matched_a:
+                    to_remove.setdefault(file_path, set()).update(
+                        matched_a
+                    )
+                    remaining -= matched_a
+                    verify_stats["kiz_removed"] += len(matched_a)
+                    verify_stats["per_seller_removed"][A] = (
+                            verify_stats["per_seller_removed"].get(A, 0)
+                            + len(matched_a)
+                    )
+                    file_matched_total += len(matched_a)
+                    for k in sorted(matched_a):
+                        logger.report(
+                            f"КИЗ {k}: удалён из {A} → {B} "
+                            f"(ИТОГ у {A})"
+                        )
+
+            # Шаг 3. Остальные — удалить + переоформить.
+            other_names = sorted(
+                s.name for s in sellers if s.name not in (A, B)
+            )
+            for X in other_names:
+                if not remaining:
+                    break
+                itog_x = self._load_itog_set(
+                    chz_folder, X, date_str, itog_cache, logger,
+                )
+                if not itog_x:
+                    continue
+                matched_x = remaining & itog_x
+                if not matched_x:
+                    continue
+                to_remove.setdefault(file_path, set()).update(
+                    matched_x
+                )
+                to_seller_obj = next(
+                    (s for s in sellers if s.name == X), None,
+                )
+                for k in matched_x:
+                    to_reregister.append({
+                        "from_seller": A,
+                        "to_seller": to_seller_obj,
+                        "kiz": k,
+                        "product_name": sales_data.get(k, ""),
+                    })
+                remaining -= matched_x
+                verify_stats["kiz_reregistered"] += len(matched_x)
+                verify_stats["per_seller_removed"][A] = (
+                        verify_stats["per_seller_removed"].get(A, 0)
+                        + len(matched_x)
+                )
+                verify_stats["per_seller_added"][X] = (
+                        verify_stats["per_seller_added"].get(X, 0)
+                        + len(matched_x)
+                )
+                file_matched_total += len(matched_x)
+                for k in sorted(matched_x):
+                    logger.report(
+                        f"КИЗ {k}: удалён из {A} → {B}, "
+                        f"добавлен в {A} → {X} (ИТОГ у {X})"
+                    )
+
+            logger.report(
+                f"Файл {file_path.name}: КИЗов {len(sales_data)}, "
+                f"найдено в ИТОГах {file_matched_total}"
+            )
+
+        # ---- Применение: сначала переоформления ----
+        sales_gen = SalesFileGenerator(sales_folder, logger=logger)
+        for item in to_reregister:
+            to_seller = item["to_seller"]
+            if to_seller is None:
+                continue
+            try:
+                sales_gen.add_sale_row(
+                    from_seller_name=item["from_seller"],
+                    to_seller_name=to_seller.name,
+                    to_seller_inn=to_seller.inn,
+                    product_name=item["product_name"],
+                    raw_kiz=item["kiz"],
+                )
+            except Exception as e:
+                logger.critical(
+                    f"Ошибка добавления КИЗ {item['kiz']} в "
+                    f"{item['from_seller']} → {to_seller.name}: {e}",
+                    can_influence=False,
+                )
+
+        # ---- Удаления ----
+        for file_path, kiz_set in to_remove.items():
+            for kiz in kiz_set:
+                try:
+                    ok = SalesFileRowsReader.remove_kiz(
+                        file_path, kiz, logger,
+                    )
+                except Exception as e:
+                    logger.critical(
+                        f"Ошибка удаления КИЗ {kiz} из "
+                        f"{file_path.name}: {e}",
+                        can_influence=False,
+                    )
+                    continue
+                if not ok:
+                    logger.warning(
+                        f"КИЗ {kiz}: удаление из {file_path.name} "
+                        f"не удалось (файл не открылся)"
+                    )
+
+        # ---- Опустевшие файлы ----
+        for file_path in to_remove:
+            if not file_path.exists():
+                continue
+            if ExcelHelper.is_file_empty(file_path):
+                try:
+                    file_path.unlink()
+                    verify_stats["empty_files_removed"] += 1
+                except Exception as e:
+                    logger.critical(
+                        f"Ошибка удаления пустого файла "
+                        f"{file_path.name}: {e}",
+                        can_influence=False,
+                    )
+
+        sales_gen.remove_empty_files()
+
+        verify_stats["itogs_found"] = sum(
+            1 for v in itog_cache.values() if v is not None
+        )
+
+        logger.debug(
+            f"_verify_against_itogs: to_remove файлов="
+            f"{len(to_remove)}, to_reregister="
+            f"{len(to_reregister)}, itog_cache={len(itog_cache)}"
+        )
+        logger.status("Проверка завершена")
+        logger.debug(
+            f"_verify_against_itogs: выход, itogs_found="
+            f"{verify_stats['itogs_found']}, "
+            f"sales_checked={verify_stats['sales_checked']}, "
+            f"kiz_checked={verify_stats['kiz_checked']}, "
+            f"kiz_removed={verify_stats['kiz_removed']}, "
+            f"kiz_reregistered={verify_stats['kiz_reregistered']}, "
+            f"empty_files_removed={verify_stats['empty_files_removed']}"
+        )
+
+        return verify_stats
+
+    def _load_itog_set(self, chz_folder, seller_name, date_str,
+                       cache, logger) -> set | None:
+        """Ленивая загрузка КИЗов из ИТОГ-файла продавца.
+
+        Вход:
+            chz_folder — Path к папке ЧЗ_МП_{date}.
+            seller_name — имя продавца.
+            date_str — строка даты для FilenameUtils.
+            cache — dict, кэш {seller_name: set | None}. Мутируется
+                    in-place. None означает «файла нет / не
+                    открылся» — при повторных вызовах не будет
+                    попыток открыть снова.
+            logger — LoggerV2.
+
+        Выход:
+            set[str] — storage-КИЗы из ИТОГ-файла. None — файла нет
+            или не открылся.
+
+        Роль:
+            Единая точка загрузки ИТОГ-файла. Ленивая: при первом
+            вызове читает и кэширует (в т.ч. None); при повторных —
+            из кэша. КИЗы читаются через PreFinalRow.from_row —
+            требует заполненные столбцы kiz и owner_company;
+            строки без owner пропускаются.
+        """
+        if seller_name in cache:
+            return cache[seller_name]
+
+        itog_name = FilenameUtils.format_with_extension(
+            f"ИТОГ {seller_name} {{date}}", date_str,
+        )
+        itog_path = chz_folder / itog_name
+
+        if not itog_path.is_file():
+            logger.report(f"ИТОГ {seller_name}: файл не найден")
+            cache[seller_name] = None
+            return None
+
+        wb = WorkbookOpener.open(
+            itog_path, logger=logger, read_only=True,
+            description=f"ИТОГ {seller_name}",
+        )
+        if wb is None:
+            logger.report(f"ИТОГ {seller_name}: файл не открылся")
+            cache[seller_name] = None
+            return None
+
+        kiz_set: set = set()
+        try:
+            sheet = wb.active
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                parsed = PreFinalRow.from_row(row)
+                if parsed is None:
+                    continue
+                storage_list = KizUtils.clean_kiz_for_storage(
+                    parsed.kiz, logger=None,
+                )
+                if storage_list:
+                    kiz_set.add(storage_list[0])
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+        logger.report(
+            f"ИТОГ {seller_name}: загружено {len(kiz_set)} КИЗов"
+        )
+        cache[seller_name] = kiz_set
+        return kiz_set

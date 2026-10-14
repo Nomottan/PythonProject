@@ -472,8 +472,9 @@ class BaseServiceWindow(QMainWindow):
 
         Роль: единая обвязка для всех трёх окон. Проверяет
               target_dir, создаёт SalesAccumulatorService с
-              log_manager_v2 и запускает accumulate без
-              first_folder.
+              log_manager_v2 и запускает accumulate с target_dir
+              и текущими sellers. sellers нужны для этапа сверки
+              аккумулированных продаж с ИТОГ-файлами ЧЗ_МП.
         """
         if not self.target_dir:
             self.set_status("Сначала выберите целевую папку")
@@ -506,7 +507,7 @@ class BaseServiceWindow(QMainWindow):
 
         ThreadFactory.run_in_thread(
             target_func=service.accumulate,
-            args=(self.target_dir,),
+            args=(self.target_dir, self._current_sellers()),
             on_finished=on_finished,
             error_callback=on_error,
         )

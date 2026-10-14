@@ -143,6 +143,42 @@ class TextUtils:
         return None
 
     @staticmethod
+    def parse_sales_filename(filename: str, sellers) -> tuple | None:
+        """Разбирает имя файла продаж в пару продавцов.
+
+        Вход:
+            filename — полное имя файла в формате
+                       "{from} - {to} _ {inn}.xlsx".
+            sellers — список Seller.
+
+        Выход:
+            (from_seller, to_seller) — кортеж из двух объектов
+            Seller, если имя распознано. None — если ни одна
+            пара не подошла.
+
+        Роль:
+            Обратный разбор к тому, что делает SalesFileGenerator
+            при формировании имени. Формат:
+                {sanitize(name_a)} - {sanitize(name_b)} _ {inn_b}.xlsx.
+            Перебор пар — надёжнее regex: sanitize_filename
+            разрешает пробелы, дефисы и подчёркивания, поэтому
+            regex-разделители неоднозначны. N ≤ ~20, файлов
+            ≤ ~50 — перебор незаметен.
+        """
+        for a in sellers:
+            for b in sellers:
+                if a is b:
+                    continue
+                expected = (
+                    f"{TextUtils.sanitize_filename(a.name)} - "
+                    f"{TextUtils.sanitize_filename(b.name)} _ "
+                    f"{b.inn}.xlsx"
+                )
+                if filename == expected:
+                    return (a, b)
+        return None
+
+    @staticmethod
     def clean_invalid_excel_chars(text: str) -> str:
         """
         Удаляет из строки символы, которые openpyxl не может записать в Excel.
