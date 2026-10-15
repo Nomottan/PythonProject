@@ -23,7 +23,7 @@ from PySide6.QtCore import Qt, QTimer
 
 from ui.factories.factories import (
     WindowFactory, ButtonFactory, LabelFactory, ListWidgetFactory,
-    BaseWidgetFactory,
+    BaseWidgetFactory, FilterFactory,
 )
 from models.planner_task import TaskPriority
 
@@ -143,7 +143,18 @@ class _BasePlannerListWindow(QMainWindow):
 
         # Сохраняем главный layout — наследники добавят свои кнопки.
         self._main_layout = main_layout
-
+        self.filter_panel = None
+        self._empty_label = None
+        field_defs = self._get_filter_field_defs()
+        if field_defs:
+            self.filter_panel = FilterFactory.create_filter_panel(
+                self,
+                field_defs=field_defs,
+                get_source=lambda: self._get_tasks(),
+                bg_color=self.bg_color,
+            )
+            self._main_layout.insertWidget(1, self.filter_panel)
+            self.filter_panel.filtered_changed.connect(self._reload_tasks)
         # Таймер автообновления — общий для всех наследников.
         self._timer = QTimer(self)
         self._timer.setInterval(self.RELOAD_INTERVAL_MS)
@@ -182,16 +193,60 @@ class _BasePlannerListWindow(QMainWindow):
         """Возвращает список задач для отрисовки. Наследник реализует."""
         raise NotImplementedError
 
+    def _get_filter_field_defs(self) -> list:
+        """Возвращает список FieldDef для панели фильтров.
+
+        Наследники переопределяют. По умолчанию пусто — панель
+        не создаётся, поведение окна не меняется.
+        """
+        return []
+
     # ---------- Отрисовка ----------
 
-    def _reload_tasks(self):
-        """Очищает строки (кроме растяжки) и перерисовывает задачи."""
+    def _reload_tasks(self, filtered=None):
+        """Перерисовывает список задач.
+
+        Вход:
+            filtered — list | None. Если передан (сигнал
+                filtered_changed) — используется напрямую.
+                Если None — источник берётся из self.filter_panel
+                (если есть) или через self._get_tasks().
+
+        Роль: единая точка перерисовки для таймера, явных вызовов
+              и сигнала панели фильтров. При пустом результате
+              показывает лейбл вместо строк.
+        """
+        # Очистка строк (кроме растяжки).
         while self.tasks_layout.count() > 1:
             item = self.tasks_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        for task in self._get_tasks():
+        # Ссылка на прошлый лейбл сброшена — виджет уже удалён выше.
+        self._empty_label = None
+
+        # Источник: аргумент → панель → наследник.
+        if filtered is not None:
+            source = filtered
+        elif self.filter_panel is not None:
+            source = self.filter_panel.get_filtered()
+        else:
+            source = self._get_tasks()
+
+        if not source:
+            self._empty_label = LabelFactory.create_label(
+                self,
+                text="Нет задач, удовлетворяющих фильтру",
+                bg_color=(0, 0, 0, 0),
+                alignment=Qt.AlignCenter,
+                word_wrap=True,
+            )
+            self.tasks_layout.insertWidget(
+                self.tasks_layout.count() - 1, self._empty_label,
+            )
+            return
+
+        for task in source:
             self._add_task_row(task)
 
     def _add_task_row(self, task):

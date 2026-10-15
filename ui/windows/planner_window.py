@@ -14,6 +14,7 @@ from ui.factories.factories import WindowFactory, ButtonFactory
 from ui.windows.planner_task_dialogs import NewTaskDialog
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from ui.base.planner_base_window import _BasePlannerListWindow
+from utils.filter_utils import FieldDef
 
 class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
@@ -84,6 +85,25 @@ class PlannerWindow(_BasePlannerListWindow):
         списке их не должно быть.
         """
         return [t for t in self.service.get_tasks() if not t.is_recurring_instance()]
+
+    def _get_filter_field_defs(self):
+        """Категории фильтра для PlannerWindow.
+
+        Тип задачи и дата создания. Экземпляры регулярных задач уже
+        отброшены в _get_tasks, в фильтр они не попадают.
+        """
+        return [
+            FieldDef(
+                name="priority",
+                label="Тип задачи",
+                extractor=lambda t: t.priority.display_name,
+            ),
+            FieldDef(
+                name="created_date",
+                label="Дата создания",
+                extractor=lambda t: t.created_date or "Не указана",
+            ),
+        ]
 
     # ---------- Билдер actions ----------
 

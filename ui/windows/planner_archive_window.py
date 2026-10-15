@@ -13,6 +13,7 @@ from models.planner_task import PlannerTask, TaskStatus, TaskPriority
 from ui.windows.planner_task_dialogs import (
     DeadlineEditDialog, PlannerRecurrenceEditDialog,
 )
+from utils.filter_utils import FieldDef
 
 class PlannerArchiveWindow(_BasePlannerListWindow):
     """Окно архива задач планировщика.
@@ -71,6 +72,41 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
 
     def _get_tasks(self):
         return self.service.get_archive_tasks()
+
+    def _get_filter_field_defs(self) -> list:
+        """Возвращает список FieldDef для панели фильтров архива.
+
+        Четыре категории — «Тип задачи», «Дата создания»,
+        «Тип завершения», «Дата завершения». values_provider=None
+        у всех — панель соберёт значения из источника через extractor.
+        Порядок категорий в UI — порядок элементов списка.
+
+        Значения из completed_date/created_date при отсутствии
+        заменяются на «Не указана», чтобы категория не показывала
+        пустой чекбокс.
+        """
+        return [
+            FieldDef(
+                name="priority",
+                label="Тип задачи",
+                extractor=lambda t: t.priority.display_name,
+            ),
+            FieldDef(
+                name="created_date",
+                label="Дата создания",
+                extractor=lambda t: t.created_date or "Не указана",
+            ),
+            FieldDef(
+                name="status",
+                label="Тип завершения",
+                extractor=lambda t: t.status.display_name,
+            ),
+            FieldDef(
+                name="completed_date",
+                label="Дата завершения",
+                extractor=lambda t: t.completed_date or "Не указана",
+            ),
+        ]
 
     # ---------- Билдер actions ----------
 

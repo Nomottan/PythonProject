@@ -415,7 +415,7 @@ class FilterPanel(QWidget):
         self._selected: dict = {fd.name: set() for fd in field_defs}
         self._is_open: bool = False
         self._categories: dict = {}
-
+        self._scroll = None
         self._build_ui()
 
     # ---------- Сборка ----------
@@ -449,52 +449,98 @@ class FilterPanel(QWidget):
             return top
         return self
 
-    def _position_overlay(self) -> None:
-        """Позиционирует overlay справа от кнопки, зажимая в родителя.
+    def _on_horizontal_scroll(self, value: int = 0) -> None:
+        """Реакция на прокрутку ряда категорий.
+
+        Вход: value — новая позиция скроллбара (не используется).
 
         Роль:
-            Считает желаемую позицию через глобальные координаты
-            кнопки «Фильтры», затем зажимает x/y в границы
-            родителя, чтобы overlay не выходил за его пределы.
-            Если overlay шире родителя — ширина сужается до
-            ширины родителя.
+            Категории, целиком попадающие в viewport, едут за
+            списком — их раскрытый _body пересчитывает позицию.
+            Категории, касающиеся или пересекающие левый/правый
+            край viewport, сворачивают свой _body — иначе overlay
+            «прилипал» бы к краю и не читался.
+            Автоматическое восстановление раскрытия после
+            возврата категории в viewport НЕ делаем.
         """
-        row = self._categories_row
-        parent = row.parent()
+        viewport = self._scroll.viewport()
+        vw = viewport.width()
+        for category in self._categories.values():
+            pos = category.mapTo(viewport, QPoint(0, 0))
+            if pos.x() < 0 or pos.x() + category.width() > vw:
+                category.collapse_body()
+            else:
+                category.reposition_body_if_open()
+
+    def _position_overlay(self) -> None:
+        """Позиционирует _scroll справа от кнопки, зажимая в родителя.
+
+        Роль:
+            Ширина области — от правого края кнопки «Фильтры» +5
+            до правого края родителя −10. Если natural-ширина ряда
+            меньше — область сужается под содержимое. При
+            переполнении (content шире области) появляется
+            горизонтальный скроллбар, высота области увеличивается
+            на его высоту. Позиция: под кнопкой, выровнена по её
+            правому краю; зажимается в границы родителя.
+        """
+        parent = self._scroll.parent()
         if parent is None:
             return
-
         pw = parent.width()
         ph = parent.height()
         if pw <= 0 or ph <= 0:
             return
 
-        row.adjustSize()
+        # Natural размеры контента.
+        self._categories_row.adjustSize()
+        content_w = self._categories_row.width()
+        content_h = self._categories_row.height()
 
-
-        # Желаемая позиция: справа от кнопки, на уровне верхнего края.
-        btn_pos = self._master_btn.mapToGlobal(
-            QPoint(self._master_btn.width() + 6, 0)
+        # Доступная горизонталь: от правого края кнопки +5
+        # до правого края родителя −10.
+        btn_right_global = self._master_btn.mapToGlobal(
+            QPoint(self._master_btn.width(), 0)
         )
+        btn_right_in_parent = parent.mapFromGlobal(btn_right_global)
+        available_left = btn_right_in_parent.x() + 5
+        available_right = pw - 10
+        available_width = max(0, available_right - available_left)
+
+        final_w = min(content_w, available_width)
+        will_scroll = content_w > final_w
+
+        hbar_h = 0
+        if will_scroll:
+            hbar_h = (
+                self._scroll.horizontalScrollBar().sizeHint().height()
+            )
+        final_h = content_h + hbar_h
+
+        self._scroll.resize(final_w, final_h)
+
+        # Желаемая позиция — по верхнему левому углу кнопки.
+        btn_pos = self._master_btn.mapToGlobal(QPoint(0, 0))
         desired = parent.mapFromGlobal(btn_pos)
 
-        # Clamp: overlay целиком помещается в parent.
-        max_x = max(0, pw - row.width())
-        max_y = max(0, ph - row.height())
-        x = max(0, min(desired.x(), max_x))
+        max_x = max(0, pw - final_w)
+        max_y = max(0, ph - final_h)
+        x = max(0, min(available_left, max_x))
         y = max(0, min(desired.y(), max_y))
-        row.move(x, y)
+        self._scroll.move(x, y)
+
+        # Раскрытые _body едут за своими категориями.
         for category in self._categories.values():
             category.reposition_body_if_open()
 
     def _build_ui(self) -> None:
-        """Строит мастер-кнопку. Ряд категорий — overlay поверх окна.
+        """Строит мастер-кнопку и скроллируемый ряд категорий.
 
-        Роль: кнопка «Фильтры» лежит в layout панели. Ряд категорий
-              в layout не входит — это отдельный QWidget с parent =
-              центральный виджет окна. Позиционируется вручную
-              через move() при раскрытии. Так он не сдвигает
-              соседние элементы и рисуется поверх них.
+        Роль: кнопка «Фильтры» лежит в layout панели. Ряд
+              категорий обёрнут в QScrollArea — при переполнении
+              появляется горизонтальный скроллбар. Фон ряда —
+              на самой _scroll и её viewport; сам _categories_row
+              прозрачен. Позиционируется вручную через move().
         """
         from ui.factories.filter_factory import FilterFactory
 
@@ -529,18 +575,15 @@ class FilterPanel(QWidget):
             alpha=None,
         )
 
-        # Overlay-контейнер: parent — центральный виджет окна,
-        # не FilterPanel. Это исключает его из layout панели.
+        # Overlay-контейнер: parent — центральный виджет окна.
         parent_widget = self._resolve_overlay_parent()
 
-        self._categories_row = QWidget(parent_widget)
+        # Ряд категорий создаётся без родителя — его присвоит
+        # QScrollArea.setWidget (передаст владение).
+        self._categories_row = QWidget()
         self._categories_row.setObjectName("filter_categories_row")
-        # QSS с селектором по objectName — фон применяется только
-        # к самому контейнеру, не к дочерним виджетам.
         self._categories_row.setStyleSheet(
-            f"QWidget#filter_categories_row {{ "
-            f"background: {ColorCalculator.to_str(panel_bg)}; "
-            f"border-radius: 6px; }}"
+            "QWidget#filter_categories_row { background: transparent; }"
         )
 
         row_layout = QHBoxLayout(self._categories_row)
@@ -551,9 +594,26 @@ class FilterPanel(QWidget):
             c.set_overlay_parent(parent_widget)
             row_layout.addWidget(c)
 
-        # Фиксированная ширина — 2× ширина кнопки «Фильтры».
-        self._categories_row.adjustSize()
-        self._categories_row.setVisible(False)
+        # QScrollArea — обёртка ряда. Горизонтальный скроллбар
+        # появляется при переполнении, вертикальный отключён.
+        self._scroll = ListWidgetFactory.create_scroll_area(
+            parent_widget,
+            widget=self._categories_row,
+            bg_color=panel_bg,
+            border="none",
+            border_radius=6,
+            widget_resizable=False,
+            object_name="filter_categories_scroll",
+            rounded=False,
+        )
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._scroll.setVisible(False)
+        # Скролл → слот. valueChanged(int) — принимаем с дефолтом.
+        self._scroll.horizontalScrollBar().valueChanged.connect(
+            self._on_horizontal_scroll
+        )
 
     # ---------- Публичный API ----------
 
@@ -600,7 +660,7 @@ class FilterPanel(QWidget):
         self._is_open = False
         for category in self._categories.values():
             category.collapse_body()
-        self._categories_row.setVisible(False)
+        self._scroll.setVisible(False)
         self._update_master_text()
         app = QApplication.instance()
         if app is not None:
@@ -619,12 +679,12 @@ class FilterPanel(QWidget):
             return
         self._is_open = True
         self.refresh()
-        # REPLACE: сначала показать — Qt активирует layout, выставит
+        # Сначала показать — Qt активирует layout, выставит
         # реальные sizeHint. Без этого row.height() == 0 и move()
         # позиционирует виджет нулевой высоты.
-        self._categories_row.show()
+        self._scroll.show()
         self._position_overlay()
-        self._categories_row.raise_()
+        self._scroll.raise_()
 
         app = QApplication.instance()
         if app is not None:
@@ -669,7 +729,7 @@ class FilterPanel(QWidget):
         # Событие — ресайз родителя: пересчитываем позицию overlay.
         if (self._is_open
                 and event.type() == QEvent.Resize
-                and obj is self._categories_row.parent()):
+                and obj is self._scroll.parent()):
             self._position_overlay()
 
         if event.type() == QEvent.MouseButtonPress and self._is_open:
@@ -677,9 +737,9 @@ class FilterPanel(QWidget):
             # Клик внутри самой панели (по кнопке «Фильтры») — ок.
             if self.rect().contains(self.mapFromGlobal(pos)):
                 return super().eventFilter(obj, event)
-            # Клик внутри overlay-ряда — ок.
-            row = self._categories_row
-            if row.rect().contains(row.mapFromGlobal(pos)):
+            # Клик внутри _scroll (включая скроллбар) — ок.
+            if self._scroll.rect().contains(
+                    self._scroll.mapFromGlobal(pos)):
                 return super().eventFilter(obj, event)
             # Клик внутри раскрытого overlay-списка любой
             # категории — тоже ок.

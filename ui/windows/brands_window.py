@@ -227,8 +227,7 @@ class BrandsWindow(QMainWindow):
               открывает BrandEditDialog. После его закрытия —
               перерисовывает сетку.
         """
-        if self.filter_panel.is_open():
-            self.filter_panel.collapse()
+
         brand.sellers.clear()
         brands_dict = {b.name: b for b in self.brands}
         sellers = self.main_window.sellers_brands_service.get_sellers_objects(
@@ -254,8 +253,7 @@ class BrandsWindow(QMainWindow):
         Роль: добавляет Brand("Новый бренд") в self.brands, открывает
               BrandEditDialog для заполнения.
         """
-        if self.filter_panel.is_open():
-            self.filter_panel.collapse()
+
         new_brand = Brand("Новый бренд")
         self.brands.append(new_brand)
         self._refresh_grid()
