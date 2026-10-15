@@ -101,12 +101,14 @@ class QssBuilder:
             f"{{ background-color: {ColorCalculator.to_str(color)}; }}"
         )
 
-    @staticmethod
+    staticmethod
+
     def indicator_rule(selector: str, size: tuple,
                        border_width: int, border_style: str,
                        border_color: str, border_radius: int,
                        state_colors: dict,
-                       hover_selector: str = None) -> str:
+                       hover_selector: str = None,
+                       *, icon_paths: dict | None = None) -> str:
         """Собирает QSS для ::indicator во всех состояниях.
 
         Вход:
@@ -124,13 +126,23 @@ class QssBuilder:
                 disabled_bg.
                 Отсутствие ключа → блок для этого состояния
                 не добавляется.
-            hover_selector — селектор для hover-псевдокласса.
+             hover_selector — селектор для hover-псевдокласса.
                              None → f"{selector}:hover".
+            icon_paths — dict {"unchecked": str, "indeterminate": str,
+                               "checked": str} — абсолютные пути к SVG.
+                               Любой ключ опционален. Если задан —
+                               для каждого ключа добавляется правило
+                               image: url('{path}') для соответствующего
+                               псевдокласса. image рисуется поверх
+                               background-color из state_colors.
+                               None → поведение не меняется.
 
         Выход:
             QSS-строка. Порядок блоков строго:
                 ::indicator → :checked → :hover → :hover:checked
                 → :pressed → :checked:pressed → :disabled.
+            Если icon_paths задан — блоки image: url(...) добавляются
+            после соответствующего цветового правила.
 
         Роль:
             Расширена с 2 состояний (базовый + checked) до 7.
@@ -153,6 +165,8 @@ class QssBuilder:
         if unchecked_bg is not None:
             style += (
                 f"{base} {{"
+                f" subcontrol-origin: padding;"
+                f" subcontrol-position: center left;"
                 f" width: {size[0]}px;"
                 f" height: {size[1]}px;"
                 f" background-color: {ColorCalculator.to_str(unchecked_bg)};"
@@ -202,6 +216,18 @@ class QssBuilder:
                 f" {base}:disabled "
                 f"{{ background-color: {ColorCalculator.to_str(disabled_bg)}; }}"
             )
+
+        # Иконки для состояний — рисуются поверх background-color.
+        # Пути уже готовые строки, ничего не строим.
+        if icon_paths is not None:
+            for state in ("unchecked", "indeterminate", "checked"):
+                path = icon_paths.get(state)
+                if not path:
+                    continue
+                style += (
+                    f" {base}:{state} "
+                    f"{{ image: url('{path}'); }}"
+                )
 
         return style
 

@@ -253,15 +253,15 @@ class WidgetStyle:
             style += extra_style
         edit.setStyleSheet(style)
 
-    @staticmethod
     def apply_checkbox(cb, bg_color, text_color=None, border="none",
                        border_radius=0, padding="0px", font_size=None,
                        font_weight=None,
                        indicator_size=(16, 16),
-                       indicator_border_radius=3,
+                       indicator_border_radius=5,
                        indicator_border_width=1,
                        indicator_border_style="solid",
-                       extra_style="") -> None:
+                       extra_style="",
+                       *, icon_paths: dict | None = None) -> None:
         """QSS для QCheckBox.
 
         Вход:
@@ -275,6 +275,12 @@ class WidgetStyle:
             indicator_border_width — толщина рамки индикатора в px.
             indicator_border_style — стиль рамки ("solid").
             extra_style — дополнительный CSS.
+            icon_paths — keyword-only. dict {"unchecked": str,
+                          "indeterminate": str, "checked": str} —
+                          абсолютные пути к SVG для состояний
+                          индикатора. Любой ключ опционален. None →
+                          индикатор рисуется только цветом.
+                          Пробрасывается в QssBuilder.indicator_rule.
 
         Выход: нет.
 
@@ -289,6 +295,7 @@ class WidgetStyle:
             (alpha == 0) — fallback (100, 100, 100). Fallback
             живёт только здесь.
         """
+
         # Шаг 1. Эффективный фон.
         effective_bg = BackgroundResolver.resolve_bg_color(cb, bg_color)
 
@@ -304,7 +311,6 @@ class WidgetStyle:
         unchecked_bg = ColorCalculator.indicator_unchecked(effective_bg)
         checked_bg = ColorCalculator.indicator_checked(effective_bg)
         border_c = ColorCalculator.indicator_border(effective_bg)
-
         # Страховка: если _adjust вернул None (невалидный вход,
         # но fallback уже отработал) — те же (100, 100, 100).
         if unchecked_bg is None:
@@ -334,18 +340,14 @@ class WidgetStyle:
         # background-color в QSS. Иначе Qt рисует у QCheckBox свою
         # серую подложку (текстовое поле), и оно торчит поверх фона
         # родителя. Без свойства виджет наследует фон — ничего лишнего.
-        base_bg = bg_color
-        if (isinstance(bg_color, (tuple, list))
-                and len(bg_color) >= 4
-                and float(bg_color[3]) == 0.0):
-            base_bg = None
 
+        base_bg = None
         style = QssBuilder.base_rule(
             selector,
             bg_color=base_bg,
             text_color=text_c,
             border=border,
-            border_radius=border_radius,
+            border_radius=6,
             padding=padding,
             font_size=font_size,
             font_weight=font_weight,
@@ -367,10 +369,12 @@ class WidgetStyle:
                 "disabled_bg": disabled_bg,
             },
             hover_selector=f"{selector}:hover",
+            icon_paths=icon_paths,
         )
 
         if extra_style:
             style += extra_style
+
         cb.setStyleSheet(style)
 
     @staticmethod

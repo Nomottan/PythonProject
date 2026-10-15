@@ -71,14 +71,16 @@ class ButtonFactory:
     """
 
     @staticmethod
-    def create_button(parent, text, bg_color, text_color=None,
+    def create_button(parent, text, bg_color=None, text_color=None,
                       padding="8px 16px", fixed_size=None, alignment=None,
                       object_name=None, cursor_shape=None, border_radius=5,
                       border="none", font_size=None, font_family=None,
                       font_weight=None, extra_style="", checkable=False,
                       checked=False, tooltip=None, min_size=None,
                       max_size=None, hover_color=None, pressed_color=None,
-                      disabled_color=None, bg_modifier=None):
+                      disabled_color=None, bg_modifier=None,
+                      *, icon_path: str | None = None,
+                      icon_size: tuple | None = None):
         """Создаёт стилизованную QPushButton.
 
         Вход:
@@ -101,10 +103,24 @@ class ButtonFactory:
             min_size, max_size — ограничения размеров.
             hover_color, pressed_color, disabled_color — цвета
                 состояний. None → вычисляются автоматически.
+            bg_modifier — опциональный (dr, dg, db) — прибавка
+                к каналам bg_color. Применяется после резолва.
+                alpha сохраняется из bg_color.
+            icon_path — keyword-only. Путь к SVG или растровому
+                изображению. None → иконка не ставится.
+            icon_size — keyword-only. (w, h) или None.
+                None → Qt-дефолт для иконки.
 
         Выход: QPushButton с QSS.
         """
         btn = QPushButton(text, parent)
+        # Иконка — локальные импорты, чтобы не трогать шапку.
+        if icon_path:
+            from PySide6.QtGui import QIcon
+            from PySide6.QtCore import QSize
+            btn.setIcon(QIcon(icon_path))
+            if icon_size:
+                btn.setIconSize(QSize(*icon_size))
         if object_name:
             btn.setObjectName(object_name)
         if cursor_shape:

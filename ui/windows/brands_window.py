@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt
 from ui.styles import ColorCalculator, WindowStyle
 from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
-    InputWidgetFactory,
+    InputWidgetFactory, FilterFactory,
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
@@ -27,7 +27,7 @@ from ui.windows.message_dialog import NotificationDialog, MessageDialog
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.base.base_checklist_dialog import ChecklistDialog
 from models.models import Seller, Brand
-
+from utils.filter_utils import FieldDef
 
 class BrandsWindow(QMainWindow):
     """Окно с сеткой брендов.
@@ -78,6 +78,7 @@ class BrandsWindow(QMainWindow):
         brands_dict = {b.name: b for b in self.brands}
         _ = parent.sellers_brands_service.get_sellers_objects(brands_dict=brands_dict)
         self.service_window = self
+
         # --- Каркас окна ---
         content_layout = ExtendedWindowFactory.setup_window(
             window=self,
@@ -95,6 +96,38 @@ class BrandsWindow(QMainWindow):
         )
 
         content_layout.addWidget(LabelFactory.create_header_label(self, "Бренды"))
+
+        # Панель фильтров: категории «Продавец» и «Требует сохранения».
+        # get_source — лямбда, чтобы панель каждый раз читала
+        # актуальный self.brands (а не копию).
+        field_defs = [
+            FieldDef(
+                name="seller",
+                label="Продавец",
+                extractor=lambda b: b.get_sellers_names(),
+                values_provider=lambda brands: [
+                    s.name for s in parent.sellers_brands_service
+                    .get_unique_sellers_from_brands(brands)
+                ],
+            ),
+            FieldDef(
+                name="requires_saving",
+                label="Требует сохранения",
+                extractor=lambda b: "Да" if b.requires_saving else "Нет",
+            ),
+        ]
+
+        self.filter_panel = FilterFactory.create_filter_panel(
+            self,
+            field_defs=field_defs,
+            get_source=lambda: self.brands,
+            bg_color=self.bg_color,
+        )
+        content_layout.addWidget(self.filter_panel)
+        self.filter_panel.filtered_changed.connect(
+            self._on_filter_changed
+        )
+        self._empty_label = None
 
         # --- Сетка брендов ---
         self.brands_widget = QWidget()
@@ -115,27 +148,64 @@ class BrandsWindow(QMainWindow):
         LayoutFactory.add_centered_widget(content_layout, add_btn)
 
     # ---------- Отрисовка ----------
+    def _on_filter_changed(self, filtered) -> None:
+        """Реакция на изменение выбора в панели фильтров.
 
-    def _refresh_grid(self) -> None:
-        """Перерисовывает сетку брендов.
-
-        Роль: очищает grid_layout и заново раскладывает кнопки,
-              отсортированные по имени. Вызывается при старте и после
-              закрытия BrandEditDialog — чтобы отразить переименования.
+        Вход: filtered — list[Brand] (уже отфильтрованный).
+        Роль: перерисовывает сетку, используя переданный список.
+              Не перечитывает панель — так исключаем рассинхрон,
+              если панель ещё не успела обновить своё состояние.
         """
+        self._refresh_grid(filtered=filtered)
+
+    def _refresh_grid(self, filtered=None) -> None:
+        """Перерисовывает сетку брендов с учётом фильтра.
+
+        Вход:
+            filtered — list[Brand] | None. Если передан — используется
+                напрямую (например, из сигнала filtered_changed).
+                Если None — запрашивается через
+                self.filter_panel.get_filtered().
+
+        Роль: список берётся либо из аргумента, либо из панели.
+              Если пусто — показывается лейбл вместо сетки.
+        """
+        # Очистка сетки.
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        # Очистка лейбла «нет брендов», если он был.
+        if getattr(self, "_empty_label", None) is not None:
+            self._empty_label.deleteLater()
+            self._empty_label = None
+
+        # Получаем список: из аргумента или через панель.
+        if filtered is not None:
+            brands_to_show = filtered
+        else:
+            brands_to_show = self.filter_panel.get_filtered()
+
+        if not brands_to_show:
+            self._empty_label = LabelFactory.create_label(
+                self,
+                "Нет брендов, удовлетворяющих фильтру",
+                bg_color=(0, 0, 0, 0),
+                alignment=Qt.AlignCenter,
+                word_wrap=True,
+            )
+            # Кладём лейбл в grid_layout — занимает одну ячейку.
+            self.grid_layout.addWidget(self._empty_label, 0, 0)
+            return
+
         columns = 4
-        sorted_brands = sorted(self.brands, key=lambda b: b.name.lower())
+        sorted_brands = sorted(brands_to_show, key=lambda b: b.name.lower())
 
         for i, brand in enumerate(sorted_brands):
             container = QWidget()
             container_layout = QHBoxLayout(container)
             container_layout.setContentsMargins(0, 0, 0, 0)
-
             btn = ButtonFactory.create_button(
                 self, brand.name, (30, 50, 80, 0.8),
                 fixed_size=(130, 30),
@@ -145,7 +215,6 @@ class BrandsWindow(QMainWindow):
                 lambda checked, b=brand: self._on_brand_click(b)
             )
             container_layout.addWidget(btn)
-
             self.grid_layout.addWidget(container, i // columns, i % columns)
 
     # ---------- Обработчики ----------
@@ -158,6 +227,8 @@ class BrandsWindow(QMainWindow):
               открывает BrandEditDialog. После его закрытия —
               перерисовывает сетку.
         """
+        if self.filter_panel.is_open():
+            self.filter_panel.collapse()
         brand.sellers.clear()
         brands_dict = {b.name: b for b in self.brands}
         sellers = self.main_window.sellers_brands_service.get_sellers_objects(
@@ -183,6 +254,8 @@ class BrandsWindow(QMainWindow):
         Роль: добавляет Brand("Новый бренд") в self.brands, открывает
               BrandEditDialog для заполнения.
         """
+        if self.filter_panel.is_open():
+            self.filter_panel.collapse()
         new_brand = Brand("Новый бренд")
         self.brands.append(new_brand)
         self._refresh_grid()

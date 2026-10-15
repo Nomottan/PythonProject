@@ -318,3 +318,26 @@ class SellersBrandsService:
               словаря в вызывающем коде.
         """
         return {b.name: b for b in self.get_brands_objects()}
+
+    def get_unique_sellers_from_brands(self, brands: list) -> list:
+        """Возвращает уникальных продавцов, привязанных к брендам.
+
+        Вход:
+            brands — list[Brand].
+
+        Выход:
+            list[Seller] — продавцы, привязанные хотя бы к одному
+            из переданных брендов. Дедуп по seller.name.
+            Сортировка по seller.name.lower().
+
+        Роль:
+            Не читает config — работает на переданном списке
+            брендов. Нужен UI-фильтру для сбора возможных значений
+            категории «Продавец».
+        """
+        unique: dict = {}
+        for brand in brands:
+            for seller in brand.sellers:
+                if seller.name not in unique:
+                    unique[seller.name] = seller
+        return sorted(unique.values(), key=lambda s: s.name.lower())

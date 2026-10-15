@@ -93,7 +93,8 @@ class LabelFactory:
                      font_family=None, font_size=None, object_name=None,
                      cursor_shape=None, border="none", font_weight=None,
                      extra_style="", word_wrap=False, tooltip=None,
-                     min_size=None, max_size=None):
+                     min_size=None, max_size=None,
+                     *, clickable: bool = False, on_click=None):
         """Универсальное создание стилизованной метки.
 
         Вход:
@@ -113,13 +114,31 @@ class LabelFactory:
             word_wrap — переносить ли текст.
             tooltip — подсказка.
             min_size, max_size — ограничения размеров.
+            clickable — keyword-only. True → курсор PointingHandCursor
+                        + mousePressEvent на экземпляре.
+            on_click — keyword-only. Callable без аргументов; вызывается
+                        по левой кнопке, если clickable=True.
 
         Выход: QLabel с QSS.
-
-        REPLACE: QSS собирается через WidgetStyle.apply_label.
         """
         lbl = QLabel(text, parent)
+        # Кликабельный лейбл: курсор + mousePressEvent на экземпляре.
+        # Назначаем на экземпляр, а не на класс — стандартный паттерн
+        # Qt для локального поведения.
+        if clickable:
+            from PySide6.QtCore import Qt as _Qt
+            lbl.setCursor(_Qt.PointingHandCursor)
+            if on_click is not None:
+                _handler = on_click
 
+                def _mouse_press(event, _lbl=lbl, _h=_handler):
+                    if event.button() == _Qt.LeftButton:
+                        _h()
+                        event.accept()
+                        return
+                    super(QLabel, _lbl).mousePressEvent(event)
+
+                lbl.mousePressEvent = _mouse_press
         if object_name:
             lbl.setObjectName(object_name)
         if cursor_shape is not None:

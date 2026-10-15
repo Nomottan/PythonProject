@@ -23,6 +23,7 @@ from .planner_dl_fields_widget import DeadlineFieldsWidget
 from .path_selector import PathSelector
 from .editable_list_widget import EditableListWidget
 from .file_list_widget import FileListWidget
+from .filter_panel import FilterPanel, FilterCategory
 
 __all__ = [
     "DeadlineTaskButton",
@@ -33,4 +34,5 @@ __all__ = [
     "PathSelector",
     "EditableListWidget",
     "FileListWidget",
+    "FilterCategory",
 ]

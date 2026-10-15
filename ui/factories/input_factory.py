@@ -91,9 +91,10 @@ class InputWidgetFactory:
                         font_size=None, font_weight=None,
                         extra_style="", tooltip=None,
                         indicator_size=(16, 16),
-                        indicator_border_radius=3,
+                        indicator_border_radius=5,
                         indicator_border_width=1,
-                        indicator_border_style="solid"):
+                        indicator_border_style="solid",
+                        *, icon_paths: dict | None = None):
         """Создаёт стилизованный QCheckBox.
 
         Вход:
@@ -109,6 +110,12 @@ class InputWidgetFactory:
             indicator_border_radius — скругление индикатора в px.
             indicator_border_width — толщина рамки индикатора в px.
             indicator_border_style — стиль рамки ("solid").
+            icon_paths — keyword-only. dict {"unchecked": str,
+                          "indeterminate": str, "checked": str} —
+                          абсолютные пути к SVG для состояний
+                          индикатора. Любой ключ опционален.
+                          None → индикатор рисуется только цветом.
+                          Пробрасывается в WidgetStyle.apply_checkbox.
 
         Выход: QCheckBox с QSS.
 
@@ -120,6 +127,7 @@ class InputWidgetFactory:
             Это снимает риск «случайных» hex-констант и
             рассинхронизации индикатора с фоном.
         """
+
         checkbox = QCheckBox(text, parent)
         checkbox.setChecked(checked)
 
@@ -138,6 +146,7 @@ class InputWidgetFactory:
             indicator_size, indicator_border_radius,
             indicator_border_width, indicator_border_style,
             extra_style,
+            icon_paths=icon_paths,
         )
         return checkbox
 

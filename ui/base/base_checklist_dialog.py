@@ -194,11 +194,12 @@ class ChecklistDialog(BaseEditDialog):
                 self, header_text,
             ))
 
-        scroll_area, _, content_layout = (
+        scroll_area, content_widget, content_layout = (
             ListWidgetFactory.create_scroll_container(
                 self, spacing=2, bg_color=self.bg_color,
             )
         )
+
         layout.addWidget(scroll_area)
 
         items = self._get_items()
