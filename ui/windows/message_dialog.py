@@ -217,19 +217,18 @@ class _BaseMessageDialog(QDialog):
                 event.accept()
 
         def showEvent(self, event):
-            """Центрирует окно относительно родителя и поднимает поверх.
+            """Центрирует окно и поднимает поверх.
 
-            Роль: без явного raise_() при вложенном exec() (MessageDialog
-                  открывается поверх модального NewTaskDialog) диалог может
-                  уйти за родителя или остаться невидимым.
+            Роль: центр — через WindowStyle.center_in_app_window
+                  (clamp в границы MainWindow), затем raise_()
+                  и activateWindow() — без них при вложенном exec()
+                  диалог может уйти за родителя.
             """
             super().showEvent(event)
-            parent = self.parent()
-            if parent is not None:
-                pr = parent.frameGeometry()
-                x = pr.x() + (pr.width() - self.width()) // 2
-                y = pr.y() + (pr.height() - self.height()) // 2
-                self.move(x, y)
+            from ui.styles import WindowStyle
+            WindowStyle.center_in_app_window(
+                self, anchor=self.parent(),
+            )
             self.raise_()
             self.activateWindow()
 

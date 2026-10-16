@@ -16,9 +16,9 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, LayoutFactory,
     DeadlineFieldsWidget,
 )
-from ui.windows.message_dialog import MessageDialog
 from models.planner_task import TaskPriority, PlannerTask
 from ui.factories.composite_widget_factory import CompositeWidgetFactory
+from ui.windows.message_dialog import MessageDialog, NotificationDialog
 
 class NewTaskDialog(BaseTaskDialog):
     """Диалог создания/редактирования задачи.
@@ -65,11 +65,12 @@ class NewTaskDialog(BaseTaskDialog):
 
         Вход: layout — QVBoxLayout из BaseTaskDialog.
         """
+        bg_color = (85, 60, 42, 0.9)
         # --- Скрытое поле описания (read-only, пока нет названия). ---
         self.full_desc_edit = InputWidgetFactory.create_text_edit(
             self,
             placeholder="Подробное описание...",
-            bg_color=(85, 60, 42, 0.9),
+            bg_color=bg_color,
             border="1px solid #6b4a33",
         )
         self.full_desc_edit.setReadOnly(True)
@@ -78,12 +79,20 @@ class NewTaskDialog(BaseTaskDialog):
         # --- Поле названия ---
         self.task_edit = InputWidgetFactory.create_line_edit(
             self,
-            bg_color=(85, 60, 42, 0.9),
+            bg_color=bg_color,
             text_color=None,
             border="1px solid #6b4a33",
             border_radius=3,
             padding="3px",
         )
+
+        # Чекбокс чек-листа.
+        self.checklist_cb = InputWidgetFactory.create_checkbox(
+            self, text="",
+            checked=(not self.creator and self._task.checklist_required),
+            bg_color=bg_color,
+        )
+        self.checklist_cb.clicked.connect(self._on_checklist_cb_clicked)
 
         # --- Приоритеты ---
         priorities = (
@@ -93,7 +102,7 @@ class NewTaskDialog(BaseTaskDialog):
         self.priority_combo = InputWidgetFactory.create_combo_box(
             self,
             items=priorities,
-            bg_color=(85, 60, 42, 0.9),
+            bg_color=bg_color,
             border="1px solid #6b4a33",
         )
         # NEW: явно выбираем «Средний» по имени, а не по индексу.
@@ -107,7 +116,7 @@ class NewTaskDialog(BaseTaskDialog):
             self,
             items=["До даты включительно", "Срок"],
             current_index=0,
-            bg_color=(85, 60, 42, 0.9),
+            bg_color=bg_color,
             border="1px solid #6b4a33",
         )
         self.deadline_type_combo.setVisible(False)
@@ -156,11 +165,15 @@ class NewTaskDialog(BaseTaskDialog):
         }
         task_label = LabelFactory.create_label(self, "Задача:", **label_kwargs)
         priority_label = LabelFactory.create_label(self, "Приоритет:", **label_kwargs)
+        checklist_label = LabelFactory.create_label(
+            self, "Чек-лист:", **label_kwargs,
+        )
 
         form = LayoutFactory.create_form(
             self,
             rows=[
                 (task_label, self.task_edit),
+                (checklist_label, self.checklist_cb),
                 (priority_label, priority_row),
             ],
             spacing=10,
@@ -185,7 +198,7 @@ class NewTaskDialog(BaseTaskDialog):
         )
         self._event_date_edit = InputWidgetFactory.create_line_edit(
             self._event_date_row,
-            bg_color=(85, 60, 42, 0.9),
+            bg_color= bg_color,
             text_color=None,
             border="1px solid #6b4a33",
             border_radius=3,
@@ -276,6 +289,7 @@ class NewTaskDialog(BaseTaskDialog):
             if priority == TaskPriority.RECURRING else None,
             "event_date": self._event_date_edit.text().strip()
             if priority == TaskPriority.EVENT else None,
+            "checklist_required": self.checklist_cb.isChecked(),
         }
 
     # ---------- Внутренние слоты ----------
@@ -303,6 +317,24 @@ class NewTaskDialog(BaseTaskDialog):
         if not is_event:
             self._event_date_edit.clear()
 
+    def _on_checklist_cb_clicked(self, checked: bool) -> None:
+        """Блокирует снятие флага при непустом чек-листе.
+
+        Роль: при редактировании задачи с непустым чек-листом
+              пользователь не может снять флаг — галка возвращается
+              в True и показывается уведомление.
+        """
+        if self.creator:
+            return
+        if (not checked
+                and self._task.checklist_required
+                and self._task.checklist):
+            NotificationDialog.notify(
+                self,
+                "Невозможно убрать чек-лист: он не пуст.",
+                bg_color=self.bg_color,
+            )
+            self.checklist_cb.setChecked(True)
 
 class DeadlineEditDialog(BaseTaskDialog):
     """Диалог редактирования дедлайна при восстановлении из архива.

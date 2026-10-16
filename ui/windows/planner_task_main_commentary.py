@@ -17,7 +17,8 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, BaseWidgetFactory,
 )
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
-
+from ui.windows.message_dialog import MessageDialog
+from ui.styles import WindowStyle, ColorCalculator
 
 class PlannerTaskMainCommentary(QDialog):
     """Диалог детального просмотра задачи.
@@ -43,19 +44,46 @@ class PlannerTaskMainCommentary(QDialog):
         self._task = task
         self._service = planner_service
         self._edit_mode = False
-
+        self.service_window = parent
         # --- Флаги окна ---
-        self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowFlags(
+            Qt.Window | Qt.Dialog | Qt.FramelessWindowHint
+        )
+        self.setWindowModality(Qt.WindowModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         # --- Цвета ---
-        bg_color = (70, 80, 90, 0.95)
+        parent_bg = WindowStyle.resolve_parent_bg(
+            parent, (50, 60, 70, 0.95),
+        )
+        bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r + 20,
+            g_fn=lambda g: g + 25,
+            b_fn=lambda b: b + 30,
+            alpha=0.95,
+        )
+        self.bg_color = bg_color
         border_color = self._calc_border_color(bg_color)
+        self._element_bg = ColorCalculator.derive(
+            self.bg_color,
+            r_fn=lambda r: r - 10,
+            g_fn=lambda g: g - 10,
+            b_fn=lambda b: b - 10,
+            alpha=0.9,
+        )
+        self._element_border = ColorCalculator.derive(
+            self.bg_color,
+            r_fn=lambda r: r - 20,
+            g_fn=lambda g: g - 20,
+            b_fn=lambda b: b - 20,
+            alpha=None,
+        )
 
         # --- Центральный виджет ---
         central = QWidget()
         central.setObjectName("commentary_dialog_root")
+        self._central_widget = central
         bg_c = BaseWidgetFactory.color_to_str(bg_color)
         border_c = BaseWidgetFactory.color_to_str(border_color)
         central.setStyleSheet(f"""
@@ -78,7 +106,6 @@ class PlannerTaskMainCommentary(QDialog):
             self,
             text=title_text,
             bg_color=(0, 0, 0, 0),
-            text_color="#ffffff",
             alignment=Qt.AlignCenter,
             word_wrap=True,
             font_size=14,
@@ -96,7 +123,6 @@ class PlannerTaskMainCommentary(QDialog):
             self,
             text=info_text,
             bg_color=(0, 0, 0, 0),
-            text_color="None",
             alignment=Qt.AlignCenter,
             font_size=11,
         )
@@ -114,7 +140,6 @@ class PlannerTaskMainCommentary(QDialog):
                     self,
                     text=f"Дата завершения: {dl.strftime('%d.%m.%Y %H:%M')}",
                     bg_color=(0, 0, 0, 0),
-                    text_color="#ffd9a0",
                     alignment=Qt.AlignCenter,
                     font_size=11,
                     padding="0px",
@@ -126,7 +151,6 @@ class PlannerTaskMainCommentary(QDialog):
                     self,
                     text="|",
                     bg_color=(0, 0, 0, 0),
-                    text_color="#6a7a8a",
                     alignment=Qt.AlignCenter,
                     font_size=11,
                     padding="0px",
@@ -137,7 +161,6 @@ class PlannerTaskMainCommentary(QDialog):
                     self,
                     text=self._format_remaining(dl),
                     bg_color=(0, 0, 0, 0),
-                    text_color=None,
                     alignment=Qt.AlignCenter,
                     font_size=11,
                     padding="0px",
@@ -152,29 +175,57 @@ class PlannerTaskMainCommentary(QDialog):
         self._desc_label = LabelFactory.create_label(
             self,
             text=task.description or "Нет описания",
-            bg_color=(60, 70, 80, 0.9),
-            text_color=None,
+            bg_color=self._element_bg,
             alignment=Qt.AlignLeft | Qt.AlignTop,
             word_wrap=True,
             padding="8px",
             border_radius=4,
         )
         self._desc_label.setMinimumHeight(120)
-        layout.addWidget(self._desc_label)
 
-        # Режим редактирования — QTextEdit, изначально скрыт.
         self._desc_edit = InputWidgetFactory.create_text_edit(
             self,
             text=task.description,
-            bg_color=(60, 70, 80, 0.9),
-            border="1px solid #4a5566",
+            bg_color=self._element_bg,
+            border=f"1px solid {ColorCalculator.to_str(self._element_border)}",
             border_radius=4,
             padding="8px",
             font_size=11,
         )
         self._desc_edit.setMinimumHeight(120)
         self._desc_edit.setVisible(False)
-        layout.addWidget(self._desc_edit)
+
+        # ---New--- Описание и (опционально) чек-лист в одной строке.
+        self._content_row = QHBoxLayout()
+        self._content_row.setContentsMargins(0, 0, 0, 0)
+        self._content_row.setSpacing(10)
+
+        # Левая колонка — описание (stretch 2).
+        self._desc_container = QWidget()
+        desc_layout = QVBoxLayout(self._desc_container)
+        desc_layout.setContentsMargins(0, 0, 0, 0)
+        desc_layout.addWidget(self._desc_label)
+        desc_layout.addWidget(self._desc_edit)
+        self._content_row.addWidget(self._desc_container, 2)
+
+        # Правая колонка — чек-лист (stretch 1) — только при флаге.
+        self._checklist_widget = None
+        if task.checklist_required:
+            from ui.widgets.checklist_widget import ChecklistWidget
+
+            self._checklist_widget = ChecklistWidget(
+                self,
+                items=list(task.checklist),
+                mode="view",
+                bg_color=bg_color,
+                task_id=task.task_id,
+            )
+            self._checklist_widget.changed.connect(
+                self._on_checklist_changed
+            )
+            self._content_row.addWidget(self._checklist_widget, 1)
+
+        layout.addLayout(self._content_row)
 
         # --- Кнопки ---
         btn_layout = QHBoxLayout()
@@ -240,7 +291,9 @@ class PlannerTaskMainCommentary(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(central)
 
-        self.setMinimumSize(400, 300)
+        self.setFixedSize(580, 400)
+        from ui.factories.window_factories import ExtendedWindowFactory
+        ExtendedWindowFactory._setup_dragging(self, self._central_widget)
 
     # ---------- Вспомогательные ----------
 
@@ -260,6 +313,23 @@ class PlannerTaskMainCommentary(QDialog):
         if avg <= 128:
             return (clamp(r + 40), clamp(g + 20), clamp(b + 20), 0.9)
         return (clamp(r - 20), clamp(g - 40), clamp(b - 40), 0.9)
+
+    def showEvent(self, event):
+        """Сдвигает диалог на +10 по X от штатной позиции Qt.
+
+        Роль: Qt центрирует QDialog относительно родителя в
+              showEvent — до вызова super(). После super() позиция
+              уже выставлена, добавляем сдвиг. Флаг — чтобы при
+              повторном show (например, из модального цикла) не
+              сдвигать второй раз.
+        """
+        super().showEvent(event)
+        if not getattr(self, "_x_shift_applied", False):
+            self._x_shift_applied = True
+            parent = self.parent()
+            WindowStyle.center_in_app_window(
+                self, anchor=parent,
+            )
 
     # ---------- Слоты ----------
 
@@ -336,6 +406,33 @@ class PlannerTaskMainCommentary(QDialog):
         self._desc_label.setVisible(True)
         self._btn_comment.setEnabled(True)
         self._btn_save.setEnabled(False)
+
+    def _on_checklist_changed(self, items, event_type: str) -> None:
+        """Реакция на изменение чек-листа.
+
+        items — актуальный список ChecklistItem.
+        event_type — "toggle" / "reorder" / "add" / "edit" / "delete".
+
+        Роль: сохраняет список; при "toggle" и все пункты
+              выполнены — спрашивает о закрытии задачи.
+        """
+        self._service.update_checklist(self._task.task_id, items)
+        self._task.checklist = list(items)
+        if event_type != "toggle":
+            return
+        if not items:
+            return
+        if all(item.checked for item in items):
+            result = MessageDialog.question(
+                self,
+                "Все пункты чек-листа выполнены. Закрыть задачу?",
+                bg_color=self.bg_color,
+            )
+            if result == "yes":
+                self._service.archive_task(
+                    self._task.task_id, TaskStatus.COMPLETED,
+                )
+                self.accept()
 
     def _on_close(self) -> None:
         """«Закрыть» — закрывает диалог без сохранения изменений."""

@@ -1,7 +1,9 @@
 from PySide6.QtCore import QObject, Signal
 from datetime import date, datetime, timedelta
 from typing import Optional
-from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
+from models.planner_task import (
+    PlannerTask, TaskPriority, TaskStatus, TaskType, ChecklistItem,
+)
 from storage.planner_task_storage import PlannerTaskStorage
 from utils.planner_utils import RecurrenceCalculator, TaskIdGenerator
 
@@ -54,7 +56,9 @@ class PlannerService(QObject):
                     deadline_datetime: Optional[str] = None,
                     task_type: TaskType = TaskType.REGULAR,
                     recurrence_data: Optional[dict] = None,
-                    event_date: Optional[str] = None) -> PlannerTask:
+                    event_date: Optional[str] = None,
+                    checklist_required: bool = False,
+                    checklist: Optional[list] = None) -> PlannerTask:
         """Создаёт задачу, генерирует task_id, сохраняет.
 
         Вход:
@@ -109,11 +113,63 @@ class PlannerService(QObject):
             recurrence_monthdays=rec_monthdays,
             recurrence_use_last_day=rec_use_last,
             next_generation_date=next_date,
-            event_date=event_date_val,  # NEW
+            event_date=event_date_val,
+            checklist_required=checklist_required,
+            checklist=list(checklist) if checklist else [],
         )
         self._storage.add(task)
         self.tasks_changed.emit()
         return task
+
+    def set_checklist_required(self, task_id: int, value: bool) -> bool:
+        """Устанавливает флаг checklist_required.
+
+        Вход:
+            task_id — идентификатор задачи.
+            value — новое значение флага.
+
+        Выход: True — обновлено; False — задача не найдена
+               или снятие флага при непустом checklist.
+
+        Роль: снятие флага при непустом чек-листе запрещено —
+              сначала пользователь должен очистить чек-лист.
+        """
+        target = None
+        for task in self._storage.get_all():
+            if task.task_id == task_id:
+                target = task
+                break
+        if target is None:
+            return False
+        if value is False and target.checklist:
+            return False
+        target.checklist_required = value
+        self._storage.save()
+        self.tasks_changed.emit()
+        return True
+
+    def update_checklist(self, task_id: int, checklist: list) -> bool:
+        """Перезаписывает task.checklist.
+
+        Вход:
+            task_id — идентификатор задачи.
+            checklist — новый список ChecklistItem.
+
+        Выход: True — обновлено; False — задача не найдена.
+
+        Роль: копия входного списка — защита от мутации извне.
+        """
+        target = None
+        for task in self._storage.get_all():
+            if task.task_id == task_id:
+                target = task
+                break
+        if target is None:
+            return False
+        target.checklist = list(checklist)
+        self._storage.save()
+        self.tasks_changed.emit()
+        return True
 
     def archive_task(self, task_id: int, final_status: TaskStatus) -> bool:
         """Архивирует задачу: удаляет из активных, добавляет в архив.

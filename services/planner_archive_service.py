@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
-from models.planner_task import PlannerTask, TaskStatus
+from models.planner_task import PlannerTask, TaskStatus, ChecklistItem
 from storage.planner_task_storage import PlannerTaskStorage
 from storage.planner_archive_storage import PlannerArchiveStorage
 from utils.planner_utils import TaskIdGenerator
@@ -137,7 +137,6 @@ class PlannerArchiveService:
                 spawner_task=task_id,
                 deadline_datetime=deadline_datetime or target.deadline_datetime,
                 created_datetime=datetime.now().strftime("%d.%m.%Y %H:%M"),
-                # NEW: переносим поля регулярности.
                 task_type=target.task_type,
                 recurrence_type=target.recurrence_type,
                 recurrence_value=target.recurrence_value,
@@ -145,8 +144,18 @@ class PlannerArchiveService:
                 recurrence_monthdays=target.recurrence_monthdays,
                 recurrence_use_last_day=target.recurrence_use_last_day,
                 next_generation_date=date.today().strftime("%d.%m.%Y"),
+                checklist_required=target.checklist_required,
+                checklist=[
+                    ChecklistItem(
+                        checked=False,
+                        short=item.short,
+                        detail=item.detail,
+                        order=item.order,
+                    )
+                    for item in target.checklist
+                ],
             )
-            # NEW: если пришло новое правило — применяем.
+            # Если пришло новое правило — применяем.
             if recurrence_data:
                 self._apply_recurrence(new_task, recurrence_data)
             self._active_storage.add(new_task)

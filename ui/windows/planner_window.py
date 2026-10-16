@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from ui.factories.factories import WindowFactory, ButtonFactory
+from ui.factories.factories import WindowFactory, ButtonFactory, LabelFactory
 from ui.windows.planner_task_dialogs import NewTaskDialog
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from ui.base.planner_base_window import _BasePlannerListWindow
@@ -24,13 +24,14 @@ class PlannerWindow(_BasePlannerListWindow):
     """
 
     TASK_TYPE_COLUMNS = {
-        "default": ["actions", "title", "priority", "status", "date", "specifications"],
+        "default": ["actions", "title", "checklist", "priority", "status", "date", "specifications"],
     }
 
-    # Расширяем базовые билдеры колонкой действий.
+    # Билдеры колонкой действий.
     COLUMN_BUILDERS = {
         **_BasePlannerListWindow.COLUMN_BUILDERS,
         "actions": "_build_actions",
+        "checklist": "_build_checklist",
     }
 
     LOGGER_SOURCE = "PlannerWindow.planner_window"
@@ -144,6 +145,32 @@ class PlannerWindow(_BasePlannerListWindow):
         ))
         return container
 
+    def _build_checklist(self, task: PlannerTask):
+        """Плашка чек-листа — «Чек-лист» или «Без чек-листа».
+
+        Роль: кнопка при наличии флага, лейбл при отсутствии.
+        """
+        if not task.checklist_required:
+            return LabelFactory.create_label(
+                self,
+                "Без чек-листа",
+                bg_color=self.NEUTRAL_COLOR,
+                font_weight="bold",
+                min_size=(100, 0),
+            )
+        btn = ButtonFactory.create_button(
+            self,
+            "Чек-лист",
+            bg_color=self._accent_bg,
+            padding="4px 8px",
+            border_radius=4,
+            min_size=(100, 0),
+        )
+        btn.clicked.connect(
+            lambda checked=False, t=task: self._on_open_checklist(t)
+        )
+        return btn
+
     # ---------- Обработчики ----------
 
     def _on_new_task(self):
@@ -170,6 +197,8 @@ class PlannerWindow(_BasePlannerListWindow):
                 task_type=task_type,
                 recurrence_data=result["recurrence_data"],
                 event_date=result["event_date"],
+                checklist_required=result["checklist_required"],
+                checklist=[],
             )
             self._reload_tasks()
 
@@ -259,7 +288,32 @@ class PlannerWindow(_BasePlannerListWindow):
                 recurrence_data=result["recurrence_data"],
                 event_date=result["event_date"],   # NEW
             )
+            if task.checklist_required != result["checklist_required"]:
+                self.service.set_checklist_required(
+                    task.task_id, result["checklist_required"],
+                )
             self._reload_tasks()
+
+    def _on_open_checklist(self, task: PlannerTask) -> None:
+        """Открывает модальный диалог чек-листа.
+
+        Роль: по ОК сохраняет содержимое через update_checklist.
+              По Отмена / закрытию — ничего.
+        """
+        from ui.windows.planner_checklist_dialogs import ChecklistDialog
+
+        dialog = ChecklistDialog(
+            self,
+            task=task,
+            bg_color=self.bg_color,
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.setWindowModality(Qt.WindowModal)
+        if dialog.exec() == QDialog.Accepted:
+            result = dialog.get_result()
+            if result is not None:
+                self.service.update_checklist(task.task_id, result)
+                self._reload_tasks()
 
     def resizeEvent(self, event):
         """При изменении размера PlannerWindow — тянем за собой архив.

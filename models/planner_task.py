@@ -6,6 +6,7 @@
 всё это на стороне сервиса (PlannerService). Модель — контейнер для полей
 и умеет сериализоваться/десериализоваться в JSON.
 """
+from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional
@@ -127,7 +128,9 @@ class PlannerTask:
                  recurrence_monthdays: Optional[list] = None,
                  recurrence_use_last_day: bool = False,
                  next_generation_date: Optional[str] = None,
-                 event_date: Optional[str] = None):
+                 event_date: Optional[str] = None,
+                 checklist_required: bool = False,
+                 checklist: Optional[list] = None):
         """Конструктор.
 
         Вход:
@@ -161,6 +164,8 @@ class PlannerTask:
         self.recurrence_use_last_day = recurrence_use_last_day
         self.next_generation_date = next_generation_date
         self.event_date = event_date
+        self.checklist_required = checklist_required
+        self.checklist = checklist if checklist is not None else []
 
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
@@ -189,6 +194,8 @@ class PlannerTask:
             "recurrence_use_last_day": self.recurrence_use_last_day,
             "next_generation_date": self.next_generation_date,
             "event_date": self.event_date,
+            "checklist_required": self.checklist_required,
+            "checklist": [item.to_dict() for item in self.checklist],
         }
 
     @classmethod
@@ -244,6 +251,15 @@ class PlannerTask:
             recurrence_use_last_day=data.get("recurrence_use_last_day", False),
             next_generation_date=data.get("next_generation_date"),
             event_date=data.get("event_date"),
+            checklist_required=data.get("checklist_required", False),
+            checklist=[
+                item
+                for item in (
+                    ChecklistItem.from_dict(raw)
+                    for raw in data.get("checklist", []) or []
+                )
+                if item is not None
+            ],
         )
 
     def get_deadline_datetime(self) -> Optional[datetime]:
@@ -304,3 +320,44 @@ class PlannerTask:
               на следующий день.
         """
         return self.task_type == TaskType.EVENT
+
+# Плоский пункт чек-листа.
+@dataclass
+class ChecklistItem:
+    """Плоский пункт чек-листа, без иерархии.
+
+    Поля:
+        checked — выполнен ли пункт.
+        short — краткое название (в списке).
+        detail — подробное описание (в диалоге).
+        order — позиция для сортировки внутри группы
+                (checked совпадает).
+    """
+    checked: bool = False
+    short: str = ""
+    detail: str = ""
+    order: int = 0
+
+    def to_dict(self) -> dict:
+        """Сериализация в примитивы для JSON."""
+        return {
+            "checked": self.checked,
+            "short": self.short,
+            "detail": self.detail,
+            "order": self.order,
+        }
+
+    @classmethod
+    def from_dict(cls, data) -> "ChecklistItem | None":
+        """Восстановление из dict. None — если data не dict.
+
+        Мягкая деградация: отсутствующие поля — дефолты.
+        """
+        if not isinstance(data, dict):
+            return None
+        return cls(
+            checked=bool(data.get("checked", False)),
+            short=str(data.get("short", "")),
+            detail=str(data.get("detail", "")),
+            order=int(data.get("order", 0)),
+        )

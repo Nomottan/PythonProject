@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from .button_factory import ButtonFactory
 from .element_factory import LabelFactory
-from ui.styles import WidgetStyle
+from ui.styles import WidgetStyle, WindowStyle
 
 
 class WindowFactory:
@@ -397,27 +397,17 @@ class ExtendedWindowFactory(WindowFactory):
             Qt-родителя (например, программно созданным) —
             без падения.
         """
-        source = getattr(window, 'service_window', None) or parent
-        w = window.width()
-        h = window.height()
-
-        if source is not None:
-            geom = source.frameGeometry()
-            x = geom.x() + (geom.width() - w) // 2
-            y = geom.y() + (geom.height() - h) // 2
-            window.setGeometry(x, y, w, h)
-            return
-
-        app = QApplication.instance()
-        if app is None:
-            return
-        screen = app.primaryScreen()
-        if screen is None:
-            return
-        screen_geom = screen.availableGeometry()
-        x = screen_geom.x() + (screen_geom.width() - w) // 2
-        y = screen_geom.y() + (screen_geom.height() - h) // 2
-        window.setGeometry(x, y, w, h)
+        from PySide6.QtWidgets import QMainWindow
+        top = None
+        p = parent
+        while p is not None:
+            if isinstance(p, QMainWindow):
+                top = p
+                break
+            p = p.parent()
+        if top is None:
+            top = getattr(window, 'service_window', None) or parent
+        WindowStyle.center_in_app_window(window, anchor=top)
 
     @staticmethod
     def _setup_dragging(window, widget):

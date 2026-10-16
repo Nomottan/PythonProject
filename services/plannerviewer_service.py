@@ -379,6 +379,6 @@ class PlannerQuickViewController(QObject):
                 task=task,
                 planner_service=self._service,
             )
-            dialog.exec()
+            dialog.show()
         finally:
             self._dialog_open = False

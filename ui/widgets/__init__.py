@@ -24,6 +24,7 @@ from .path_selector import PathSelector
 from .editable_list_widget import EditableListWidget
 from .file_list_widget import FileListWidget
 from .filter_panel import FilterPanel, FilterCategory
+from .checklist_widget import ChecklistWidget
 
 __all__ = [
     "DeadlineTaskButton",
@@ -35,4 +36,5 @@ __all__ = [
     "EditableListWidget",
     "FileListWidget",
     "FilterCategory",
+    "ChecklistWidget",
 ]

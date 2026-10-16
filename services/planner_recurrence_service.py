@@ -5,7 +5,9 @@
 from datetime import date, datetime
 from typing import Optional
 
-from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
+from models.planner_task import (
+    PlannerTask, TaskPriority, TaskStatus, TaskType, ChecklistItem,
+)
 from services.planner_service import PlannerService
 from utils.planner_utils import RecurrenceCalculator
 
@@ -149,6 +151,16 @@ class PlannerRecurrenceService:
             priority=TaskPriority.RECURRING,
             spawner_task=generator.task_id,
             task_type=TaskType.INSTANCE,
+            checklist_required=generator.checklist_required,
+            checklist=[
+                ChecklistItem(
+                    checked=False,
+                    short=item.short,
+                    detail=item.detail,
+                    order=item.order,
+                )
+                for item in generator.checklist
+            ],
         )
 
     def _update_next_date(self, generator: PlannerTask, today: date) -> None:
