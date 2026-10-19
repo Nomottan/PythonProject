@@ -16,7 +16,7 @@
     KizFilterDetailsWriter. Логгер V2 создаётся в начале
     accumulate.
 
-    Вызывается из ChzMPWindow/ReturnsWindow по кнопке «Собрать
+    Вызывается из SellsFBSWindow/ReturnsWindow по кнопке «Собрать
     продажи» через ThreadFactory.run_in_thread.
 """
 

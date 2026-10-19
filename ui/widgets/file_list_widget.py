@@ -7,7 +7,7 @@
 
 Роль в программе:
     Единая точка для списков выбранных файлов в окнах сервисов
-    (ChzMPWindow, ReturnsWindow, CompareWindow). Пришёл на смену
+    (SellsFBSWindow, ReturnsWindow, CompareWindow). Пришёл на смену
     ListWidgetFactory.create_list_widget для случая «файлы, которые
     можно убирать по одному».
 """

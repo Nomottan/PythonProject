@@ -20,7 +20,7 @@ class StatusLog(QTextEdit):
     Роль в программе:
         Используется через StatusLogFactory.create_status_log.
         Заменяет самодельные QTextEdit с QSS в трёх окнах
-        (ChzMPWindow, CompareWindow, ReturnsWindow).
+        (SellsFBSWindow, CompareWindow, ReturnsWindow).
 
     Публичный API:
         log(message) — добавить строку лога.

@@ -1,7 +1,7 @@
 from .shared_dialogs import *
 from .sellers_window import SellersWindow
 from .brands_window import BrandsWindow, BrandEditDialog
-from .chz_mp_window import ChzMPWindow
+from .sells_fbs_window import SellsFBSWindow
 from .returns_window import ReturnsWindow
 from .compare_window import CompareWindow
 from .compare_dialogs import (

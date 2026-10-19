@@ -24,6 +24,7 @@ from typing import Optional
 
 from utils.excel_helper import ExcelHelper, WorkbookOpener, WorkbookWriter
 from utils.kiz_utils import KizUtils, KizOccurrences
+from utils.path_manager import PathManager
 from utils.parsers import DateParser
 from utils.text_utils import TextUtils
 from services.kiz_validator import ValidationResult
@@ -579,6 +580,23 @@ class WarehouseReportReader(BaseMpReportReader):
         """
         return None
 
+@dataclass
+class SheetInfo:
+    """Описание одного листа складского отчёта.
+
+    Роль:
+        Результат первого прохода WarehouseReportWriter.scan.
+        По нему PreparationService собирает unresolved — листы
+        без продавца, которые попадут в окно резолвера.
+
+    Поля:
+        sheet_name — имя листа в исходном файле.
+        seller — найденный Seller или None.
+        is_empty — True, если на листе нет ни одной непустой ячейки.
+    """
+    sheet_name: str
+    seller: "Seller | None"
+    is_empty: bool
 
 class WarehouseReportWriter:
     """Разбивка складского отчёта по продавцам.
@@ -605,34 +623,101 @@ class WarehouseReportWriter:
     """
 
     @staticmethod
-    def split(source_path, reports_dir, sellers, date_str, logger) -> dict:
-        """Разбивает один складской отчёт по продавцам.
+    def scan(source_path, sellers, logger) -> list:
+        """Первый проход: собирает SheetInfo по всем листам.
 
         Вход:
-            source_path — путь к исходному складскому .xlsx.
-            reports_dir — папка «Отчёты» рабочей папки задачи.
-            sellers — список Seller для сопоставления с именами листов.
-            date_str — строка даты задачи ("D_M_YYYY") для имени файла.
+            source_path — путь к складскому .xlsx.
+            sellers — список Seller для сопоставления.
             logger — LoggerV2.
 
         Выход:
-            dict {"created", "appended", "skipped_empty", "skipped_unknown"}:
-                created — сколько новых файлов продавцов создано,
-                appended — сколько файлов дополнено,
-                skipped_empty — сколько листов пусты и пропущены,
-                skipped_unknown — сколько листов без продавца.
-            При неоткрывшемся исходнике — все значения нули.
+            list[SheetInfo] — по одной записи на лист.
+            При неоткрывшемся исходнике — [].
 
         Роль:
-            Единая точка разбивки. Покупателя/листы проверять
-            снаружи не нужно — метод сам считает статистику.
-            Workbook закрывается в finally.
+            Единственный лист с seller is None и is_empty=False
+            попадёт в unresolved PreparationService и уйдёт в
+            окно резолвера. Второй проход (write) открывает
+            файл заново — по контракту Пользователя.
+        """
+        results: list = []
+
+        wb = WorkbookOpener.open(
+            source_path, logger=logger, description="склад",
+            read_only=True,
+        )
+        if wb is None:
+            return results
+
+        try:
+            for sheet_name in wb.sheetnames:
+                seller = ExcelHelper.find_seller_by_sheet_name(
+                    wb, sellers, sheet_name,
+                )
+                sheet = wb[sheet_name]
+                is_empty = not any(
+                    cell
+                    for row in sheet.iter_rows(values_only=True)
+                    for cell in row
+                    if cell is not None
+                    and not (isinstance(cell, str) and not cell.strip())
+                )
+                results.append(SheetInfo(
+                    sheet_name=sheet_name,
+                    seller=seller,
+                    is_empty=is_empty,
+                ))
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+        return results
+
+    @staticmethod
+    def write(source_path, decisions, returns_txt_path, reports_dir,
+              sellers, date_str, logger) -> dict:
+        """Второй проход: разбивает складской отчёт по решениям.
+
+        Вход:
+            source_path — путь к исходному складскому .xlsx.
+            decisions — dict[norm_key, (kind, target)] из
+                build_decisions_from_result. Ключ — нормализованное
+                имя листа.
+            returns_txt_path — Path к общему файлу возвратов.
+            reports_dir — папка «Отчёты» рабочей папки.
+            sellers — список Seller.
+            date_str — строка даты задачи ("D_M_YYYY").
+            logger — LoggerV2.
+
+        Выход:
+            dict {"created", "appended", "skipped_garbage",
+            "written_unknown", "written_returns"}. При
+            неоткрывшемся исходнике — все нули.
+
+        Роль:
+            Для каждого листа выбирает цель:
+                — decision None + seller найден → обычный путь
+                  (Отчёт_склада_{seller}_{date}.xlsx);
+                — decision None + seller None → пропуск
+                  (защита, scan таких не должен пропускать);
+                — ("seller", target) → пишем в файл target;
+                — ("garbage", None) → пропуск со счётчиком;
+                — ("unknown", None) → сохраняем как
+                  «Неопознанный отчёт {sheet}_{date}.xlsx»;
+                — ("returns", None) → дописываем КИЗы в общий
+                  returns.txt через ReturnsTxtWriter.
+            Пустые листы (нет непустых ячеек) пропускаются без
+            счётчика — как в прежнем split (skipped_empty).
         """
         stats = {
             "created": 0,
             "appended": 0,
-            "skipped_empty": 0,
-            "skipped_unknown": 0,
+            "skipped_garbage": 0,
+            "written_unknown": 0,
+            "written_returns": 0,
         }
 
         wb = WorkbookOpener.open(
@@ -644,31 +729,74 @@ class WarehouseReportWriter:
 
         try:
             for sheet_name in wb.sheetnames:
+                norm_sheet = TextUtils.normalize(sheet_name)
+                decision = decisions.get(norm_sheet)
                 seller = ExcelHelper.find_seller_by_sheet_name(
                     wb, sellers, sheet_name,
                 )
-                if seller is None:
-                    stats["skipped_unknown"] += 1
-                    continue
 
                 sheet = wb[sheet_name]
-                values: list = []
+                cells: list = []
                 for row in sheet.iter_rows(values_only=True):
                     for cell in row:
                         if cell is None:
                             continue
                         if isinstance(cell, str) and not cell.strip():
                             continue
-                        values.append(cell)
+                        cells.append(cell)
 
-                if not values:
-                    stats["skipped_empty"] += 1
+                # Пустой лист — пропуск без счётчика.
+                if not cells:
                     continue
 
-                safe_name = TextUtils.sanitize_filename(seller.name)
-                file_name = f"Отчёт_склада_{safe_name}_{date_str}.xlsx"
+                # Определение цели.
+                if decision is None:
+                    if seller is not None:
+                        target_name = seller.name
+                    else:
+                        # Защита: scan такие листы не должен
+                        # пропускать, но не падаем.
+                        continue
+                else:
+                    kind, value = decision
+                    if kind == "seller":
+                        target_name = value
+                    elif kind == "garbage":
+                        stats["skipped_garbage"] += 1
+                        continue
+                    elif kind == "unknown":
+                        safe_sheet = TextUtils.sanitize_filename(
+                            sheet_name,
+                        )
+                        unknown_name = (
+                            f"Неопознанный отчёт "
+                            f"{safe_sheet}_{date_str}.xlsx"
+                        )
+                        dst = reports_dir / unknown_name
+                        WorkbookWriter.create(
+                            dst, headers=None,
+                            rows=[(v,) for v in cells],
+                            sheet_name="Склад", logger=logger,
+                        )
+                        stats["written_unknown"] += 1
+                        continue
+                    elif kind == "returns":
+                        ReturnsTxtWriter.append_cells(
+                            cells, returns_txt_path, logger,
+                        )
+                        stats["written_returns"] += 1
+                        continue
+                    else:
+                        # Неизвестный kind — защита, пропуск.
+                        continue
+
+                # Запись к target_name.
+                safe_name = TextUtils.sanitize_filename(target_name)
+                file_name = (
+                    f"Отчёт_склада_{safe_name}_{date_str}.xlsx"
+                )
                 dst = reports_dir / file_name
-                rows = [(v,) for v in values]
+                rows = [(v,) for v in cells]
 
                 if dst.exists():
                     WorkbookWriter.append_rows(
@@ -689,7 +817,58 @@ class WarehouseReportWriter:
 
         return stats
 
+class ReturnsTxtWriter:
+    """Единая точка append в общий returns.txt.
 
+    Роль:
+        Не знает, откуда пришли cells — WB-файл, Ozon-файл или
+        лист склада. Извлекает из ячеек КИЗы через
+        KizUtils.clean_kiz_for_storage, пишет их в файл построчно,
+        файл открыт в режиме append. Фильтрация мусора —
+        ответственность clean_kiz_for_storage.
+    """
+
+    @staticmethod
+    def append_cells(cells, path, logger) -> int:
+        """Дописывает КИЗы из cells в файл path.
+
+        Вход:
+            cells — итерируемое ячеек (любые значения, будут
+                    приведены к str).
+            path — Path к файлу возвратов. Родительская папка
+                    будет создана через PathManager.ensure_dir.
+            logger — LoggerV2 или None. Передаётся в
+                    clean_kiz_for_storage = None: фильтрация
+                    молчаливая, без спама в лог.
+
+        Выход:
+            int — сколько строк фактически записано в файл
+            (после дедупликации внутри clean_kiz_for_storage
+            и отбрасывания непустых).
+
+        Роль:
+            Единая точка записи возвратов. WB/Ozon/склад могут
+            писать сюда одновременно за один прогон — файл
+            открывается в режиме append и создаётся, если его
+            нет.
+        """
+        path_obj = Path(path)
+        PathManager.ensure_dir(path_obj.parent)
+
+        written = 0
+        with open(path_obj, "a", encoding="utf-8") as f:
+            for cell in cells:
+                raw = str(cell).strip()
+                if not raw:
+                    continue
+                storage_list = KizUtils.clean_kiz_for_storage(
+                    raw, logger=None,
+                )
+                for k in storage_list:
+                    f.write(k + "\n")
+                    written += 1
+
+        return written
 
 
 

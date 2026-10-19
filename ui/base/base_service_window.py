@@ -10,7 +10,7 @@
     - обвязка кнопки «Собрать продажи».
 
 Роль в программе:
-    Все три окна сервисов (ChzMPWindow, ReturnsWindow, CompareWindow)
+    Все три окна сервисов (SellsFBSWindow, ReturnsWindow, CompareWindow)
     наследуются от BaseServiceWindow. Общая инфраструктура — здесь,
     специфика — в наследниках.
 """
@@ -33,7 +33,7 @@ class BaseServiceWindow(QMainWindow):
     """Базовое окно сервиса.
 
     Роль:
-        Инфраструктура для ChzMPWindow/ReturnsWindow/CompareWindow.
+        Инфраструктура для SellsFBSWindow/ReturnsWindow/CompareWindow.
         Наследники задают атрибуты класса и переопределяют хуки.
 
     Атрибуты класса (переопределяются наследниками):

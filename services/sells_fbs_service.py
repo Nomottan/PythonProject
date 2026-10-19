@@ -10,7 +10,7 @@
     FinalizePricesService  — установка цен и финализация ИТОГ-файлов.
 
 Роль в программе:
-    Вызываются из ChzMPWindow по кнопкам пайплайна. Каждый сервис
+    Вызываются из SellsFBSWindow по кнопкам пайплайна. Каждый сервис
     работает через TaskContext — единую точку рабочей папки и
     логирования. Сервисы независимы: порядок задаёт UI.
 """
@@ -29,8 +29,9 @@ from utils.price_utils import AveragePriceResolver, PriceFiller
 from utils.sells_fbs_report_utils import (
     WBReportReader, OZONReportReader,
     WarehouseReportReader, WarehouseReportWriter,
-    FileTypeDetector,
+    FileTypeDetector, ReturnsTxtWriter,
 )
+from utils.path_manager import PathManager
 from utils.sales_file_generator import SalesFileGenerator, SalesFileRowsReader
 from utils.fbs_buferprices import FbsBufferPrices
 from utils.kiz_utils import KizUtils, KizDuplicatesFinder
@@ -40,8 +41,7 @@ class PreparationService:
     чтение отчётов, разрешение конфликтов, финализация.
 
     Роль:
-        Единый сервис, объединяющий подготовку и выгрузку КИЗов
-        в один шаг. Внутри — семь фаз: опознание входных файлов,
+        Семь фаз: опознание входных файлов,
         копирование с новыми именами, разбивка склада, чтение
         всех отчётов в одном batch-контексте KizStorage,
         разрешение конфликтов КИЗов между продавцами, финализация
@@ -55,10 +55,20 @@ class PreparationService:
     # Коды: 0 — склад, 1 — WB, 2 — Ozon.
     _SOURCE_LABELS = {0: "ЧЗ МП", 1: "WB", 2: "Ozon"}
 
-    def __init__(self, kiz_validator, log_manager_v2) -> None:
+    def __init__(self, kiz_validator, log_manager_v2,
+                 seller_unknown_resolver=None) -> None:
+        """Конструктор.
+
+                Вход:
+                    kiz_validator — KizValidator.
+                    log_manager_v2 — LogManagerV2.
+                    seller_unknown_resolver — Callable[[dict, dict], dict] |
+                        None. Вызывается из фонового потока, возвращает
+                        {total, resolved, skipped, decisions}.
+                """
         self.kiz_validator = kiz_validator
         self._log_manager_v2 = log_manager_v2
-
+        self._seller_unknown_resolver = seller_unknown_resolver
     # ============================================================
     # Публичный метод
     # ============================================================
@@ -110,177 +120,289 @@ class PreparationService:
         if not files:
             logger.warning("\nНет входных файлов для копирования")
 
-        # ---------- Фаза 3. Копирование с новыми именами. ----------
-        logger.report(
-            "\n==================== Этап: Копирование ====================\n"
-        )
-        logger.info(
-            "\n==================== Этап: Копирование ====================\n"
-        )
+            # ---------- Фаза 3. Копирование WH-файлов. ----------
+            logger.report(
+                "\n==================== Этап: Копирование склада ====================\n"
+            )
+            logger.info(
+                "\n==================== Этап: Копирование склада ====================\n"
+            )
 
-        seller_counters: dict = {}
-        stats = {
-            "copied_wb": 0, "copied_ozon": 0, "copied_wh": 0,
-            "copied_unknown": 0,
-            "exists": 0, "error": 0,
-            "sellers_wb": set(), "sellers_ozon": set(),
-        }
+            seller_counters: dict = {}
+            stats = {
+                "copied_wb": 0, "copied_ozon": 0, "copied_wh": 0,
+                "copied_unknown": 0, "copied_garbage": 0, "processed_returns": 0,
+                "exists": 0, "error": 0,
+                "sellers_wb": set(), "sellers_ozon": set(),
+            }
 
-        for src, file_type in detected.items():
-            logger.status(f"Обрабатывается: {Path(src).name}")
-            logger.report(f"\nОбработка файла: {Path(src).name}")
-
-            if file_type == "wb":
-                r = self._copy_wb_file(
-                    Path(src), ctx, logger, sellers, seller_counters,
-                )
-            elif file_type == "ozon":
-                r = self._copy_ozon_file(
-                    Path(src), ctx, logger, sellers, seller_counters,
-                )
-            elif file_type == "wh":
+            for src, file_type in detected.items():
+                if file_type != "wh":
+                    continue
+                logger.status(f"Обрабатывается: {Path(src).name}")
+                logger.report(f"\nОбработка файла: {Path(src).name}")
                 r = self._copy_wh_file(
                     Path(src), ctx, logger, seller_counters,
                 )
-            else:
-                r = self._copy_unknown_file(
-                    Path(src), ctx, logger, seller_counters,
-                )
-
-            status = r.get("status")
-            rtype = r.get("type")
-            seller_name = r.get("seller_name")
-
-            if status == "copied":
-                if rtype == "wb":
-                    stats["copied_wb"] += 1
-                    if seller_name:
-                        stats["sellers_wb"].add(seller_name)
-                elif rtype == "ozon":
-                    stats["copied_ozon"] += 1
-                    if seller_name:
-                        stats["sellers_ozon"].add(seller_name)
-                elif rtype == "wh":
+                status = r.get("status")
+                if status == "copied":
                     stats["copied_wh"] += 1
+                elif status == "exists":
+                    stats["exists"] += 1
                 else:
-                    stats["copied_unknown"] += 1
-            elif status == "exists":
-                stats["exists"] += 1
-            else:
-                stats["error"] += 1
+                    stats["error"] += 1
 
-        # Сводка копирования.
-        copied_total = (
-            stats["copied_wb"] + stats["copied_ozon"]
-            + stats["copied_wh"] + stats["copied_unknown"]
-        )
-        lines = [f"Скопировано всего: {copied_total}"]
-        if stats["copied_wh"] > 0:
-            lines.append(f"  Склад (ЧЗ МП): {stats['copied_wh']}")
-        if stats["copied_wb"] > 0:
-            lines.append(f"  WB: {stats['copied_wb']}")
-        if stats["copied_ozon"] > 0:
-            lines.append(f"  Ozon: {stats['copied_ozon']}")
-        if stats["copied_unknown"] > 0:
-            lines.append(f"  Неопознанные: {stats['copied_unknown']}")
-        lines.append(f"Не скопировано: {stats['exists'] + stats['error']}")
-        if stats["exists"] > 0:
-            lines.append(f"  Уже существует: {stats['exists']}")
-        if stats["error"] > 0:
-            lines.append(f"  Ошибка копирования: {stats['error']}")
-        if stats["sellers_wb"] or stats["sellers_ozon"]:
-            lines.append("Продавцы:")
-            if stats["sellers_wb"]:
-                lines.append(
-                    f"  WB: {', '.join(sorted(stats['sellers_wb']))}"
+            # ---------- Фаза 4. Сбор unresolved + context_map. ----------
+            logger.report(
+                "\n==================== Этап: Сбор неизвестных ====================\n"
+            )
+            logger.info(
+                "\n==================== Этап: Сбор неизвестных ====================\n"
+            )
+
+            # R1: путь returns.txt готовим заранее — он нужен уже в фазе 5.
+            returns_txt_dir = PathManager.ensure_dir(
+                Path(ctx.target_dir) / ctx.date_str
+                / f"Возвратов_{ctx.date_str}" / "Отчёты"
+            )
+            returns_txt_path = returns_txt_dir / "возвраты.txt"
+
+            unresolved: dict = {}
+            context_map: dict = {}
+
+            # MP: WB/Ozon без продавца.
+            for src, file_type in detected.items():
+                if file_type not in ("wb", "ozon"):
+                    continue
+                src_path = Path(src)
+                seller = TextUtils.find_seller_by_file_name(
+                    src_path.stem.lower(), sellers,
                 )
-            if stats["sellers_ozon"]:
-                lines.append(
-                    f"  Ozon: {', '.join(sorted(stats['sellers_ozon']))}"
+                if seller is None:
+                    nk = TextUtils.normalize(src_path.stem)
+                    unresolved.setdefault(nk, []).append(src_path.stem)
+                    context_map.setdefault(nk, set()).add("mp")
+
+            # WH: листы без продавца.
+            wh_files = FileHelper.find_files_by_pattern(
+                ctx.reports_dir, "Склад_*.xlsx",
+            )
+            for wh_path in wh_files:
+                sheets = WarehouseReportWriter.scan(
+                    wh_path, sellers, logger,
                 )
-        logger.info("\n".join(lines))
+                for info in sheets:
+                    if info.seller is not None or info.is_empty:
+                        continue
+                    nk = TextUtils.normalize(info.sheet_name)
+                    unresolved.setdefault(nk, []).append(info.sheet_name)
+                    context_map.setdefault(nk, set()).add("wh")
 
-        # ---------- Фаза 4. Разбивка склада. ----------
-        logger.report(
-            "\n==================== Этап: Разбивка склада ====================\n"
-        )
-        logger.info(
-            "\n==================== Этап: Разбивка склада ====================\n"
-        )
-        logger.status("Разбивка складских отчётов по продавцам")
-        wh_stats = self._split_wh_reports(ctx, logger, sellers)
+            # Резолвер.
+            result = {
+                "total": 0, "resolved": 0,
+                "skipped": len(unresolved), "decisions": {},
+            }
+            if unresolved:
+                logger.status("Запрос решений по неизвестным именам")
+                if self._seller_unknown_resolver is None:
+                    logger.report(
+                        f"\nUI-резолвер не передан, {len(unresolved)} "
+                        f"неизвестных имён остаются без решения"
+                    )
+                else:
+                    try:
+                        result = self._seller_unknown_resolver(
+                            unresolved, context_map,
+                        )
+                    except Exception as e:
+                        logger.critical(
+                            f"Ошибка резолвера неизвестных имён: {e}",
+                            can_influence=False,
+                        )
+                        result = {
+                            "total": 0, "resolved": 0,
+                            "skipped": len(unresolved), "decisions": {},
+                        }
+                logger.info(
+                    f"\nРазрешение неизвестных имён: всего "
+                    f"{result['total']}, разрешено {result['resolved']}, "
+                    f"пропущено {result['skipped']}"
+                )
 
-        # ---------- Фаза 5. Чтение отчётов (единый batch). ----------
-        logger.report(
-            "\n==================== Этап: Чтение отчётов ====================\n"
-        )
-        logger.info(
-            "\n==================== Этап: Чтение отчётов ====================\n"
-        )
+            decisions = result.get("decisions", {})
 
-        kiz_by_seller: dict = {s.name: set() for s in sellers}
-        prices_by_seller: dict = {s.name: {} for s in sellers}
-        kiz_owners: dict = {}
-        missed_files: list = []
-        wb_sellers_with_kiz: set = set()
-        size_before = len(self.kiz_validator.storage.get_all())
-
-        with self.kiz_validator.batch():
-            # Порядок чтения важен: склад первый источник.
-            wh_result = self._read_wh_reports(ctx, sellers, logger)
-            wb_result = self._read_wb_reports(ctx, sellers, logger)
-            ozon_result = self._read_ozon_reports(ctx, sellers, logger)
-
-            # Мерж результатов в общие структуры.
-            self._merge_read_result(
-                wh_result, kiz_by_seller, prices_by_seller, kiz_owners,
+            # ---------- Фаза 5. Копирование WB/Ozon с decisions. ----------
+            logger.report(
+                "\n==================== Этап: Копирование отчётов МП ====================\n"
             )
-            self._merge_read_result(
-                wb_result, kiz_by_seller, prices_by_seller, kiz_owners,
-            )
-            self._merge_read_result(
-                ozon_result, kiz_by_seller, prices_by_seller, kiz_owners,
+            logger.info(
+                "\n==================== Этап: Копирование отчётов МП ====================\n"
             )
 
-            wb_sellers_with_kiz.update(
-                wb_result.get("sellers_with_kiz", set())
+            for src, file_type in detected.items():
+                if file_type not in ("wb", "ozon"):
+                    continue
+                src_path = Path(src)
+                norm_stem = TextUtils.normalize(src_path.stem)
+                decision = decisions.get(norm_stem)
+
+                logger.status(f"Обрабатывается: {src_path.name}")
+                logger.report(f"\nОбработка файла: {src_path.name}")
+
+                if file_type == "wb":
+                    r = self._copy_wb_file(
+                        src_path, ctx, logger, sellers,
+                        seller_counters, returns_txt_path, decision,
+                    )
+                else:
+                    r = self._copy_ozon_file(
+                        src_path, ctx, logger, sellers,
+                        seller_counters, returns_txt_path, decision,
+                    )
+
+                status = r.get("status")
+                rtype = r.get("type")
+                seller_name = r.get("seller_name")
+
+                if status == "copied":
+                    if rtype == "wb":
+                        stats["copied_wb"] += 1
+                        if seller_name:
+                            stats["sellers_wb"].add(seller_name)
+                    elif rtype == "ozon":
+                        stats["copied_ozon"] += 1
+                        if seller_name:
+                            stats["sellers_ozon"].add(seller_name)
+                    else:
+                        stats["copied_unknown"] += 1
+                elif status == "exists":
+                    stats["exists"] += 1
+                elif status == "garbage":
+                    stats["copied_garbage"] += 1
+                elif status == "returns":
+                    stats["processed_returns"] += 1
+                else:
+                    stats["error"] += 1
+
+            # Сводка копирования.
+            copied_total = (
+                    stats["copied_wb"] + stats["copied_ozon"]
+                    + stats["copied_wh"] + stats["copied_unknown"]
+                    + stats["copied_garbage"] + stats["processed_returns"]
             )
-            missed_files.extend(wh_result["missed"])
-            missed_files.extend(wb_result["missed"])
-            missed_files.extend(ozon_result["missed"])
+            lines = [f"Скопировано всего: {copied_total}"]
+            if stats["copied_wh"] > 0:
+                lines.append(f"  Склад (ЧЗ МП): {stats['copied_wh']}")
+            if stats["copied_wb"] > 0:
+                lines.append(f"  WB: {stats['copied_wb']}")
+            if stats["copied_ozon"] > 0:
+                lines.append(f"  Ozon: {stats['copied_ozon']}")
+            if stats["copied_unknown"] > 0:
+                lines.append(f"  Неопознанные: {stats['copied_unknown']}")
+            if stats["copied_garbage"] > 0:
+                lines.append(f"  Мусор: {stats['copied_garbage']}")
+            if stats["processed_returns"] > 0:
+                lines.append(f"  Возвраты: {stats['processed_returns']}")
+            lines.append(f"Не скопировано: {stats['exists'] + stats['error']}")
+            if stats["exists"] > 0:
+                lines.append(f"  Уже существует: {stats['exists']}")
+            if stats["error"] > 0:
+                lines.append(f"  Ошибка копирования: {stats['error']}")
+            if stats["sellers_wb"] or stats["sellers_ozon"]:
+                lines.append("Продавцы:")
+                if stats["sellers_wb"]:
+                    lines.append(
+                        f"  WB: {', '.join(sorted(stats['sellers_wb']))}"
+                    )
+                if stats["sellers_ozon"]:
+                    lines.append(
+                        f"  Ozon: {', '.join(sorted(stats['sellers_ozon']))}"
+                    )
+            logger.info("\n".join(lines))
 
-        # ---------- Фаза 6. Разрешение конфликтов. ----------
-        logger.report(
-            "\n==================== Этап: Разрешение конфликтов ====================\n"
-        )
-        logger.info(
-            "\n==================== Этап: Разрешение конфликтов ====================\n"
-        )
-        conflict_stats = self._resolve_kiz_conflicts(
-            kiz_owners, kiz_by_seller, sellers, logger,
-        )
+            # ---------- Фаза 6. Разбивка склада. ----------
+            logger.report(
+                "\n==================== Этап: Разбивка склада ====================\n"
+            )
+            logger.info(
+                "\n==================== Этап: Разбивка склада ====================\n"
+            )
+            logger.status("Разбивка складских отчётов по продавцам")
+            wh_stats = self._write_wh_reports(
+                ctx, logger, sellers, decisions, returns_txt_path,
+            )
 
-        # ---------- Фаза 7. Финализация. ----------
-        logger.report(
-            "\n==================== Этап: Финализация ====================\n"
-        )
-        logger.info(
-            "\n==================== Этап: Финализация ====================\n"
-        )
-        self._finalize_reports(
-            ctx, logger, sellers, kiz_by_seller, prices_by_seller,
-            wb_sellers_with_kiz, missed_files,
-            wh_result, wb_result, ozon_result, size_before,
-            conflict_stats, detected,
-        )
+            # ---------- Фаза 7. Чтение отчётов (единый batch). ----------
+            logger.report(
+                "\n==================== Этап: Чтение отчётов ====================\n"
+            )
+            logger.info(
+                "\n==================== Этап: Чтение отчётов ====================\n"
+            )
 
-        # ---------- Финал. ----------
-        logger.report("Подготовка завершена.")
-        logger.status("Подготовка завершена")
-        self.kiz_validator.load()
-        deleted = self.kiz_validator.clean_old_entries(months=1)
-        logger.info(f"Очистка старых записей: удалено {deleted}.")
-        logger.info("\n==================================================\n")
+            kiz_by_seller: dict = {s.name: set() for s in sellers}
+            prices_by_seller: dict = {s.name: {} for s in sellers}
+            kiz_owners: dict = {}
+            missed_files: list = []
+            wb_sellers_with_kiz: set = set()
+            size_before = len(self.kiz_validator.storage.get_all())
+
+            with self.kiz_validator.batch():
+                # Порядок чтения важен: склад первый источник.
+                wh_result = self._read_wh_reports(ctx, sellers, logger)
+                wb_result = self._read_wb_reports(ctx, sellers, logger)
+                ozon_result = self._read_ozon_reports(ctx, sellers, logger)
+
+                self._merge_read_result(
+                    wh_result, kiz_by_seller, prices_by_seller, kiz_owners,
+                )
+                self._merge_read_result(
+                    wb_result, kiz_by_seller, prices_by_seller, kiz_owners,
+                )
+                self._merge_read_result(
+                    ozon_result, kiz_by_seller, prices_by_seller, kiz_owners,
+                )
+
+                wb_sellers_with_kiz.update(
+                    wb_result.get("sellers_with_kiz", set())
+                )
+                missed_files.extend(wh_result["missed"])
+                missed_files.extend(wb_result["missed"])
+                missed_files.extend(ozon_result["missed"])
+
+            # ---------- Фаза 8. Разрешение конфликтов. ----------
+            logger.report(
+                "\n==================== Этап: Разрешение конфликтов ====================\n"
+            )
+            logger.info(
+                "\n==================== Этап: Разрешение конфликтов ====================\n"
+            )
+            conflict_stats = self._resolve_kiz_conflicts(
+                kiz_owners, kiz_by_seller, sellers, logger,
+            )
+
+            # ---------- Фаза 9. Финализация. ----------
+            logger.report(
+                "\n==================== Этап: Финализация ====================\n"
+            )
+            logger.info(
+                "\n==================== Этап: Финализация ====================\n"
+            )
+            self._finalize_reports(
+                ctx, logger, sellers, kiz_by_seller, prices_by_seller,
+                wb_sellers_with_kiz, missed_files,
+                wh_result, wb_result, ozon_result, size_before,
+                conflict_stats, detected, stats,
+            )
+
+            # ---------- Финал. ----------
+            logger.report("Подготовка завершена.")
+            logger.status("Подготовка завершена")
+            self.kiz_validator.load()
+            deleted = self.kiz_validator.clean_old_entries(months=1)
+            logger.info(f"Очистка старых записей: удалено {deleted}.")
+            logger.info("\n==================================================\n")
 
     # ============================================================
     # Приватные методы: опознание
@@ -360,8 +482,9 @@ class PreparationService:
         }
 
     def _copy_ozon_file(self, src_path, ctx, logger, sellers,
-                        seller_counters) -> dict:
-        """Копирует Ozon-отчёт под именем «Отчёт_OZON_{seller}_{date}»."""
+                        seller_counters, returns_txt_path,
+                        decision=None) -> dict:
+        """Копирует Ozon-отчёт (учитывая decision)."""
         seller = TextUtils.find_seller_by_file_name(
             src_path.stem.lower(), sellers,
         )
@@ -371,11 +494,63 @@ class PreparationService:
             safe_name = TextUtils.sanitize_filename(seller.name)
             logger.report(f"  Продавец: {seller.name}")
         else:
-            seller_key = src_path.stem
             seller_name = None
-            safe_name = TextUtils.sanitize_filename(src_path.stem)
-            logger.warning(f"\n{src_path.name}: продавец не определён")
-            logger.report(" Продавец не определён")
+            if decision is None:
+                seller_key = src_path.stem
+                safe_name = TextUtils.sanitize_filename(src_path.stem)
+                logger.warning(f"\n{src_path.name}: продавец не определён")
+                logger.report(" Продавец не определён")
+            elif decision[0] == "seller":
+                target = decision[1]
+                seller_key = target
+                seller_name = target
+                safe_name = TextUtils.sanitize_filename(target)
+                logger.report(f"  Продавец (по решению): {target}")
+            elif decision[0] == "garbage":
+                logger.report("  Мусор (по решению)")
+                return {"status": "garbage", "type": "ozon"}
+            elif decision[0] == "unknown":
+                safe_stem = TextUtils.sanitize_filename(src_path.stem)
+                new_name = FilenameUtils.format_with_extension(
+                    f"Неопознанный отчёт {safe_stem} {{date}}",
+                    ctx.date_str,
+                )
+                dst = ctx.reports_dir / new_name
+                result = FileHelper.copy_file_with_log(
+                    src_path, dst, logger,
+                    description="неопознанный отчёт", overwrite=False,
+                )
+                return {
+                    "status": result["status"],
+                    "type": "unknown",
+                    "seller_name": None,
+                    "dst_name": new_name,
+                }
+            elif decision[0] == "returns":
+                logger.report("  Возвраты (по решению)")
+                cells = []
+                wb = WorkbookOpener.open(
+                    src_path, logger=None, read_only=True,
+                )
+                if wb is not None:
+                    try:
+                        if "Отчет" in wb.sheetnames:
+                            sheet = wb["Отчет"]
+                            for row in sheet.iter_rows(values_only=True):
+                                # Индекс 8 — из FALLBACK_COLUMNS["kiz"].
+                                if len(row) > 8:
+                                    cells.append(row[8])
+                    finally:
+                        try:
+                            wb.close()
+                        except Exception:
+                            pass
+                ReturnsTxtWriter.append_cells(
+                    cells, returns_txt_path, logger,
+                )
+                return {"status": "returns", "type": "ozon"}
+            else:
+                return {"status": "error", "type": "ozon"}
 
         counter_key = (seller_key, "ozon")
         idx = seller_counters.get(counter_key, 0) + 1
@@ -460,39 +635,35 @@ class PreparationService:
     # Приватные методы: разбивка склада
     # ============================================================
 
-    def _split_wh_reports(self, ctx, logger, sellers) -> dict:
-        """Разбивает все «Склад_*.xlsx» по продавцам.
-
-        Вход:
-            ctx — TaskContext.
-            logger — LoggerV2.
-            sellers — список Seller.
-
-        Выход:
-            dict {"created", "appended", "skipped_empty", "skipped_unknown"}.
-        """
+    def _write_wh_reports(self, ctx, logger, sellers, decisions,
+                          returns_txt_path) -> dict:
+        """Второй проход по складским отчётам с учётом decisions."""
         wh_files = FileHelper.find_files_by_pattern(
             ctx.reports_dir, "Склад_*.xlsx",
         )
         totals = {
             "created": 0, "appended": 0,
-            "skipped_empty": 0, "skipped_unknown": 0,
+            "skipped_garbage": 0, "written_unknown": 0,
+            "written_returns": 0,
         }
         for file_path in wh_files:
-            result = WarehouseReportWriter.split(
-                file_path, ctx.reports_dir, sellers, ctx.date_str, logger,
+            result = WarehouseReportWriter.write(
+                file_path, decisions, returns_txt_path,
+                ctx.reports_dir, sellers, ctx.date_str, logger,
             )
             totals["created"] += result.get("created", 0)
             totals["appended"] += result.get("appended", 0)
-            totals["skipped_empty"] += result.get("skipped_empty", 0)
-            totals["skipped_unknown"] += result.get("skipped_unknown", 0)
+            totals["skipped_garbage"] += result.get("skipped_garbage", 0)
+            totals["written_unknown"] += result.get("written_unknown", 0)
+            totals["written_returns"] += result.get("written_returns", 0)
 
         logger.info("\n".join([
             "Разбивка склада:",
-            f"  Создано отчётов: {totals['created']}",
+            f"  Создано: {totals['created']}",
             f"  Дополнено: {totals['appended']}",
-            f"  Пустых листов пропущено: {totals['skipped_empty']}",
-            f"  Листов с неизвестным продавцом: {totals['skipped_unknown']}",
+            f"  Мусор: {totals['skipped_garbage']}",
+            f"  Неопознанных: {totals['written_unknown']}",
+            f"  Возвратов: {totals['written_returns']}",
         ]))
         return totals
 
@@ -887,7 +1058,8 @@ class PreparationService:
     def _finalize_reports(self, ctx, logger, sellers, kiz_by_seller,
                           prices_by_seller, wb_sellers_with_kiz,
                           missed_files, wh_result, wb_result, ozon_result,
-                          size_before, conflict_stats, detected) -> dict:
+                          size_before, conflict_stats, detected,
+                          stats) -> dict:
         """Сохранение цен, .txt, сводки, отчёт по базе.
 
         Вход:
@@ -1016,6 +1188,15 @@ class PreparationService:
             wh_result["added"] + wb_result["added"] + ozon_result["added"]
         )
         info_lines.append(f"  Всего операций записи: {total_ops}")
+        if stats.get("copied_garbage", 0) > 0:
+            info_lines.append(
+                f"  Мусор (не скопировано): {stats['copied_garbage']}"
+            )
+        if stats.get("processed_returns", 0) > 0:
+            info_lines.append(
+                f"  Возвратов (в returns.txt): "
+                f"{stats['processed_returns']}"
+            )
         delta = size_after - size_before
         delta_str = f"{'+' if delta >= 0 else ''}{delta}"
         info_lines.append(
@@ -1080,7 +1261,7 @@ class FilterPreFinalService:
         Вход:
             target_dir — корневая папка задачи.
             sellers — список Seller с восстановленными .brands
-                      (см. ChzMPWindow._current_sellers).
+                      (см. SellsFBSWindow._current_sellers).
 
         Выход: нет.
 

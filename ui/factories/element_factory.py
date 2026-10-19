@@ -27,7 +27,7 @@ class StatusLabel(QLabel):
         потока — Qt доставит его в главный через queued connection.
 
     Роль в программе:
-        Используется в окнах (ChzMPWindow, ReturnsWindow) для
+        Используется в окнах (SellsFBSWindow, ReturnsWindow) для
         коротких подсказок. Не путать со StatusLog — там QTextEdit
         для прокручиваемого лога.
 

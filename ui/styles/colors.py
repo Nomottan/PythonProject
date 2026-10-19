@@ -479,7 +479,7 @@ class ColorCalculator:
 
         Роль:
             Единая точка вычисления производных цветов от фона —
-            например, BG_COLOR окон (ChzMPWindow, ReturnsWindow,
+            например, BG_COLOR окон (SellsFBSWindow, ReturnsWindow,
             CompareWindow). Для окон альфа задаётся явно: без неё
             центральный виджет получает rgb(...) и Qt показывает
             окно прозрачнее, чем задумано.

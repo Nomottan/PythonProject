@@ -305,7 +305,7 @@ class StatusLogFactory:
         со стилем под фон окна.
 
     Роль в программе:
-        Используется в ChzMPWindow, CompareWindow, ReturnsWindow
+        Используется в SellsFBSWindow, CompareWindow, ReturnsWindow
         вместо самодельных QTextEdit с QSS. QSS собирается внутри
         самого StatusLog — здесь только прокси.
     """

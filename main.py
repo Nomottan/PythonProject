@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
 from PySide6.QtCore import QTimer, Qt
 
 from ui.windows import (
-    ChzMPWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
+    SellsFBSWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
     StringListDialog, PlannerWindow, KizBySellersWindow
 )
 from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
         )
 
         # --- Теги активности дочерних окон ---
-        self.chz_mp_window = None
+        self.sells_fbs_window = None
         self.sellers_window = None
         self.brands_window = None
         self.returns_window = None
@@ -181,7 +181,7 @@ class MainWindow(QMainWindow):
         _main_handlers = {
             "btn_sellers": "open_sellers_window",
             "btn_brands": "open_brands_window",
-            "btn_chz_mp": "open_chz_mp_window",
+            "btn_chz_mp": "open_sells_fbs_window",
             "btn_returns": "open_returns_window",
             "btn_kiz_by_sellers": "open_kiz_by_sellers_window",
             "btn_compare": "open_compare_window",
@@ -282,21 +282,20 @@ class MainWindow(QMainWindow):
     # 5. ОТКРЫТИЕ ДОЧЕРНИХ ОКОН
     # ============================================================
     @log_button_action(
-        "open_chz_mp_window",
+        "open_sells_fbs_window",
         "Ошибка при открытии окна 'Списание КИЗов': {e}",
     )
-    def open_chz_mp_window(self):
-        if self.chz_mp_window is None or not self.chz_mp_window.isVisible():
-            self.chz_mp_window = ChzMPWindow(
+    def open_sells_fbs_window(self):
+        if self.sells_fbs_window is None or not self.sells_fbs_window.isVisible():
+            self.sells_fbs_window = SellsFBSWindow(
                 self, log_manager_v2=self.log_manager_v2,
             )
-            WindowFactory.show_child_window(self, self.chz_mp_window)
-            self.logger.debug("open_chz_mp_window: окно создано заново")
+            WindowFactory.show_child_window(self, self.sells_fbs_window)
+            self.logger.debug("open_sells_fbs_window: окно создано заново")
         else:
-            self.chz_mp_window.raise_()
-            self.chz_mp_window.activateWindow()
-            # REPLACE: было "open_chz_mp_wi   ndow" — опечатка.
-            self.logger.debug("open_chz_mp_window: окно активировано")
+            self.sells_fbs_window.raise_()
+            self.sells_fbs_window.activateWindow()
+            self.logger.debug("open_sells_fbs_window: окно активировано")
 
     @log_button_action(
         "open_returns_window",
@@ -421,7 +420,7 @@ class MainWindow(QMainWindow):
             self.logger.debug("open_datetime_window: окно активировано")
 
     def resizeEvent(self, event):
-        for child in (self.chz_mp_window, self.sellers_window,
+        for child in (self.sells_fbs_window, self.sellers_window,
                       self.brands_window, self.returns_window,
                       self.compare_window, self.kiz_by_sellers_window,
                       self.planner_window):

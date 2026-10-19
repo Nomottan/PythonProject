@@ -269,6 +269,57 @@ class SellersBrandsService:
         target.keys.append(key)
         return self._save_brands(brands)
 
+    def add_key_to_seller(self, seller_name: str, key: str) -> bool:
+        """Добавляет сырой ключ key в seller.keys продавца seller_name.
+
+        Вход:
+            seller_name — точное имя продавца (без нормализации).
+            key — сырая строка-ключ.
+
+        Выход:
+            True — ключ добавлен или уже присутствует (цель достигнута).
+            False — валидация, поиск продавца или запись упали.
+
+        Роль:
+            Точное зеркало add_key_to_brand, но для Seller.
+            Точечная мутация одного продавца — точный поиск по имени,
+            дедупликация по нормализации, запись через
+            set_sellers_objects. В seller.keys попадает сырая строка
+            без нормализации.
+        """
+        if not isinstance(key, str) or TextUtils.normalize(key) == "":
+            if self._logger is not None:
+                self._logger.warning(
+                    f"add_key_to_seller: некорректный ключ ({key!r}), "
+                    f"продавец '{seller_name}'"
+                )
+            return False
+
+        sellers = self.get_sellers_objects()
+
+        target = None
+        for s in sellers:
+            if s.name == seller_name:
+                target = s
+                break
+
+        if target is None:
+            if self._logger is not None:
+                self._logger.warning(
+                    f"add_key_to_seller: продавец '{seller_name}' "
+                    f"не найден"
+                )
+            return False
+
+        normalized_key = TextUtils.normalize(key)
+        existing = {TextUtils.normalize(k) for k in target.keys}
+        if normalized_key in existing:
+            return True
+
+        target.keys.append(key)
+        self.set_sellers_objects(sellers)
+        return True
+
     def create_brand(self, name: str, keys: list[str],
                      requires_saving: bool = True) -> bool:
         """Создаёт новый бренд и сохраняет в config.json.

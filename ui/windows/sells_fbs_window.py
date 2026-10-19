@@ -29,9 +29,16 @@ from ui.factories.factories import (
 from ui.styles import ColorCalculator
 from ui.widgets.path_selector import PathSelector
 from ui.windows.shared_dialogs import (
-    PricesEditWindow, AveragePriceInputDialog, BrandsUnknownDialog,
-    SaleDuplicatePickerDialog,
+    PricesEditWindow, AveragePriceInputDialog, SaleDuplicatePickerDialog,
 )
+from ui.windows.unknown_resolver_dialog import (
+    UnknownResolverDialog, ObjectPickerDialog,
+)
+from ui.windows.brands_window import BrandEditDialog
+from ui.windows.message_dialog import NotificationDialog
+from models.models import Brand
+from utils.text_utils import TextUtils
+from utils.unknown_resolver import ResolverRouter
 from services.sells_fbs_service import (
     PreparationService,
     FilterPreFinalService, GenerateSalesService, FinalizePricesService,
@@ -39,7 +46,7 @@ from services.sells_fbs_service import (
 from utils.log_tools.decorators import log_button_action
 
 
-class ChzMPWindow(BaseServiceWindow):
+class SellsFBSWindow(BaseServiceWindow):
     """Окно пайплайна ЧЗ МП.
 
     Роль:
@@ -49,7 +56,7 @@ class ChzMPWindow(BaseServiceWindow):
         status_log; короткие подсказки — в status_label.
     """
 
-    LOGGER_SOURCE = "ChzMPWindow.chz_mp_window"
+    LOGGER_SOURCE = "SellsFBSWindow.sells_fbs_window"
     LOGGER_DOMAIN = "chz_mp"
 
     # BG_COLOR: r, g+g//5, 2b-b//5 от (50,50,50) → (50, 60, 90).
@@ -82,7 +89,7 @@ class ChzMPWindow(BaseServiceWindow):
             title="Списание проданных КИЗов",
             log_manager_v2=log_manager_v2,
         )
-
+        self._resolver_context_map: dict = {}
         # Специфичное состояние для диалога средней цены.
         self._price_response: int | None = None
 
@@ -293,7 +300,9 @@ class ChzMPWindow(BaseServiceWindow):
             return
 
         service = PreparationService(
-            self.main_window.kiz_validator, self.log_manager_v2,
+            self.main_window.kiz_validator,
+            self.log_manager_v2,
+            seller_unknown_resolver=self._seller_request_unknown_decision,
         )
         if self.logger:
             self.logger.debug("on_prepare: PreparationService создан")
@@ -437,35 +446,279 @@ class ChzMPWindow(BaseServiceWindow):
         Вход:
             brands_unknown — {норм_ключ: [сырая_1, ...]}.
         Выход:
-            dict от мастера ({"total", "resolved", "skipped"}),
-            либо None при ошибке (сервис обработает).
+            dict от мастера ({"total", "resolved", "skipped"}).
 
         Роль: делегирует открытие мастера в UI-поток через
               _run_in_ui_blocking. Вызывается из фонового потока
               сервиса — прямой показ QDialog там недопустим.
         """
         return self._run_in_ui_blocking(
-            lambda: self._open_brands_unknown_dialog(brands_unknown)
+            lambda: self._show_brand_resolver(brands_unknown)
         )
 
     @Slot(object)
-    def _open_brands_unknown_dialog(self, brands_unknown: dict) -> dict:
-        """Открывает мастер разрешения неизвестных брендов.
+    def _show_brand_resolver(self, brands_unknown: dict) -> dict:
+        """Открывает UnknownResolverDialog для брендов.
 
         Вход: brands_unknown — {норм_ключ: [сырая_1, ...]}.
-        Выход: агрегаты мастера ({"total", "resolved", "skipped"}).
+        Выход: агрегаты {"total", "resolved", "skipped"}.
 
-        Роль: создаёт BrandsUnknownDialog, открывает модально через
-              exec(), возвращает get_stats().
+        Роль: собирает actions для брендов, открывает мастер,
+              применяет результат через ResolverRouter.
         """
-        dialog = BrandsUnknownDialog(
+        service = self.main_window.sellers_brands_service
+        dialog = None
+
+        def _pick(nk, raws):
+            return self._pick_brand(nk, raws, parent=dialog)
+
+        def _edit(nk, raws):
+            return self._edit_brand_for_resolver(nk, raws, parent=dialog)
+
+        actions = ResolverRouter.build_brand_actions(
+            service=service,
+            pick_brand_cb=_pick,
+            edit_brand_cb=_edit,
+        )
+        dialog = UnknownResolverDialog(
             parent=self,
-            brands_unknown=brands_unknown,
-            sellers_brands_service=self.main_window.sellers_brands_service,
+            items=brands_unknown,
+            actions=actions,
+            get_label=lambda nk, raws: raws[0],
+            title="Неизвестные бренды",
             log_manager_v2=self.log_manager_v2,
         )
         dialog.exec()
-        return dialog.get_stats()
+        result = dialog.get_result()
+        return ResolverRouter.apply_result(
+            result, actions, items=brands_unknown, logger=self.logger,
+        )
+
+    def _seller_request_unknown_decision(self, unresolved: dict,
+                                         context_map: dict) -> dict:
+        """Callback от PreparationService: разрешить неизвестные имена.
+
+        Вход:
+            unresolved — {норм_ключ: [сырая_1, ...]}.
+            context_map — {норм_ключ: set{"mp", "wh"}}.
+
+        Выход:
+            dict {"total", "resolved", "skipped", "decisions"}.
+
+        Роль: сохраняет context_map для _format_seller_item_label,
+              делегирует открытие в UI-поток.
+        """
+        self._resolver_context_map = context_map
+        return self._run_in_ui_blocking(
+            lambda: self._show_seller_resolver(unresolved)
+        )
+
+    @Slot(object)
+    def _show_seller_resolver(self, unresolved: dict) -> dict:
+        """Открывает UnknownResolverDialog для продавцов.
+
+        Вход: unresolved — {норм_ключ: [сырая_1, ...]}.
+        Выход: агрегаты + decisions.
+
+        Роль: собирает actions для продавцов, открывает мастер,
+              применяет результат, формирует decisions.
+        """
+        service = self.main_window.sellers_brands_service
+        dialog = None
+
+        def _pick_special(nk, raws):
+            return self._pick_seller_with_special(nk, raws, parent=dialog)
+
+        def _pick_no_special(nk, raws):
+            return self._pick_seller_no_special(nk, raws, parent=dialog)
+
+        actions = ResolverRouter.build_seller_actions(
+            service=service,
+            pick_seller_with_special_cb=_pick_special,
+            pick_seller_no_special_cb=_pick_no_special,
+        )
+        dialog = UnknownResolverDialog(
+            parent=self,
+            items=unresolved,
+            actions=actions,
+            get_label=self._format_seller_item_label,
+            title="Неизвестные имена",
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        result = dialog.get_result()
+        stats = ResolverRouter.apply_result(
+            result, actions, items=unresolved, logger=self.logger,
+        )
+        stats["decisions"] = ResolverRouter.build_decisions_from_result(
+            result, self._resolver_context_map,
+        )
+        return stats
+
+    def _format_seller_item_label(self, norm_key: str,
+                                  raws: list) -> str:
+        """Форматирует лейбл неизвестного имени с контекстом.
+
+        Вход:
+            norm_key — нормализованный ключ.
+            raws — список сырых строк.
+        Выход: "сырое_имя (файл)" / "(лист склада)" / "(файл, лист склада)".
+
+        Роль: показывает пользователю, откуда пришло имя — из файла
+              МП или из листа склада.
+        """
+        contexts = self._resolver_context_map.get(norm_key, set())
+        if isinstance(contexts, str):
+            contexts = {contexts}
+        parts = []
+        if "mp" in contexts:
+            parts.append("файл")
+        if "wh" in contexts:
+            parts.append("лист склада")
+        suffix = f" ({', '.join(parts)})" if parts else ""
+        return f"{raws[0]}{suffix}"
+
+    # ============================================================
+    # ПИКЕРЫ (вызываются из UnknownResolverDialog)
+    # ============================================================
+
+    def _pick_brand(self, norm_key: str, raws: list, parent=None) -> Brand:
+        """Выбор существующего бренда из списка.
+
+        Вход:
+            norm_key — нормализованный ключ.
+            raws — список сырых строк.
+            parent — резолвер (для наследования цвета).
+
+        Выход: Brand.
+
+        Роль: открывает ObjectPickerDialog, ищет Brand по имени.
+              Если ничего не выбрано — ValueError (окно покажет
+              уведомление и останется на текущем объекте).
+        """
+        brands = (
+            self.main_window.sellers_brands_service.get_brands_objects()
+        )
+        items = {b.name: b.name for b in brands}
+        dialog = ObjectPickerDialog(
+            parent=parent,
+            items=items,
+            extra_items=None,
+            title="Выбор бренда",
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        selected = dialog.get_selected()
+        if selected is None:
+            raise ValueError("Бренд не выбран")
+        for b in brands:
+            if b.name == selected:
+                return b
+        raise ValueError("Бренд не найден")
+
+    def _edit_brand_for_resolver(self, norm_key: str, raws: list,
+                                 parent=None) -> Brand:
+        """Создание нового бренда через цикл редактирования.
+
+        Вход:
+            norm_key — нормализованный ключ.
+            raws — список сырых строк.
+            parent — резолвер (для наследования цвета).
+
+        Выход: созданный Brand.
+
+        Роль: переоткрывает BrandEditDialog, пока бренд не создан.
+              При was_deleted() — повтор. При пустом имени — повтор.
+              При ошибке create_brand — уведомление и повтор.
+        """
+        service = self.main_window.sellers_brands_service
+        while True:
+            new_brand = Brand(name=raws[0], keys=list(raws))
+            sellers = service.get_sellers_with_brands()
+            dialog = BrandEditDialog(
+                parent=parent,
+                brand=new_brand,
+                sellers=sellers,
+                main_window=self.main_window,
+                log_manager_v2=self.log_manager_v2,
+            )
+            dialog.exec()
+            if dialog.was_deleted():
+                continue
+            if (not new_brand.name
+                    or TextUtils.normalize(new_brand.name) == ""):
+                continue
+            if service.create_brand(
+                    new_brand.name, new_brand.keys,
+                    new_brand.requires_saving,
+            ):
+                return new_brand
+            NotificationDialog.notify(
+                self,
+                f"Не удалось создать бренд '{new_brand.name}'",
+                title_text="Ошибка", bg_color=self.bg_color,
+            )
+
+    def _pick_seller_with_special(self, norm_key: str, raws: list,
+                                  parent=None) -> str:
+        """Выбор продавца с опцией Мусор / Неопознанный / Возвраты.
+
+        Вход:
+            norm_key — нормализованный ключ.
+            raws — список сырых строк.
+            parent — резолвер.
+
+        Выход: имя продавца или спец-значение.
+        """
+        sellers = (
+            self.main_window.sellers_brands_service.get_sellers_objects()
+        )
+        items = {s.name: s.name for s in sellers}
+        extra_items = {
+            "garbage": "Мусор",
+            "unknown": "Неопознанный",
+            "returns": "Возвраты",
+        }
+        dialog = ObjectPickerDialog(
+            parent=parent,
+            items=items,
+            extra_items=extra_items,
+            title="Выбор продавца",
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        selected = dialog.get_selected()
+        if selected is None:
+            raise ValueError("Продавец не выбран")
+        return selected
+
+    def _pick_seller_no_special(self, norm_key: str, raws: list,
+                                parent=None) -> str:
+        """Выбор продавца без спец-опций (для «Добавить ключ»).
+
+        Вход:
+            norm_key — нормализованный ключ.
+            raws — список сырых строк.
+            parent — резолвер.
+
+        Выход: имя продавца.
+        """
+        sellers = (
+            self.main_window.sellers_brands_service.get_sellers_objects()
+        )
+        items = {s.name: s.name for s in sellers}
+        dialog = ObjectPickerDialog(
+            parent=parent,
+            items=items,
+            extra_items=None,
+            title="Выбор продавца",
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        selected = dialog.get_selected()
+        if selected is None:
+            raise ValueError("Продавец не выбран")
+        return selected
 
     # ============================================================
     # ОБРАБОТКА ДУБЛЕЙ В ПРОДАЖАХ
