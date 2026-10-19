@@ -1,99 +1,32 @@
 """
-Читатели отчётов МП: ЧЗ_МП, WB, Ozon.
+Утилиты отчётов пайплайна продаж: классификатор, читатели, писатель.
 
-Три класса-читателя плюс общая база:
-    ChzMpReportReader     — разбирает файлы ЧЗ_МП.
-    WBReportReader        — разбирает WB-отчёты МП.
-    OZONReportReader      — разбирает Ozon-отчёты.
-    MpReportTypeDetector  — определяет тип отчёта по первому листу.
+Состав:
+    FileTypeDetector        — определяет тип входного файла по числу листов.
+    WarehouseReportWriter   — разбивает складской отчёт по продавцам.
+    WarehouseReportReader   — читает разбитые складские отчёты.
+    WBReportReader          — читает WB-отчёты МП.
+    OZONReportReader        — читает Ozon-отчёты.
+    BaseMpReportReader      — общий каркас читателей WB/Ozon/склад.
 
 Роль в программе:
-    Читатели отвечают только за разбор Excel и возврат типизированных
-    данных. Batch-контекст KizStorage, запись .txt — ответственность
-    вызывающих сервисов. WB и Ozon наследуются от BaseMpReportReader,
-    который держит общий каркас; специфика — в наследниках.
+    Все утилиты отвечают только за разбор Excel и возврат
+    типизированных данных. Batch-контекст KizStorage, запись .txt —
+    ответственность вызывающих сервисов. WB, Ozon и Склад
+    наследуются от BaseMpReportReader, который держит общий каркас;
+    специфика — в наследниках.
 """
 
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+from typing import Optional
 
-from utils.excel_helper import ExcelHelper, WorkbookOpener
+from utils.excel_helper import ExcelHelper, WorkbookOpener, WorkbookWriter
 from utils.kiz_utils import KizUtils, KizOccurrences
 from utils.parsers import DateParser
 from utils.text_utils import TextUtils
 from services.kiz_validator import ValidationResult
-
-if TYPE_CHECKING:
-    from services.subservices.logging import LoggerV2
-
-
-@dataclass
-class ChzMpEntry:
-    """Одна запись о КИЗе, прочитанном из файла ЧЗ_МП.
-
-    Роль:
-        Промежуточный результат ChzMpReportReader.read. Вызывающий
-        код собирает из списка таких записей итоговые структуры
-        (kiz_by_seller, счётчики), фильтруя по result.
-
-    Поля:
-        seller_name — имя продавца, определённого по имени листа.
-        full_kiz — полный КИЗ, прошедший очистку.
-        storage_kiz — 31-символьный КИЗ для записи в хранилище.
-        result — результат KizValidator.validate_for_sale.
-        sheet_name — имя листа, с которого прочитан КИЗ.
-    """
-    seller_name: str
-    full_kiz: str
-    storage_kiz: str
-    result: ValidationResult
-    sheet_name: str
-
-@dataclass
-class ChzMpReadResult:
-    """Результат чтения одного файла ЧЗ_МП.
-
-    Поля:
-        entries — список прочитанных записей ChzMpEntry.
-        unknown_sheets — имена листов, для которых не нашёлся
-                         продавец.
-        reason — None при успешном чтении (даже если entries пуст).
-                 Непустой — файл пропущен целиком.
-    """
-    entries: List[ChzMpEntry]
-    unknown_sheets: List[str]
-    reason: Optional[str]
-
-
-class MpReportTypeDetector:
-    """Определяет тип отчёта МП по имени первого листа.
-
-    Роль:
-        WB-отчёты имеют первый лист «Сборочные задания»,
-        Ozon-отчёты — «Отчет». Нормализация имени листа — через
-        TextUtils.normalize + замена «ё» → «е» (на случай опечаток
-        и раскладки). Иначе — None, файл копируется как неопознанный.
-    """
-
-    @staticmethod
-    def detect(wb) -> Optional[str]:
-        """Возвращает "wb", "ozon" или None.
-
-        Вход: wb — открытый openpyxl workbook.
-        Выход: тип отчёта или None.
-        Роль: единая точка определения типа по первому листу.
-        """
-        if not wb.sheetnames:
-            return None
-        first = TextUtils.normalize(wb.sheetnames[0]).replace("ё", "е")
-        if first == "отчет":
-            return "ozon"
-        if first == "сборочные задания":
-            return "wb"
-        return None
-
 
 @dataclass
 class MpReportData:
@@ -142,6 +75,81 @@ class MpReadResult:
     data: Optional[MpReportData]
     reason: Optional[str]
 
+class FileTypeDetector:
+    """Классификатор входных Excel-файлов по числу листов.
+
+    Роль:
+        Единая точка определения типа файла до открытия его
+        содержимым. Вызывается из PreparationService перед
+        копированием файлов в рабочую папку.
+        Заменяет MpReportTypeDetector: тот смотрел первый лист
+        по имени («Сборочные задания» / «Отчет»), новый — по
+        общему количеству листов. Причина замены: складские
+        отчёты имеют 6+ листов и не отличимы по первому листу
+        от WB, а Ozon-отчёт всегда однолистовой.
+
+    Правило классификации:
+        n == 1  → "ozon",
+        n > 5   → "wh"  (склад),
+        иначе   → "wb"  (WB-отчёт МП).
+        Файл не открылся → None.
+
+    Все методы — @staticmethod, состояние не хранится.
+    """
+
+    @staticmethod
+    def detect(path) -> str | None:
+        """Определяет тип одного файла.
+
+        Вход:
+            path — путь к Excel-файлу.
+
+        Выход:
+            "ozon" | "wb" | "wh" | None.
+
+        Роль:
+            Открывает workbook через WorkbookOpener.open
+            (read_only=True, logger=None). Содержимое не читается,
+            берётся только количество листов. При любой ошибке
+            открытия WorkbookOpener возвращает None — тогда и
+            detect возвращает None (файл считается неопознанным).
+        """
+        wb = WorkbookOpener.open(path, logger=None, read_only=True)
+        if wb is None:
+            return None
+        try:
+            n = len(wb.sheetnames)
+            if n == 1:
+                return "ozon"
+            if n > 5:
+                return "wh"
+            return "wb"
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def detect_all(files) -> dict:
+        """Определяет типы для списка файлов за один проход.
+
+        Вход:
+            files — итерируемое путей к Excel-файлам.
+
+        Выход:
+            dict {path: "wb" | "ozon" | "wh" | None}.
+            Ключ — исходное значение из files (str или Path).
+            Порядок ключей сохраняется как в files.
+
+        Роль:
+            Один проход по списку; каждый файл открывается
+            ровно один раз (внутри detect).
+        """
+        result: dict = {}
+        for path in files:
+            result[path] = FileTypeDetector.detect(path)
+        return result
 
 class BaseMpReportReader:
     """База для читателей отчётов МП (WB, Ozon).
@@ -434,128 +442,256 @@ class BaseMpReportReader:
             f"    транслитерировано {stats['transliterated']}"
         )
 
-
-class ChzMpReportReader:
-    """Читатель файлов ЧЗ_МП.
+class WarehouseReportReader(BaseMpReportReader):
+    """Читатель разбитых складских отчётов «Отчёт_склада_*».
 
     Роль:
-        Обрабатывает один файл ЧЗ_МП: находит продавца по имени
-        листа, читает столбец КИЗ, чистит и валидирует каждое
-        значение. Возвращает список записей ChzMpEntry. Управляет
-        статистикой KizUtils (start_stats / pop_stats).
+        Разбирает файл, подготовленный WarehouseReportWriter:
+        один лист «Склад», все непустые ячейки исходного склада
+        построчно в столбце B. Каждая ячейка — потенциальный КИЗ.
+        Продавец определён по имени файла (оно сформировано из
+        seller.name). Даты из строк не извлекаются — склад не
+        содержит даты продажи, при валидации применяется fallback
+        «сегодня».
+
+    Отличия от WB/Ozon:
+        _REQUIRED_SHEETS пусто — проверять наличие конкретного
+        листа не нужно, файл однолистовой по конструкции.
+        COLLECT_PRICES=False — цены склад не содержит.
+        _find_seller переопределён: имя файла построено из
+        seller.name, а базовый поиск идёт по seller.keys и
+        в этом случае не находит продавца.
+
+    Все методы — classmethod, как в BaseMpReportReader.
     """
 
-    @staticmethod
-    def read(report_path, sellers, kiz_validator,
-             logger: "LoggerV2") -> ChzMpReadResult:
-        """Читает один файл ЧЗ_МП.
+    _REQUIRED_SHEETS = ()
+    COLLECT_PRICES = False
+    _DESCRIPTION = "отчёт склада"
+
+    @classmethod
+    def _find_seller(cls, report_path, sellers, logger):
+        """Ищет продавца по имени файла «Отчёт_склада_{safe}_{date}.xlsx».
 
         Вход:
-            report_path — путь к файлу (.xlsx).
+            report_path — путь к файлу.
             sellers — список Seller.
-            kiz_validator — KizValidator для валидации КИЗов.
-            logger — LoggerV2 для пошаговых и сводных сообщений.
-
-        Выход:
-            ChzMpReadResult:
-                entries — валидированные записи ChzMpEntry.
-                unknown_sheets — имена листов, для которых не
-                                 нашёлся продавец.
-                reason — None при успешном чтении (даже если
-                         entries пуст). "файл не открылся", если
-                         WorkbookOpener не смог открыть файл.
+            logger — LoggerV2.
 
         Роль:
-            Один файл — один вызов. Batch-контекст KizStorage
-            вызывающий код открывает снаружи. Внутри читателя
-            статистика KizUtils включается на входе и сбрасывается
-            в finally — независимо от того, чем закончилось чтение.
+            Основной путь — TextUtils.find_seller_by_file_name
+            по seller.keys. Он работает для большинства имён,
+            но у файла склада имя построено из seller.name через
+            sanitize_filename — без ключей бренда. Поэтому при
+            промахе разбираем stem: убираем префикс
+            «Отчёт_склада_» и суффикс «_{D}_{M}_{YYYY}»,
+            остаток сравниваем с sanitize_filename(s.name) для
+            каждого продавца. Первое совпадение выигрывает.
+            Логирование — как в базе.
         """
-        entries: List[ChzMpEntry] = []
-        unknown_sheets: List[str] = []
-        logger.report(f"Обработка ЧЗ_МП: {Path(report_path).name}")
+        report_path = Path(report_path)
 
-        wb = WorkbookOpener.open(
-            report_path, logger=logger, description="ЧЗ_МП",
-            read_only=True,
+        seller = TextUtils.find_seller_by_file_name(
+            report_path.stem.lower(), sellers,
         )
-        if wb is None:
-            return ChzMpReadResult(
-                entries=[], unknown_sheets=[],
-                reason="файл не открылся",
-            )
+        if seller is not None:
+            logger.report(f"  Продавец определён: {seller.name}")
+            return seller
 
-        KizUtils.start_stats()
-        try:
-            for sheet_name in wb.sheetnames:
-                logger.status(
-                    f"Идёт обработка листа {sheet_name} отчёта "
-                    f"со склада {Path(report_path).name}"
-                )
-                seller = ExcelHelper.find_seller_by_sheet_name(
-                    wb, sellers, sheet_name
-                )
-                if seller is None:
-                    logger.report(
-                        f"  Лист '{sheet_name}' не соответствует ни одному "
-                        f"продавцу – пропущен"
-                    )
-                    unknown_sheets.append(sheet_name)
-                    continue
+        # Fallback: разбор имени файла.
+        stem = report_path.stem
+        prefix = "Отчёт_склада_"
+        if stem.startswith(prefix):
+            middle = stem[len(prefix):]
+            # Отрезаем суффикс _D_M_YYYY (см. TaskContext.date_str).
+            parts = middle.rsplit("_", 3)
+            if len(parts) == 4:
+                middle = parts[0]
+            for s in sellers:
+                if middle == TextUtils.sanitize_filename(s.name):
+                    logger.report(f"  Продавец определён: {s.name}")
+                    return s
 
-                sheet = wb[sheet_name]
-                raw_kiz_list = ExcelHelper.read_column_values(
-                    sheet, col_index=1, start_row=1
-                )
-                for raw_kiz in raw_kiz_list:
-                    full_cleaned_list = KizUtils.clean_kiz_full(
-                        raw_kiz, logger=logger
-                    )
-                    if not full_cleaned_list:
-                        logger.report(
-                            f"    Некорректный КИЗ (очистка не дала "
-                            f"результатов): {str(raw_kiz)[:50]}..."
-                        )
+        logger.report("  Не удалось определить продавца – пропущен")
+        return None
+
+    @classmethod
+    def _load_occurrences(cls, wb, logger) -> tuple:
+        """Читает все непустые ячейки всех листов.
+
+        Вход:
+            wb — открытый workbook (ожидается один лист «Склад»).
+            logger — LoggerV2.
+
+        Выход:
+            (KizOccurrences, skipped_by_type).
+
+        Роль:
+            Складской отчёт после WarehouseReportWriter содержит
+            КИЗы в столбце B, каждый в отдельной строке. Но
+            структура может быть иной (другой склад), поэтому
+            сканируем все ячейки без привязки к столбцу.
+            KizUtils.clean_kiz_full чистит ячейку, возвращает
+            список полных КИЗов; для каждого — storage_kiz через
+            clean_kiz_for_storage. sort_value и price = None:
+            даты продажи в складе нет, цены тоже.
+        """
+        occurrences = KizOccurrences()
+        skipped_by_type: dict = {}
+
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            for row in sheet.iter_rows(values_only=True):
+                for cell in row:
+                    if cell is None:
                         continue
-
-                    for full_kiz in full_cleaned_list:
+                    raw = str(cell).strip()
+                    if not raw:
+                        continue
+                    full_list = KizUtils.clean_kiz_full(
+                        raw, logger=logger,
+                    )
+                    if not full_list:
+                        continue
+                    for full_kiz in full_list:
                         storage_list = KizUtils.clean_kiz_for_storage(
-                            full_kiz, logger=logger
+                            full_kiz, logger=logger,
                         )
                         if not storage_list:
                             continue
                         storage_kiz = storage_list[0]
-                        result = kiz_validator.validate_for_sale(storage_kiz)
-                        entries.append(ChzMpEntry(
-                            seller_name=seller.name,
-                            full_kiz=full_kiz,
-                            storage_kiz=storage_kiz,
-                            result=result,
-                            sheet_name=sheet_name,
-                        ))
-                logger.report(
-                    f"  Лист '{sheet_name}' → продавец '{seller.name}': "
-                    f"обработано {len(raw_kiz_list)} записей"
+                        occurrences.add(
+                            storage_kiz, full_kiz, None, None,
+                        )
+
+        return occurrences, skipped_by_type
+
+    @classmethod
+    def _get_sort_key(cls, entry, dates) -> None:
+        """Ключ сортировки для склада — None.
+
+        Роль:
+            Даты продажи в складском отчёте нет. pick_latest
+            выберет любое вхождение (все None), sale_date_str
+            останется None, и validate_for_sale подставит
+            fallback «сегодня». Отдельная логика сортировки
+            не нужна.
+        """
+        return None
+
+
+class WarehouseReportWriter:
+    """Разбивка складского отчёта по продавцам.
+
+    Роль:
+        Берёт один исходный .xlsx (склад ЧЗ МП), проходит по
+        всем листам, определяет продавца по имени листа и
+        складывает содержимое в отдельный файл на продавца
+        в папке «Отчёты».
+
+    Формат записи:
+        Все непустые ячейки листа — построчно слева направо,
+        сверху вниз — каждая в отдельную строку столбца B.
+        Шапки нет. Порядок ячеек — как их выдаёт openpyxl
+        при обходе iter_rows(values_only=True).
+
+    Имена файлов:
+        "Отчёт_склада_{safe_name}_{date_str}.xlsx",
+        где safe_name — TextUtils.sanitize_filename(seller.name).
+        Если файл уже есть — дополняется через WorkbookWriter.append_rows,
+        иначе создаётся через WorkbookWriter.create.
+
+    Все методы — @staticmethod, состояние не хранится.
+    """
+
+    @staticmethod
+    def split(source_path, reports_dir, sellers, date_str, logger) -> dict:
+        """Разбивает один складской отчёт по продавцам.
+
+        Вход:
+            source_path — путь к исходному складскому .xlsx.
+            reports_dir — папка «Отчёты» рабочей папки задачи.
+            sellers — список Seller для сопоставления с именами листов.
+            date_str — строка даты задачи ("D_M_YYYY") для имени файла.
+            logger — LoggerV2.
+
+        Выход:
+            dict {"created", "appended", "skipped_empty", "skipped_unknown"}:
+                created — сколько новых файлов продавцов создано,
+                appended — сколько файлов дополнено,
+                skipped_empty — сколько листов пусты и пропущены,
+                skipped_unknown — сколько листов без продавца.
+            При неоткрывшемся исходнике — все значения нули.
+
+        Роль:
+            Единая точка разбивки. Покупателя/листы проверять
+            снаружи не нужно — метод сам считает статистику.
+            Workbook закрывается в finally.
+        """
+        stats = {
+            "created": 0,
+            "appended": 0,
+            "skipped_empty": 0,
+            "skipped_unknown": 0,
+        }
+
+        wb = WorkbookOpener.open(
+            source_path, logger=logger, description="склад",
+            read_only=True,
+        )
+        if wb is None:
+            return stats
+
+        try:
+            for sheet_name in wb.sheetnames:
+                seller = ExcelHelper.find_seller_by_sheet_name(
+                    wb, sellers, sheet_name,
                 )
+                if seller is None:
+                    stats["skipped_unknown"] += 1
+                    continue
+
+                sheet = wb[sheet_name]
+                values: list = []
+                for row in sheet.iter_rows(values_only=True):
+                    for cell in row:
+                        if cell is None:
+                            continue
+                        if isinstance(cell, str) and not cell.strip():
+                            continue
+                        values.append(cell)
+
+                if not values:
+                    stats["skipped_empty"] += 1
+                    continue
+
+                safe_name = TextUtils.sanitize_filename(seller.name)
+                file_name = f"Отчёт_склада_{safe_name}_{date_str}.xlsx"
+                dst = reports_dir / file_name
+                rows = [(v,) for v in values]
+
+                if dst.exists():
+                    WorkbookWriter.append_rows(
+                        dst, rows, logger=logger,
+                    )
+                    stats["appended"] += 1
+                else:
+                    WorkbookWriter.create(
+                        dst, headers=None, rows=rows,
+                        sheet_name="Склад", logger=logger,
+                    )
+                    stats["created"] += 1
         finally:
             try:
                 wb.close()
             except Exception:
                 pass
-            stats = KizUtils.pop_stats()
-            logger.info(
-                f"\nЧЗ_МП {Path(report_path).name}: \n"
-                f"    успешно: {stats['processed']}\n"
-                f"    отброшено коротких: {stats['dropped_short']}\n"
-                f"    без '01': {stats['dropped_no_01']}, "
-                f"    транслитерировано: {stats['transliterated']}"
-            )
 
-        return ChzMpReadResult(
-            entries=entries,
-            unknown_sheets=unknown_sheets,
-            reason=None,
-        )
+        return stats
+
+
+
+
 
 class WBReportReader(BaseMpReportReader):
     """Читатель WB-отчётов МП.

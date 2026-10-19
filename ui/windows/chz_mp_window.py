@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QHBoxLayout, QVBoxLayout,
+    QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy
 )
 
 from ui.base.base_service_window import BaseServiceWindow
@@ -33,7 +33,7 @@ from ui.windows.shared_dialogs import (
     SaleDuplicatePickerDialog,
 )
 from services.sells_fbs_service import (
-    PreparationService, ExportKizService,
+    PreparationService,
     FilterPreFinalService, GenerateSalesService, FinalizePricesService,
 )
 from utils.log_tools.decorators import log_button_action
@@ -62,12 +62,10 @@ class ChzMPWindow(BaseServiceWindow):
 
     PIPELINE_BUTTONS = (
         "btn_prepare",
-        "btn_export_kiz",
         "btn_filter_prefinal",
         "btn_generate_sales",
         "btn_finalize_prices",
-        "btn_fbs",
-        "btn_reports",
+        "btn_files",
     )
 
     def __init__(self, parent=None, log_manager_v2=None):
@@ -88,27 +86,14 @@ class ChzMPWindow(BaseServiceWindow):
         # Специфичное состояние для диалога средней цены.
         self._price_response: int | None = None
 
-        # ---------- КНОПКИ-ИНДИКАТОРЫ ----------
-        _indicator_configs = [
-            ("btn_fbs", "Отчёты с FBS", (30, 20, 35, 0.3)),
-            ("btn_reports", "Отчёты с МП", (30, 20, 35, 0.3)),
-        ]
-        ButtonFactory.create_buttons_from_config(self, _indicator_configs)
-
-        # ---------- СПИСКИ ФАЙЛОВ (с крестиками) ----------
-        self.list_fbs = ListWidgetFactory.create_file_list_widget(
-            self,
-            fixed_width=105,
-            bg_color=(30, 20, 35, 0.3),
-            text_color=None,
-            font_size=10,
+        # ---------- ОДНА КНОПКА И ОДИН СПИСОК ФАЙЛОВ ----------
+        self.btn_files = ButtonFactory.create_button(
+            self, "Файлы", (30, 20, 35, 0.3),
+            padding="4px 8px", fixed_size=(180, 24),
         )
-        self.list_reports = ListWidgetFactory.create_file_list_widget(
-            self,
-            fixed_width=105,
-            bg_color=(30, 20, 35, 0.3),
-            text_color=None,
-            font_size=10,
+        self.list_files = ListWidgetFactory.create_file_list_widget(
+            self, fixed_width=180, bg_color=(30, 20, 35, 0.3),
+            text_color=None, font_size=10,
         )
 
         # ---------- ОПИСАНИЕ ----------
@@ -116,16 +101,13 @@ class ChzMPWindow(BaseServiceWindow):
             self,
             text=(
                 "Подготовка отчётов по продавцам для вывода КИЗов из оборота\n"
-                "Загрузи файлы и отчёты выше\n"
-                "Шаг 1: Нажми Подготовка. Файлы будут скопированы в рабочую директорию, оригиналы будут нетронуты\n"
-                "Шаг 2: Нажми Выгрузка для обработки. Будут созданы текстовые файлы\n"
+                "Загрузи файлы и отчёты\n"
+                "Шаг 1: Нажми Подготовка. Файлы будут скопированы и разобраны в рабочую директорию, оригиналы нетронуты\n"
                 "Проведи все файлы через BestMark в Excell файлы сохранив названия\n"
-                "Шаг 3: Нажми Сбор данных. Файлы будут очищены от некорректных статусов и владельцев\n"
-                "Шаг 4: Нажми Продажи. Будут собраны файлы для продаж продавцам не их КИЗов\n"
-                "Проведи продажи через ЭДО\n"
-                "Шаг 5: Нажми установка Цен.\n"
-                "Будут использованы цены из Отчётов МП, а остальные заполняться случайным ценами от средней\n"
-                "После выводи их из оборота"
+                "Шаг 2: Нажми Сбор данных. Файлы будут очищены от некорректных статусов и владельцев\n"
+                "Шаг 3: Нажми Продажи. Будут собраны файлы для продаж продавцам не их КИЗов\n"
+                "Шаг 4: Нажми Установка цен.\n"
+                "Проведи продажи через ЭДО. После выводи их из оборота"
             ),
             bg_color=(0, 0, 0, 0),
             padding="0px",
@@ -133,109 +115,123 @@ class ChzMPWindow(BaseServiceWindow):
             alignment=Qt.AlignCenter,
             word_wrap=True,
         )
-
+        self.desc_label.setSizePolicy(
+            QSizePolicy.Preferred, QSizePolicy.Ignored,
+        )
+        self.desc_label.setMinimumHeight(0)
         # ---------- ВЫБОР ПАПКИ ----------
         self.path_selector = PathSelector(
             self,
             initial_path=self.target_dir,
             dialog_title="Выберите целевую папку",
         )
+        self.path_selector.setFixedWidth(370)
         self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
         # ---------- КНОПКИ ДЕЙСТВИЙ ----------
         _action_configs = [
-            ("btn_prepare",         "Подготовка",             (80, 90, 120),  "8px 16px", (180, 35)),
-            ("btn_export_kiz",      "Выгрузка для обработки", (70, 100, 120), "8px 16px", (180, 35)),
-            ("btn_filter_prefinal", "Сбор данных",            (60, 110, 120), "8px 16px", (180, 35)),
-            ("btn_generate_sales",  "Продажи",                (50, 120, 120), "8px 16px", (180, 35)),
-            ("btn_finalize_prices", "Установка цен",          (40, 130, 120), "8px 16px", (180, 35)),
-            ("btn_prices",          "Цены",                   (40, 40, 40),   "2px 2px",  (35, 20)),
+            ("btn_prepare", "Подготовка", (80, 90, 120), "8px 16px", (180, 35)),
+            ("btn_filter_prefinal", "Сбор данных", (60, 110, 120), "8px 16px", (180, 35)),
+            ("btn_generate_sales", "Продажи", (50, 120, 120), "8px 16px", (180, 35)),
+            ("btn_finalize_prices", "Установка цен", (40, 130, 120), "8px 16px", (180, 35)),
+            ("btn_prices", "Цены", (40, 40, 40), "2px 2px", (35, 20)),
         ]
         _action_handlers = {
-            "btn_prepare":          "on_prepare",
-            "btn_export_kiz":       "on_export_kiz",
-            "btn_filter_prefinal":  "on_filter_prefinal",
-            "btn_generate_sales":   "on_generate_sales",
-            "btn_finalize_prices":  "on_finalize_prices",
-            "btn_prices":           "on_open_prices_window",
+            "btn_prepare": "on_prepare",
+            "btn_filter_prefinal": "on_filter_prefinal",
+            "btn_generate_sales": "on_generate_sales",
+            "btn_finalize_prices": "on_finalize_prices",
+            "btn_prices": "on_open_prices_window",
         }
         ButtonFactory.create_buttons_from_config(
             self, _action_configs, _action_handlers,
         )
-
-        # Все кнопки шагов изначально отключены, кроме подготовки.
-        self.btn_export_kiz.setEnabled(False)
-        self.btn_filter_prefinal.setEnabled(False)
-        self.btn_generate_sales.setEnabled(False)
-        self.btn_finalize_prices.setEnabled(False)
-
-        # ---------- МАКЕТ ----------
-        center_layout = QVBoxLayout()
-        center_layout.setSpacing(10)
-        center_layout.setAlignment(Qt.AlignCenter)
-
-        headers_container = LayoutFactory.create_row(
-            self, self.btn_fbs, self.btn_reports, fixed_width=365,
-        )
-        center_layout.addWidget(headers_container, alignment=Qt.AlignCenter)
-
-        lists_container = LayoutFactory.create_row(
-            self, self.list_fbs, self.list_reports, fixed_width=365,
-        )
-        center_layout.addWidget(lists_container, alignment=Qt.AlignCenter)
-
-        center_layout.addWidget(self.desc_label)
-        center_layout.addWidget(self.path_selector)
-        center_layout.addWidget(self.status_label)
-
-        row1 = LayoutFactory.create_row(
-            self, self.btn_prepare, self.btn_export_kiz,
-            self.btn_filter_prefinal, spacing=8,
-        )
-        center_layout.addWidget(row1)
-
-        row2 = LayoutFactory.create_row(
-            self, self.btn_generate_sales, self.btn_finalize_prices,
-            self.btn_prices, spacing=8,
-        )
-        center_layout.addWidget(row2)
-
-        center_layout.addWidget(self.status_log)
-
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addStretch()
         self.btn_accumulate = ButtonFactory.create_button(
             self, "Собрать продажи", (60, 90, 120, 0.8),
             padding="8px 16px", fixed_size=(160, 35),
         )
-        # on_accumulate_sales унаследован от BaseServiceWindow.
+        # Все кнопки шагов изначально отключены, кроме подготовки.
+        self.btn_filter_prefinal.setEnabled(False)
+        self.btn_generate_sales.setEnabled(False)
+        self.btn_finalize_prices.setEnabled(False)
+
+
+        # ---------- МАКЕТ ----------
+        center_layout = QVBoxLayout()
+        center_layout.setSpacing(10)
+
+        # Верх: описание и выбор папки.
+        center_layout.addWidget(self.desc_label)
+        center_layout.addWidget(self.path_selector, alignment=Qt.AlignCenter)
+
+        # Две колонки: слева статус-строка и кнопки этапов,
+        # справа кнопка и список файлов.
+        columns_layout = QHBoxLayout()
+        columns_layout.setSpacing(10)
+        columns_layout.setAlignment(Qt.AlignCenter)
+
+        left_widget = QWidget()
+        left_widget.setFixedWidth(180)
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+        # Статус-строка сверху, на одной линии с btn_files справа.
+        self.status_label.setMinimumHeight(28)
+        left_layout.addWidget(self.status_label)
+        left_layout.addWidget(self.btn_prepare)
+        left_layout.addWidget(self.btn_filter_prefinal)
+        left_layout.addWidget(self.btn_generate_sales)
+        left_layout.addWidget(self.btn_finalize_prices)
+        left_layout.addWidget(self.btn_prices)
+        left_layout.addStretch()
+
+        right_widget = QWidget()
+        right_widget.setFixedWidth(180)
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(5)
+        right_layout.addWidget(self.btn_files)
+        right_layout.addWidget(self.list_files)
+        right_layout.addStretch()
+
+        columns_layout.addWidget(left_widget)
+        columns_layout.addWidget(right_widget)
+
+        columns_row = QHBoxLayout()
+        columns_row.addStretch()
+        columns_row.addLayout(columns_layout)
+        columns_row.addStretch()
+        center_layout.addLayout(columns_row)
+
+        # Растяжка: прижимает лог и «Собрать продажи» к низу.
+        center_layout.addStretch(1)
+
+        # Низ: лог и кнопка «Собрать продажи».
+        center_layout.addWidget(self.status_log)
+
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
         self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
         bottom_layout.addWidget(self.btn_accumulate)
         center_layout.addLayout(bottom_layout)
 
-        center_layout.addStretch(1)
         self.main_layout.addLayout(center_layout)
 
-        # Подключение индикаторов к выбору файлов.
-        self.btn_fbs.clicked.connect(self.select_fbs_files)
-        self.btn_reports.clicked.connect(self.select_report_files)
-
-        if self.logger:
-            self.logger.debug("ChzMPWindow.__init__: окно инициализировано")
+        # Кнопка выбора входных файлов.
+        self.btn_files.clicked.connect(self.select_files)
 
     # ============================================================
     # ХУКИ БАЗОВОГО КЛАССА
     # ============================================================
 
     def _on_target_dir_changed_hook(self) -> None:
-        """Сброс кнопок шагов 2–5 при смене папки.
+        """Сброс кнопок шагов 2–4 при смене папки.
 
         Вход: нет.
         Выход: нет.
         Роль: базовый _on_target_dir_changed уже очистил status_log
               и обновил target_dir; здесь — только сброс кнопок.
         """
-        self.btn_export_kiz.setEnabled(False)
         self.btn_filter_prefinal.setEnabled(False)
         self.btn_generate_sales.setEnabled(False)
         self.btn_finalize_prices.setEnabled(False)
@@ -258,45 +254,28 @@ class ChzMPWindow(BaseServiceWindow):
         )
 
     def cleanup(self) -> None:
-        """Сброс списков файлов при закрытии окна."""
-        self.list_fbs.clear_files()
-        self.list_reports.clear_files()
+        """Сброс списка файлов при закрытии окна."""
+        self.list_files.clear_files()
 
     # ============================================================
     # ВЫБОР ФАЙЛОВ
     # ============================================================
 
-    @log_button_action("btn_fbs", "Ошибка при выборе файлов ЧЗ МП: {e}")
-    def select_fbs_files(self) -> None:
-        """Открывает диалог выбора файлов ЧЗ МП.
+    @log_button_action("btn_files", "Ошибка при выборе файлов: {e}")
+    def select_files(self) -> None:
+        """Открывает диалог выбора входных файлов (отчёты со склада, wb и ozon).
 
-        Роль: тонкая обёртка над _select_multiple_files. Файлы
-              добавляются в list_fbs через FileListWidget.add_file.
+        Роль: единая точка выбора. Файлы попадают в list_files
+              через FileListWidget.add_file, тип определяется
+              позже — на шаге «Подготовка».
         """
         self._select_multiple_files(
-            config_key="last_fbs_dir",
-            title="Выберите файлы ЧЗ МП",
+            config_key="last_files_dir",
+            title="Выберите файлы",
             filter="Excel (*.xlsx *.xls)",
-            list_widget=self.list_fbs,
+            list_widget=self.list_files,
             on_success=lambda added: self.set_info(
-                f"Добавлено {len(added)} файлов ЧЗ МП"
-            ),
-        )
-
-    @log_button_action("btn_reports", "Ошибка при выборе отчётов МП: {e}")
-    def select_report_files(self) -> None:
-        """Открывает диалог выбора отчётов МП.
-
-        Роль: тонкая обёртка над _select_multiple_files. Файлы
-              добавляются в list_reports через FileListWidget.add_file.
-        """
-        self._select_multiple_files(
-            config_key="last_mp_dir",
-            title="Выберите файлы отчётов МП",
-            filter="Excel (*.xlsx *.xls)",
-            list_widget=self.list_reports,
-            on_success=lambda added: self.set_info(
-                f"Добавлено {len(added)} отчётов МП"
+                f"Добавлено {len(added)} файлов"
             ),
         )
 
@@ -306,11 +285,11 @@ class ChzMPWindow(BaseServiceWindow):
 
     @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
     def on_prepare(self) -> None:
-        """Шаг 1: подготовка — копирование файлов в рабочую папку."""
+        """Шаг 1: подготовка + разбор отчётов одним сервисом."""
         if not self._precheck_target_dir():
             return
-        if not self.list_fbs.get_files() and not self.list_reports.get_files():
-            self.set_info("Как насчёт добавить хоть один отчётик?")
+        if not self.list_files.get_files():
+            self.set_info("Как насчёт добавить хоть один файл?")
             return
 
         service = PreparationService(
@@ -322,41 +301,16 @@ class ChzMPWindow(BaseServiceWindow):
         self._run_async_step(
             service=service,
             target_method=service.prepare,
-            kwargs={
-                "fbs_files": self.list_fbs.get_files(),
-                "mp_files": self.list_reports.get_files(),
-            },
+            kwargs={"files": self.list_files.get_files()},
             start_message="Идёт подготовка...",
             finish_message="Подготовка завершена.",
             step_name="on_prepare",
-            enable_after=self.btn_export_kiz,
-        )
-
-    @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
-    def on_export_kiz(self) -> None:
-        """Шаг 2: выгрузка КИЗов из ЧЗ_МП и отчётов МП."""
-        if not self._precheck_target_dir():
-            return
-
-        service = ExportKizService(
-            self.main_window.kiz_validator, self.log_manager_v2,
-        )
-        if self.logger:
-            self.logger.debug("on_export_kiz: ExportKizService создан")
-
-        self._run_async_step(
-            service=service,
-            target_method=service.export,
-            kwargs={},
-            start_message="Выгрузка КИЗов для обработки...",
-            finish_message="Выгрузка завершена.",
-            step_name="on_export_kiz",
             enable_after=self.btn_filter_prefinal,
         )
 
     @log_button_action("btn_filter_prefinal", "Ошибка в on_filter_prefinal: {e}")
     def on_filter_prefinal(self) -> None:
-        """Шаг 3: фильтрация предитоговых файлов."""
+        """Шаг 2: фильтрация предитоговых файлов."""
         if not self._precheck_target_dir():
             return
 
@@ -381,7 +335,7 @@ class ChzMPWindow(BaseServiceWindow):
 
     @log_button_action("btn_generate_sales", "Ошибка в on_generate_sales: {e}")
     def on_generate_sales(self) -> None:
-        """Шаг 4: формирование файлов продаж между продавцами."""
+        """Шаг 3: формирование файлов продаж между продавцами."""
         if not self._precheck_target_dir():
             return
 
@@ -406,7 +360,7 @@ class ChzMPWindow(BaseServiceWindow):
 
     @log_button_action("btn_finalize_prices", "Ошибка в on_finalize_prices: {e}")
     def on_finalize_prices(self) -> None:
-        """Шаг 5: установка цен и финализация ИТОГ-файлов."""
+        """Шаг 4: установка цен и финализация ИТОГ-файлов."""
         if not self._precheck_target_dir():
             return
 
