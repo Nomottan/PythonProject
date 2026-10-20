@@ -132,24 +132,47 @@ class FileTypeDetector:
                 pass
 
     @staticmethod
-    def detect_all(files) -> dict:
-        """Определяет типы для списка файлов за один проход.
+    def detect_all(files, logger) -> dict:
+        """Определяет типы файлов и логирует сводку.
 
         Вход:
-            files — итерируемое путей к Excel-файлам.
+            files — список путей.
+            logger — LoggerV2.
 
         Выход:
-            dict {path: "wb" | "ozon" | "wh" | None}.
-            Ключ — исходное значение из files (str или Path).
-            Порядок ключей сохраняется как в files.
+            dict {path: "wb"|"ozon"|"wh"|None}.
 
         Роль:
-            Один проход по списку; каждый файл открывается
-            ровно один раз (внутри detect).
+            Сводка пишется и в report (для log_подготовка.txt),
+            и в info (для общего отчёта). Каждый файл опознаётся
+            независимо: если один detect упадёт с исключением —
+            остальные продолжат, файл пойдёт как None.
         """
         result: dict = {}
         for path in files:
-            result[path] = FileTypeDetector.detect(path)
+            try:
+                result[path] = FileTypeDetector.detect(path)
+            except Exception as e:
+                logger.warning(
+                    f"\n{Path(path).name}: ошибка опознания ({e})"
+                )
+                result[path] = None
+
+        lines = ["\nОпознание входных файлов:"]
+        counts = {"wb": 0, "ozon": 0, "wh": 0, None: 0}
+        for path, t in result.items():
+            counts[t] = counts.get(t, 0) + 1
+            label = t.upper() if t else "Неопознан"
+            lines.append(f"  {Path(path).name}: {label}")
+        lines.append(
+            f"  Итого: WB {counts.get('wb', 0)}, "
+            f"Ozon {counts.get('ozon', 0)}, "
+            f"Склад {counts.get('wh', 0)}, "
+            f"Неопознанных {counts.get(None, 0)}"
+        )
+        summary = "\n".join(lines)
+        logger.report(summary)
+        logger.info(summary)
         return result
 
 class BaseMpReportReader:

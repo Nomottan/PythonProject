@@ -48,8 +48,6 @@ class ChecklistItemDialog(BaseEditDialog):
             b_fn=lambda b: b + 5,
             alpha=0.95,
         )
-        print(f"[DEBUG ChecklistItemDialog] resolved bg_color="
-              f"{self.bg_color!r}")
         super().__init__(
             parent=parent,
             title=("Редактирование пункта" if self._is_edit

@@ -582,19 +582,24 @@ class SellsFBSWindow(BaseServiceWindow):
     # ПИКЕРЫ (вызываются из UnknownResolverDialog)
     # ============================================================
 
-    def _pick_brand(self, norm_key: str, raws: list, parent=None) -> Brand:
+    def _pick_brand(self, norm_key: str, raws: list,
+                    parent=None) -> Brand:
         """Выбор существующего бренда из списка.
 
         Вход:
             norm_key — нормализованный ключ.
             raws — список сырых строк.
-            parent — резолвер (для наследования цвета).
+            parent — резолвер (иерархия: закрытие вместе, z-order).
 
         Выход: Brand.
 
         Роль: открывает ObjectPickerDialog, ищет Brand по имени.
               Если ничего не выбрано — ValueError (окно покажет
               уведомление и останется на текущем объекте).
+
+        Геометрия: parent — резолвер, но service_window явно
+              ставится в SellsFBSWindow. Так центрирование
+              считается от сервисного окна, а не от резолвера.
         """
         brands = (
             self.main_window.sellers_brands_service.get_brands_objects()
@@ -607,6 +612,7 @@ class SellsFBSWindow(BaseServiceWindow):
             title="Выбор бренда",
             log_manager_v2=self.log_manager_v2,
         )
+        dialog.service_window = self
         dialog.exec()
         selected = dialog.get_selected()
         if selected is None:
@@ -642,6 +648,7 @@ class SellsFBSWindow(BaseServiceWindow):
                 main_window=self.main_window,
                 log_manager_v2=self.log_manager_v2,
             )
+            dialog.service_window = self
             dialog.exec()
             if dialog.was_deleted():
                 continue
@@ -686,6 +693,7 @@ class SellsFBSWindow(BaseServiceWindow):
             title="Выбор продавца",
             log_manager_v2=self.log_manager_v2,
         )
+        dialog.service_window = self
         dialog.exec()
         selected = dialog.get_selected()
         if selected is None:
@@ -714,12 +722,13 @@ class SellsFBSWindow(BaseServiceWindow):
             title="Выбор продавца",
             log_manager_v2=self.log_manager_v2,
         )
+        # Явно: по геометрии — от сервисного окна.
+        dialog.service_window = self
         dialog.exec()
         selected = dialog.get_selected()
         if selected is None:
             raise ValueError("Продавец не выбран")
         return selected
-
     # ============================================================
     # ОБРАБОТКА ДУБЛЕЙ В ПРОДАЖАХ
     # ============================================================
