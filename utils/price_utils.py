@@ -2,6 +2,7 @@ import random
 from dataclasses import dataclass
 from typing import Optional, List
 from utils.parsers import NumberParser
+from utils.kiz_utils import KizUtils
 
 @dataclass
 class PriceDecision:
@@ -156,26 +157,29 @@ class PriceUtils:
 
 @dataclass
 class FillStats:
-    """Статистика второго этапа заполнения цен.
-
-    Роль:
-        Возвращается методом PriceFiller.fill_by_gtin_clusters
-        вместо сырого dict — с именованными полями и без опечаток
-        в строковых ключах. Используется сервисом для логирования.
+    """Статистика второго этапа заполнения цен (по GTIN из price_map).
 
     Поля:
-        total_clusters — всего кластеров GTIN, найденных в листе.
-        processed — кластеров, в которых цены были распределены.
-        skipped_no_numeric — кластеров без единой числовой цены
-                             (их обработает этап 3).
-        skipped_all_numeric — кластеров, где все цены уже числовые.
-        filled_rows — сколько строк получили цену на этом этапе.
+        total_gtins_in_prices — уникальных GTIN в price_map (для
+                                которых удалось извлечь из КИЗа).
+        filled_rows — строк получили цену на этом этапе.
+        unique_gtins_filled — уникальных GTIN, для которых этап 2
+                              поставил хотя бы одну цену (не считая
+                              строк, у которых цена уже стояла).
+        skipped_already_priced — строк с ценой до этапа 2.
+        skipped_no_gtin — строк без цены и без GTIN.
+        skipped_not_in_prices — строк без цены, чей GTIN отсутствует
+                                в price_map.
+        unique_gtins_not_in_prices — уникальных GTIN среди
+                                     skipped_not_in_prices.
     """
-    total_clusters: int
-    processed: int
-    skipped_no_numeric: int
-    skipped_all_numeric: int
+    total_gtins_in_prices: int
     filled_rows: int
+    unique_gtins_filled: int
+    skipped_already_priced: int
+    skipped_no_gtin: int
+    skipped_not_in_prices: int
+    unique_gtins_not_in_prices: int
 
 
 # NEW: перенесено из utils/price_filler.py — PriceFiller.
@@ -237,86 +241,107 @@ class PriceFiller:
         return count
 
     @staticmethod
-    def fill_by_gtin_clusters(sheet,
-                              rng: Optional[random.Random] = None) -> FillStats:
-        """Этап 2: распределение цен внутри кластеров GTIN.
+    def fill_by_gtin_clusters(sheet, price_map: dict,
+                              rng: Optional[random.Random] = None,
+                              *, logger=None) -> FillStats:
+        """Этап 2: распределение цен по GTIN из price_map.
 
         Вход:
             sheet — открытый лист openpyxl.
-            rng — опциональный random.Random для детерминированного
-                  выбора. None — используется модуль random.
+            price_map — dict {kiz: price} из отчёта МП. Источник цен.
+            rng — опциональный random.Random. None → модуль random.
+            logger — LoggerV2 или None. Keyword-only. Используется
+                     для warning при пропущенных коротких КИЗах.
 
         Выход:
             FillStats со статистикой этапа.
 
         Роль:
-            Строит кластеры {gtin: [row_indexes]}. Внутри кластера
-            собирает числовые цены и строки с нечисловой ценой.
-            Нечисловые строки заполняет случайной числовой ценой
-            того же кластера. Кластеры без единой числовой цены
-            пропускает — их обработает этап 3. Кластеры, где все
-            цены уже числовые, тоже пропускает — делать нечего.
-            Строки без GTIN в кластеры не попадают.
+            Строит gtin_to_prices {gtin: [prices]} из price_map через
+            KizUtils.extract_gtin. Проходит по строкам файла. Строки
+            без цены и с GTIN, которого нет в price_map, — в
+            skipped_not_in_prices. Строки без цены и с GTIN в
+            price_map — получают случайную цену из gtin_to_prices
+            (или единственную, если она одна). Строки с уже стоящей
+            ценой — skipped_already_priced. Строки без GTIN —
+            skipped_no_gtin.
+
+            Этап 3 (fill_by_average) после этого метода добьёт
+            оставшиеся нечисловые: и skipped_no_gtin, и
+            skipped_not_in_prices.
         """
-        # Шаг 1: строим кластеры по GTIN.
-        gtin_clusters: dict[str, list[int]] = {}
+        # Шаг 1. Построение gtin_to_prices.
+        gtin_to_prices: dict = {}
+        short_kiz_count = 0
+        for kiz, price in price_map.items():
+            gtin = KizUtils.extract_gtin(kiz)
+            if not gtin:
+                short_kiz_count += 1
+                continue
+            gtin_to_prices.setdefault(gtin, []).append(price)
+
+        if short_kiz_count > 0 and logger is not None:
+            logger.warning(
+                f"price_map: {short_kiz_count} КИЗов короче 16 символов, "
+                f"GTIN не извлечён, пропущены"
+            )
+
+        # Шаг 2. Инициализация.
+        stats = FillStats(
+            total_gtins_in_prices=len(gtin_to_prices),
+            filled_rows=0,
+            unique_gtins_filled=0,
+            skipped_already_priced=0,
+            skipped_no_gtin=0,
+            skipped_not_in_prices=0,
+            unique_gtins_not_in_prices=0,
+        )
+        gtins_filled: set = set()
+        gtins_not_in_prices: set = set()
+        rng_obj = rng or random
+
+        # Шаг 3. Проход по строкам.
         for row_idx in range(2, sheet.max_row + 1):
-            kiz_cell = sheet.cell(row=row_idx, column=PriceFiller.KIZ_COL)
+            kiz_cell = sheet.cell(
+                row=row_idx, column=PriceFiller.KIZ_COL,
+            )
             kiz = (
                 str(kiz_cell.value).strip()
                 if kiz_cell.value is not None else ""
             )
             if not kiz or kiz == PriceFiller.HEADER_KIZ:
                 continue
-            gtin_cell = sheet.cell(row=row_idx, column=PriceFiller.GTIN_COL)
+
+            price_cell = sheet.cell(
+                row=row_idx, column=PriceFiller.PRICE_COL,
+            )
+            if NumberParser.is_numeric(price_cell.value):
+                stats.skipped_already_priced += 1
+                continue
+
+            gtin_cell = sheet.cell(
+                row=row_idx, column=PriceFiller.GTIN_COL,
+            )
             gtin = (
                 str(gtin_cell.value).strip()
                 if gtin_cell.value is not None else ""
             )
             if not gtin:
-                continue
-            gtin_clusters.setdefault(gtin, []).append(row_idx)
-
-        # Шаг 2: обрабатываем кластеры.
-        stats = FillStats(
-            total_clusters=len(gtin_clusters),
-            processed=0,
-            skipped_no_numeric=0,
-            skipped_all_numeric=0,
-            filled_rows=0,
-        )
-        # Источник случайности. rng=None → модуль random.
-        rng_obj = rng or random
-
-        for _gtin, row_indexes in gtin_clusters.items():
-            numeric_values = []
-            non_numeric_rows = []
-            for row_idx in row_indexes:
-                price_cell = sheet.cell(
-                    row=row_idx, column=PriceFiller.PRICE_COL
-                )
-                if NumberParser.is_numeric(price_cell.value):
-                    numeric_values.append(price_cell.value)
-                else:
-                    non_numeric_rows.append(row_idx)
-
-            # Нет числовых — распределять нечего, ждём этапа 3.
-            if not numeric_values:
-                stats.skipped_no_numeric += 1
-                continue
-            # Всё уже числовое — кластер готов.
-            if not non_numeric_rows:
-                stats.skipped_all_numeric += 1
+                stats.skipped_no_gtin += 1
                 continue
 
-            # Заполняем нечисловые строки случайной числовой ценой.
-            for row_idx in non_numeric_rows:
-                sheet.cell(
-                    row=row_idx, column=PriceFiller.PRICE_COL
-                ).value = rng_obj.choice(numeric_values)
-                stats.filled_rows += 1
-            stats.processed += 1
+            if gtin not in gtin_to_prices:
+                stats.skipped_not_in_prices += 1
+                gtins_not_in_prices.add(gtin)
+                continue
 
+            price_cell.value = rng_obj.choice(gtin_to_prices[gtin])
+            stats.filled_rows += 1
+            gtins_filled.add(gtin)
+
+        # Шаг 4. Финализация и возврат.
+        stats.unique_gtins_filled = len(gtins_filled)
+        stats.unique_gtins_not_in_prices = len(gtins_not_in_prices)
         return stats
 
     @staticmethod

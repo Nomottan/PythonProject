@@ -18,7 +18,9 @@
 from pathlib import Path
 
 from PySide6.QtCore import QMetaObject, Qt, QThread, Signal, Slot
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QHBoxLayout, QWidget,
+)
 
 from ui.factories.factories import (
     LabelFactory, StatusLogFactory, WindowFactory,
@@ -27,7 +29,8 @@ from ui.factories.factories import (
 from ui.styles import ColorCalculator
 from utils.log_tools.decorators import log_button_action
 from services.sales_accumulator import SalesAccumulatorService
-
+from ui.widgets.path_selector import PathSelector
+from ui.factories import ButtonFactory, LayoutFactory
 
 class BaseServiceWindow(QMainWindow):
     """Базовое окно сервиса.
@@ -82,6 +85,18 @@ class BaseServiceWindow(QMainWindow):
 
         self._ui_callable = None
         self._ui_result = None
+        # target_dir — ДО PathSelector: тот читает initial_path.
+        self.target_dir = parent.main_config.get("target_dir", None) \
+            if parent is not None else None
+        self.bg_color = self.BG_COLOR
+        self.service_window = self
+
+        self.path_selector = PathSelector(
+            self,
+            initial_path=self.target_dir,
+            dialog_title="Выберите целевую папку",
+        )
+        self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
         # Логгер окна — если задан source.
         self.logger = None
@@ -93,8 +108,6 @@ class BaseServiceWindow(QMainWindow):
         if self.logger:
             self.logger.debug(f"{type(self).__name__}.__init__: старт")
 
-        self.target_dir = parent.main_config.get("target_dir", None) \
-            if parent is not None else None
         self.bg_color = self.BG_COLOR
         self.service_window = self
 
@@ -192,6 +205,69 @@ class BaseServiceWindow(QMainWindow):
             self.set_status("Сначала выберите целевую папку")
             return False
         return True
+
+    def _create_file_picker_row(self, button_text, config_key, title,
+                                file_filter,
+                                button_color=(100, 120, 100, 0.8)):
+        """Создаёт строку: кнопка выбора файла + лейбл с именем.
+
+        Вход:
+            button_text — текст кнопки.
+            config_key — ключ main_config для стартовой папки.
+            title — заголовок диалога.
+            file_filter — фильтр типов файлов.
+            button_color — кортеж цвета кнопки (3 или 4 элемента).
+                           По умолчанию — зелёный.
+
+        Выход: (row, btn, lbl).
+        """
+        btn = ButtonFactory.create_button(self, button_text, button_color)
+        lbl = LabelFactory.create_label(
+            self, "Файл не выбран",
+            bg_color=(64, 48, 66, 128),
+            padding="4px 8px",
+            border_radius=5,
+            alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            font_family="Consolas, monospace",
+            font_size=10,
+        )
+        row = LayoutFactory.create_row(self, btn, lbl, spacing=5)
+        return row, btn, lbl
+
+    def _create_accumulate_row(self):
+        """Создаёт нижнюю строку с кнопкой «Собрать продажи»."""
+        row = QHBoxLayout()
+        row.addStretch()
+        btn = ButtonFactory.create_button(
+            self, "Собрать продажи", (60, 90, 120, 0.8),
+            padding="8px 16px", fixed_size=(160, 35),
+        )
+        btn.clicked.connect(self.on_accumulate_sales)
+        row.addWidget(btn)
+        return row
+
+    def _add_service_page(self, header_widget, box,
+                          accumulate_row=None):
+        """Собирает стандартную страницу сервиса в main_layout.
+
+        Вход:
+            header_widget — верхний лейбл (desc_label / header_label).
+            box — центральный бокс (из LayoutFactory.create_service_box).
+            accumulate_row — QLayout с кнопкой «Собрать продажи»
+                            или None, если операция не нужна.
+
+        Выход: QVBoxLayout — созданная страница.
+
+        Роль: тонкая обёртка над LayoutFactory.create_service_page.
+              Подставляет self.status_log и добавляет страницу в
+              self.main_layout. Наследники вызывают одной строкой —
+              без ручного копирования макета.
+        """
+        page = LayoutFactory.create_service_page(
+            header_widget, box, self.status_log, accumulate_row,
+        )
+        self.main_layout.addLayout(page)
+        return page
 
     def _current_sellers(self) -> list:
         """Возвращает актуальный список продавцов.

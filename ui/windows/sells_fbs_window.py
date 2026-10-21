@@ -12,22 +12,21 @@
     set_status/set_info/_precheck_target_dir/closeEvent/
     on_accumulate_sales — унаследованы. Окно отвечает за раскладку,
     обработчики шагов и специфику ввода средней цены.
+
+Структура файла:
+    КОНСТАНТЫ → ИНИЦИАЛИЗАЦИЯ → ОБРАБОТЧИКИ КНОПОК →
+    ПРИВАТНЫЕ МЕТОДЫ → ВЗАИМОДЕЙСТВИЕ С ОКНОМ.
 """
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import (
-    QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy
-)
+from PySide6.QtWidgets import QSizePolicy
 
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
     ListWidgetFactory,
 )
-from ui.styles import ColorCalculator
-from ui.widgets.path_selector import PathSelector
+from ui.styles import ColorCalculator, WindowStyle
 from ui.windows.shared_dialogs import (
     PricesEditWindow, AveragePriceInputDialog, SaleDuplicatePickerDialog,
 )
@@ -40,8 +39,7 @@ from models.models import Brand
 from utils.text_utils import TextUtils
 from utils.unknown_resolver import ResolverRouter
 from services.sells_fbs_service import (
-    PreparationService,
-    FilterPreFinalService, GenerateSalesService, FinalizePricesService,
+    PreparationService, FinalProcessingService, FinalizePricesService,
 )
 from utils.log_tools.decorators import log_button_action
 
@@ -54,26 +52,33 @@ class SellsFBSWindow(BaseServiceWindow):
         сервис, запускается в фоновом потоке через
         BaseServiceWindow._run_async_step. Логи шагов идут в
         status_log; короткие подсказки — в status_label.
+
+    Цвет:
+        BG_COLOR вычисляется в __init__ от цвета MainWindow через
+        WindowStyle.resolve_parent_bg. Классовый BG_COLOR оставлен
+        как fallback, если окно создаётся без родителя.
     """
+
+    # ============================================================
+    # КОНСТАНТЫ
+    # ============================================================
 
     LOGGER_SOURCE = "SellsFBSWindow.sells_fbs_window"
     LOGGER_DOMAIN = "chz_mp"
 
-    # BG_COLOR: r, g+g//5, 2b-b//5 от (50,50,50) → (50, 60, 90).
-    BG_COLOR = ColorCalculator.derive(
-        (50, 50, 50),
-        r_fn=lambda r: r,
-        g_fn=lambda g: g + g // 5,
-        b_fn=lambda b: 2 * b - b // 5,
-    )
+    # Fallback; реальный BG_COLOR вычисляется в __init__ от parent.
+    BG_COLOR = (50, 50, 50)
 
     PIPELINE_BUTTONS = (
         "btn_prepare",
-        "btn_filter_prefinal",
-        "btn_generate_sales",
+        "btn_processing",
         "btn_finalize_prices",
         "btn_files",
     )
+
+    # ============================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # ============================================================
 
     def __init__(self, parent=None, log_manager_v2=None):
         """Конструктор.
@@ -82,18 +87,30 @@ class SellsFBSWindow(BaseServiceWindow):
             parent — MainWindow.
             log_manager_v2 — LogManagerV2 или None.
 
-        Роль: строит раскладку и подключает сигналы.
+        Роль: вычисляет цвет от родителя, строит состояние, элементы
+              и макет. Порядок блоков жёсткий: состояние → элементы
+              → макет.
         """
+        # Цвет — от родителя. Формула: r, g+g//5, 2b-b//5.
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (50, 50, 50))
+        self.BG_COLOR = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r,
+            g_fn=lambda g: g + g // 5,
+            b_fn=lambda b: 2 * b - b // 2,
+        )
+
         super().__init__(
             parent,
             title="Списание проданных КИЗов",
             log_manager_v2=log_manager_v2,
         )
+
+        # ---------- СОСТОЯНИЕ ----------
         self._resolver_context_map: dict = {}
-        # Специфичное состояние для диалога средней цены.
         self._price_response: int | None = None
 
-        # ---------- ОДНА КНОПКА И ОДИН СПИСОК ФАЙЛОВ ----------
+        # ---------- ЭЛЕМЕНТЫ: файлы ----------
         self.btn_files = ButtonFactory.create_button(
             self, "Файлы", (30, 20, 35, 0.3),
             padding="4px 8px", fixed_size=(180, 24),
@@ -103,17 +120,15 @@ class SellsFBSWindow(BaseServiceWindow):
             text_color=None, font_size=10,
         )
 
-        # ---------- ОПИСАНИЕ ----------
+        # ---------- ЭЛЕМЕНТЫ: описание ----------
         self.desc_label = LabelFactory.create_label(
             self,
             text=(
-                "Подготовка отчётов по продавцам для вывода КИЗов из оборота\n"
                 "Загрузи файлы и отчёты\n"
                 "Шаг 1: Нажми Подготовка. Файлы будут скопированы и разобраны в рабочую директорию, оригиналы нетронуты\n"
                 "Проведи все файлы через BestMark в Excell файлы сохранив названия\n"
-                "Шаг 2: Нажми Сбор данных. Файлы будут очищены от некорректных статусов и владельцев\n"
-                "Шаг 3: Нажми Продажи. Будут собраны файлы для продаж продавцам не их КИЗов\n"
-                "Шаг 4: Нажми Установка цен.\n"
+                "Шаг 2: Нажми Обработка. Файлы будут очищены от некорректных статусов и владельцев, а также собраны файлы для продаж продавцам не их КИЗов\n"
+                "Шаг 3: Нажми Установка цен.\n"
                 "Проведи продажи через ЭДО. После выводи их из оборота"
             ),
             bg_color=(0, 0, 0, 0),
@@ -126,146 +141,50 @@ class SellsFBSWindow(BaseServiceWindow):
             QSizePolicy.Preferred, QSizePolicy.Ignored,
         )
         self.desc_label.setMinimumHeight(0)
-        # ---------- ВЫБОР ПАПКИ ----------
-        self.path_selector = PathSelector(
-            self,
-            initial_path=self.target_dir,
-            dialog_title="Выберите целевую папку",
-        )
-        self.path_selector.setFixedWidth(370)
-        self.path_selector.path_changed.connect(self._on_target_dir_changed)
 
-        # ---------- КНОПКИ ДЕЙСТВИЙ ----------
+        # ---------- ЭЛЕМЕНТЫ: путь ----------
+        # path_selector создаётся в BaseServiceWindow.
+        self.path_selector.setFixedWidth(370)
+
+        # ---------- ЭЛЕМЕНТЫ: кнопки действий ----------
         _action_configs = [
             ("btn_prepare", "Подготовка", (80, 90, 120), "8px 16px", (180, 35)),
-            ("btn_filter_prefinal", "Сбор данных", (60, 110, 120), "8px 16px", (180, 35)),
-            ("btn_generate_sales", "Продажи", (50, 120, 120), "8px 16px", (180, 35)),
+            ("btn_processing", "Обработка", (60, 110, 120), "8px 16px", (180, 35)),
             ("btn_finalize_prices", "Установка цен", (40, 130, 120), "8px 16px", (180, 35)),
             ("btn_prices", "Цены", (40, 40, 40), "2px 2px", (35, 20)),
         ]
         _action_handlers = {
             "btn_prepare": "on_prepare",
-            "btn_filter_prefinal": "on_filter_prefinal",
-            "btn_generate_sales": "on_generate_sales",
+            "btn_processing": "on_processing",
             "btn_finalize_prices": "on_finalize_prices",
             "btn_prices": "on_open_prices_window",
         }
         ButtonFactory.create_buttons_from_config(
             self, _action_configs, _action_handlers,
         )
-        self.btn_accumulate = ButtonFactory.create_button(
-            self, "Собрать продажи", (60, 90, 120, 0.8),
-            padding="8px 16px", fixed_size=(160, 35),
-        )
         # Все кнопки шагов изначально отключены, кроме подготовки.
-        self.btn_filter_prefinal.setEnabled(False)
-        self.btn_generate_sales.setEnabled(False)
+        self.btn_processing.setEnabled(False)
         self.btn_finalize_prices.setEnabled(False)
-
-
-        # ---------- МАКЕТ ----------
-        center_layout = QVBoxLayout()
-        center_layout.setSpacing(10)
-
-        # Верх: описание и выбор папки.
-        center_layout.addWidget(self.desc_label)
-        center_layout.addWidget(self.path_selector, alignment=Qt.AlignCenter)
-
-        # Две колонки: слева статус-строка и кнопки этапов,
-        # справа кнопка и список файлов.
-        columns_layout = QHBoxLayout()
-        columns_layout.setSpacing(10)
-        columns_layout.setAlignment(Qt.AlignCenter)
-
-        left_widget = QWidget()
-        left_widget.setFixedWidth(180)
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(8)
-        # Статус-строка сверху, на одной линии с btn_files справа.
-        self.status_label.setMinimumHeight(28)
-        left_layout.addWidget(self.status_label)
-        left_layout.addWidget(self.btn_prepare)
-        left_layout.addWidget(self.btn_filter_prefinal)
-        left_layout.addWidget(self.btn_generate_sales)
-        left_layout.addWidget(self.btn_finalize_prices)
-        left_layout.addWidget(self.btn_prices)
-        left_layout.addStretch()
-
-        right_widget = QWidget()
-        right_widget.setFixedWidth(180)
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(5)
-        right_layout.addWidget(self.btn_files)
-        right_layout.addWidget(self.list_files)
-        right_layout.addStretch()
-
-        columns_layout.addWidget(left_widget)
-        columns_layout.addWidget(right_widget)
-
-        columns_row = QHBoxLayout()
-        columns_row.addStretch()
-        columns_row.addLayout(columns_layout)
-        columns_row.addStretch()
-        center_layout.addLayout(columns_row)
-
-        # Растяжка: прижимает лог и «Собрать продажи» к низу.
-        center_layout.addStretch(1)
-
-        # Низ: лог и кнопка «Собрать продажи».
-        center_layout.addWidget(self.status_log)
-
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addStretch()
-        self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
-        bottom_layout.addWidget(self.btn_accumulate)
-        center_layout.addLayout(bottom_layout)
-
-        self.main_layout.addLayout(center_layout)
-
-        # Кнопка выбора входных файлов.
         self.btn_files.clicked.connect(self.select_files)
 
-    # ============================================================
-    # ХУКИ БАЗОВОГО КЛАССА
-    # ============================================================
-
-    def _on_target_dir_changed_hook(self) -> None:
-        """Сброс кнопок шагов 2–4 при смене папки.
-
-        Вход: нет.
-        Выход: нет.
-        Роль: базовый _on_target_dir_changed уже очистил status_log
-              и обновил target_dir; здесь — только сброс кнопок.
-        """
-        self.btn_filter_prefinal.setEnabled(False)
-        self.btn_generate_sales.setEnabled(False)
-        self.btn_finalize_prices.setEnabled(False)
-
-    def _current_sellers(self) -> list:
-        """Возвращает продавцов с восстановленными связями Brand.
-
-        Вход: нет.
-        Выход: list[Seller] с заполненным .brands.
-
-        Роль:
-            Override базового _current_sellers. Для шага
-            «Сбор данных» нужны продавцы с полной информацией
-            о брендах — иначе filter_files не соберёт маппинг
-            «ключ бренда → Brand».
-        """
-        return (
-            self.main_window.sellers_brands_service
-            .get_sellers_with_brands()
+        # ---------- МАКЕТ ----------
+        box = LayoutFactory.create_service_box(
+            self,
+            path_selector=self.path_selector,
+            status_label=self.status_label,
+            left_buttons=[
+                self.btn_prepare, self.btn_processing,
+                self.btn_finalize_prices, self.btn_prices,
+            ],
+            right_items=[self.btn_files, self.list_files],
         )
 
-    def cleanup(self) -> None:
-        """Сброс списка файлов при закрытии окна."""
-        self.list_files.clear_files()
+        self._add_service_page(
+            self.desc_label, box, self._create_accumulate_row(),
+        )
 
     # ============================================================
-    # ВЫБОР ФАЙЛОВ
+    # ОБРАБОТЧИКИ КНОПОК
     # ============================================================
 
     @log_button_action("btn_files", "Ошибка при выборе файлов: {e}")
@@ -285,10 +204,6 @@ class SellsFBSWindow(BaseServiceWindow):
                 f"Добавлено {len(added)} файлов"
             ),
         )
-
-    # ============================================================
-    # ОБРАБОТЧИКИ ПАЙПЛАЙНА
-    # ============================================================
 
     @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
     def on_prepare(self) -> None:
@@ -314,56 +229,33 @@ class SellsFBSWindow(BaseServiceWindow):
             start_message="Идёт подготовка...",
             finish_message="Подготовка завершена.",
             step_name="on_prepare",
-            enable_after=self.btn_filter_prefinal,
+            enable_after=self.btn_processing,
         )
 
-    @log_button_action("btn_filter_prefinal", "Ошибка в on_filter_prefinal: {e}")
-    def on_filter_prefinal(self) -> None:
-        """Шаг 2: фильтрация предитоговых файлов."""
+    @log_button_action("btn_processing", "Ошибка в on_processing: {e}")
+    def on_processing(self) -> None:
+        """Шаг 2: обработка файлов + формирование продаж + дубли."""
         if not self._precheck_target_dir():
             return
 
-        service = FilterPreFinalService(
-            self.main_window.kiz_validator, self.log_manager_v2,
-            brand_unknown_resolver=self._brand_request_unknown_decision,
-        )
-        if self.logger:
-            self.logger.debug(
-                "on_filter_prefinal: FilterPreFinalService создан"
-            )
-
-        self._run_async_step(
-            service=service,
-            target_method=service.filter_files,
-            kwargs={},
-            start_message="Фильтрация предитоговых файлов...",
-            finish_message="Сбор данных завершён.",
-            step_name="on_filter_prefinal",
-            enable_after=self.btn_generate_sales,
-        )
-
-    @log_button_action("btn_generate_sales", "Ошибка в on_generate_sales: {e}")
-    def on_generate_sales(self) -> None:
-        """Шаг 3: формирование файлов продаж между продавцами."""
-        if not self._precheck_target_dir():
-            return
-
-        service = GenerateSalesService(
+        service = FinalProcessingService(
+            self.main_window.kiz_validator,
             self.log_manager_v2,
+            brand_unknown_resolver=self._brand_request_unknown_decision,
             duplicate_keeper_resolver=self._duplicate_sale_request_keeper,
         )
         if self.logger:
             self.logger.debug(
-                "on_generate_sales: GenerateSalesService создан"
+                "on_processing: FinalProcessingService создан"
             )
 
         self._run_async_step(
             service=service,
-            target_method=service.generate,
+            target_method=service.completion,
             kwargs={},
-            start_message="Формирование файлов продаж...",
-            finish_message="Продажи сформированы.",
-            step_name="on_generate_sales",
+            start_message="Обработка файлов...",
+            finish_message="Обработка завершена.",
+            step_name="on_processing",
             enable_after=self.btn_finalize_prices,
         )
 
@@ -395,10 +287,6 @@ class SellsFBSWindow(BaseServiceWindow):
             enable_after=None,
         )
 
-    # ============================================================
-    # СПЕЦИФИКА ЦЕН (осталась в окне)
-    # ============================================================
-
     @log_button_action("btn_prices", "Ошибка при открытии окна цен: {e}")
     def on_open_prices_window(self) -> None:
         """Открывает окно редактирования сохранённых цен."""
@@ -410,6 +298,10 @@ class SellsFBSWindow(BaseServiceWindow):
             main_config=self.main_window.main_config,
         )
         window.exec()
+
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: ЦЕНА
+    # ============================================================
 
     def _request_average_price(self, seller_name: str) -> int | None:
         """Callback от FinalizePricesService: спросить цену у пользователя.
@@ -440,8 +332,12 @@ class SellsFBSWindow(BaseServiceWindow):
         else:
             self._price_response = None
 
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: РЕЗОЛВЕР БРЕНДОВ
+    # ============================================================
+
     def _brand_request_unknown_decision(self, brands_unknown: dict) -> dict:
-        """Callback от FilterPreFinalService: разрешить неизвестные бренды.
+        """Callback от FinalProcessingService: разрешить неизвестные бренды.
 
         Вход:
             brands_unknown — {норм_ключ: [сырая_1, ...]}.
@@ -493,94 +389,6 @@ class SellsFBSWindow(BaseServiceWindow):
         return ResolverRouter.apply_result(
             result, actions, items=brands_unknown, logger=self.logger,
         )
-
-    def _seller_request_unknown_decision(self, unresolved: dict,
-                                         context_map: dict) -> dict:
-        """Callback от PreparationService: разрешить неизвестные имена.
-
-        Вход:
-            unresolved — {норм_ключ: [сырая_1, ...]}.
-            context_map — {норм_ключ: set{"mp", "wh"}}.
-
-        Выход:
-            dict {"total", "resolved", "skipped", "decisions"}.
-
-        Роль: сохраняет context_map для _format_seller_item_label,
-              делегирует открытие в UI-поток.
-        """
-        self._resolver_context_map = context_map
-        return self._run_in_ui_blocking(
-            lambda: self._show_seller_resolver(unresolved)
-        )
-
-    @Slot(object)
-    def _show_seller_resolver(self, unresolved: dict) -> dict:
-        """Открывает UnknownResolverDialog для продавцов.
-
-        Вход: unresolved — {норм_ключ: [сырая_1, ...]}.
-        Выход: агрегаты + decisions.
-
-        Роль: собирает actions для продавцов, открывает мастер,
-              применяет результат, формирует decisions.
-        """
-        service = self.main_window.sellers_brands_service
-        dialog = None
-
-        def _pick_special(nk, raws):
-            return self._pick_seller_with_special(nk, raws, parent=dialog)
-
-        def _pick_no_special(nk, raws):
-            return self._pick_seller_no_special(nk, raws, parent=dialog)
-
-        actions = ResolverRouter.build_seller_actions(
-            service=service,
-            pick_seller_with_special_cb=_pick_special,
-            pick_seller_no_special_cb=_pick_no_special,
-        )
-        dialog = UnknownResolverDialog(
-            parent=self,
-            items=unresolved,
-            actions=actions,
-            get_label=self._format_seller_item_label,
-            title="Неизвестные имена",
-            log_manager_v2=self.log_manager_v2,
-        )
-        dialog.exec()
-        result = dialog.get_result()
-        stats = ResolverRouter.apply_result(
-            result, actions, items=unresolved, logger=self.logger,
-        )
-        stats["decisions"] = ResolverRouter.build_decisions_from_result(
-            result, self._resolver_context_map,
-        )
-        return stats
-
-    def _format_seller_item_label(self, norm_key: str,
-                                  raws: list) -> str:
-        """Форматирует лейбл неизвестного имени с контекстом.
-
-        Вход:
-            norm_key — нормализованный ключ.
-            raws — список сырых строк.
-        Выход: "сырое_имя (файл)" / "(лист склада)" / "(файл, лист склада)".
-
-        Роль: показывает пользователю, откуда пришло имя — из файла
-              МП или из листа склада.
-        """
-        contexts = self._resolver_context_map.get(norm_key, set())
-        if isinstance(contexts, str):
-            contexts = {contexts}
-        parts = []
-        if "mp" in contexts:
-            parts.append("файл")
-        if "wh" in contexts:
-            parts.append("лист склада")
-        suffix = f" ({', '.join(parts)})" if parts else ""
-        return f"{raws[0]}{suffix}"
-
-    # ============================================================
-    # ПИКЕРЫ (вызываются из UnknownResolverDialog)
-    # ============================================================
 
     def _pick_brand(self, norm_key: str, raws: list,
                     parent=None) -> Brand:
@@ -666,6 +474,94 @@ class SellsFBSWindow(BaseServiceWindow):
                 title_text="Ошибка", bg_color=self.bg_color,
             )
 
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: РЕЗОЛВЕР ПРОДАВЦОВ
+    # ============================================================
+
+    def _seller_request_unknown_decision(self, unresolved: dict,
+                                         context_map: dict) -> dict:
+        """Callback от PreparationService: разрешить неизвестные имена.
+
+        Вход:
+            unresolved — {норм_ключ: [сырая_1, ...]}.
+            context_map — {норм_ключ: set{"mp", "wh"}}.
+
+        Выход:
+            dict {"total", "resolved", "skipped", "decisions"}.
+
+        Роль: сохраняет context_map для _format_seller_item_label,
+              делегирует открытие в UI-поток.
+        """
+        self._resolver_context_map = context_map
+        return self._run_in_ui_blocking(
+            lambda: self._show_seller_resolver(unresolved)
+        )
+
+    @Slot(object)
+    def _show_seller_resolver(self, unresolved: dict) -> dict:
+        """Открывает UnknownResolverDialog для продавцов.
+
+        Вход: unresolved — {норм_ключ: [сырая_1, ...]}.
+        Выход: агрегаты + decisions.
+
+        Роль: собирает actions для продавцов, открывает мастер,
+              применяет результат, формирует decisions.
+        """
+        service = self.main_window.sellers_brands_service
+        dialog = None
+
+        def _pick_special(nk, raws):
+            return self._pick_seller_with_special(nk, raws, parent=dialog)
+
+        def _pick_no_special(nk, raws):
+            return self._pick_seller_no_special(nk, raws, parent=dialog)
+
+        actions = ResolverRouter.build_seller_actions(
+            service=service,
+            pick_seller_with_special_cb=_pick_special,
+            pick_seller_no_special_cb=_pick_no_special,
+        )
+        dialog = UnknownResolverDialog(
+            parent=self,
+            items=unresolved,
+            actions=actions,
+            get_label=self._format_seller_item_label,
+            title="Неизвестные имена",
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
+        result = dialog.get_result()
+        stats = ResolverRouter.apply_result(
+            result, actions, items=unresolved, logger=self.logger,
+        )
+        stats["decisions"] = ResolverRouter.build_decisions_from_result(
+            result, self._resolver_context_map,
+        )
+        return stats
+
+    def _format_seller_item_label(self, norm_key: str,
+                                  raws: list) -> str:
+        """Форматирует лейбл неизвестного имени с контекстом.
+
+        Вход:
+            norm_key — нормализованный ключ.
+            raws — список сырых строк.
+        Выход: "сырое_имя (файл)" / "(лист склада)" / "(файл, лист склада)".
+
+        Роль: показывает пользователю, откуда пришло имя — из файла
+              МП или из листа склада.
+        """
+        contexts = self._resolver_context_map.get(norm_key, set())
+        if isinstance(contexts, str):
+            contexts = {contexts}
+        parts = []
+        if "mp" in contexts:
+            parts.append("файл")
+        if "wh" in contexts:
+            parts.append("лист склада")
+        suffix = f" ({', '.join(parts)})" if parts else ""
+        return f"{raws[0]}{suffix}"
+
     def _pick_seller_with_special(self, norm_key: str, raws: list,
                                   parent=None) -> str:
         """Выбор продавца с опцией Мусор / Неопознанный / Возвраты.
@@ -729,13 +625,14 @@ class SellsFBSWindow(BaseServiceWindow):
         if selected is None:
             raise ValueError("Продавец не выбран")
         return selected
+
     # ============================================================
-    # ОБРАБОТКА ДУБЛЕЙ В ПРОДАЖАХ
+    # ПРИВАТНЫЕ МЕТОДЫ: ДУБЛИ В ПРОДАЖАХ
     # ============================================================
 
     def _duplicate_sale_request_keeper(self, kiz: str,
                                        file_to_receiver: dict):
-        """Callback от GenerateSalesService: выбрать файл-получатель.
+        """Callback от FinalProcessingService: выбрать файл-получатель.
 
         Вход:
             kiz — 31-символьный КИЗ.
@@ -781,3 +678,48 @@ class SellsFBSWindow(BaseServiceWindow):
         )
         dialog.exec()
         return dialog.get_selected_path()
+
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: ХУКИ БАЗОВОГО КЛАССА
+    # ============================================================
+
+    def _on_target_dir_changed_hook(self) -> None:
+        """Сброс кнопок шагов 2–4 при смене папки.
+
+        Вход: нет.
+        Выход: нет.
+        Роль: базовый _on_target_dir_changed уже очистил status_log
+              и обновил target_dir; здесь — только сброс кнопок.
+        """
+        self.btn_processing.setEnabled(False)
+        self.btn_finalize_prices.setEnabled(False)
+
+    def _current_sellers(self) -> list:
+        """Возвращает продавцов с восстановленными связями Brand.
+
+        Вход: нет.
+        Выход: list[Seller] с заполненным .brands.
+
+        Роль:
+            Override базового _current_sellers. Для шага
+            «Обработка» нужны продавцы с полной информацией
+            о брендах — иначе фильтрация не соберёт маппинг
+            «ключ бренда → Brand».
+        """
+        return (
+            self.main_window.sellers_brands_service
+            .get_sellers_with_brands()
+        )
+
+    # ============================================================
+    # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
+    # ============================================================
+
+    def cleanup(self) -> None:
+        """Сброс списка файлов при закрытии окна.
+
+        Вход: нет.
+        Выход: нет.
+        Роль: вызывается из базового closeEvent. Очищает list_files.
+        """
+        self.list_files.clear_files()

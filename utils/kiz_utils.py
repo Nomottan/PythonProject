@@ -232,6 +232,23 @@ class KizUtils:
         return result
 
     @staticmethod
+    def extract_gtin(kiz: str) -> str:
+        """Извлекает GTIN из полного КИЗа.
+
+        Вход: kiz — строка КИЗа.
+        Выход: 14-символьная подстрока GTIN (позиции 2..15
+               включительно) или "" при пустом входе / длине < 16.
+
+        Роль:
+            Единая точка извлечения GTIN. Заменяет прямые срезы
+            kiz[2:16] в вызывающем коде. Не логирует, не зависит
+            от _stats.
+        """
+        if not kiz or len(kiz) < 16:
+            return ""
+        return kiz[2:16]
+
+    @staticmethod
     def filter_for_removal(kiz_to_brand_data, brand_key_to_brand,
                            logger=None):
         """Отбирает КИЗы, чей бренд помечен requires_saving=False.
@@ -246,7 +263,10 @@ class KizUtils:
             (to_delete, stats, brands_unknown):
                 to_delete — set[str]: КИЗы с requires_saving is False.
                 stats — dict с ключами total, empty_brand, unknown_brand,
-                        recognized, saved, deleted, top_deleted.
+                        recognized, unique_recognized, saved, deleted,
+                        top_deleted.
+                        unique_recognized — количество уникальных Brand
+                        (по brand.name), для которых brand найден.
                 brands_unknown — dict[str, list[str]]:
                         {норм_ключ: [сырая_1, сырая_2, ...]} — только
                         для неизвестных непустых брендов. Порядок
@@ -267,12 +287,14 @@ class KizUtils:
             "empty_brand": 0,
             "unknown_brand": 0,
             "recognized": 0,
+            "unique_recognized": 0,
             "saved": 0,
             "deleted": 0,
             "top_deleted": [],
         }
         top_deleted: dict = {}
         brands_unknown: dict = {}
+        recognized_brands: set = set()
 
         for kiz, (brand_key, raw_brand) in kiz_to_brand_data.items():
             if not brand_key:
@@ -297,6 +319,7 @@ class KizUtils:
                 continue
 
             stats["recognized"] += 1
+            recognized_brands.add(brand.name)
 
             if brand.requires_saving is False:
                 to_delete.add(kiz)
@@ -318,6 +341,7 @@ class KizUtils:
                     )
 
         stats["total"] = len(kiz_to_brand_data)
+        stats["unique_recognized"] = len(recognized_brands)
         stats["top_deleted"] = sorted(
             top_deleted.items(), key=lambda x: -x[1],
         )[:10]

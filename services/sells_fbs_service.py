@@ -1,12 +1,12 @@
 """
-Сервисы ЧЗ МП: подготовка файлов, выгрузка КИЗов, фильтрация,
-формирование продаж, финализация цен.
+Сервисы ЧЗ МП: подготовка, обработка файлов, финализация цен.
 
-Содержит пять сервисов пайплайна:
-    PreparationService     — копирование входных файлов в рабочую папку.
-    ExportKizService       — выгрузка КИЗов из ЧЗ_МП и отчётов МП.
-    FilterPreFinalService  — фильтрация предитоговых файлов.
-    GenerateSalesService   — формирование файлов продаж между продавцами.
+Содержит три сервиса пайплайна:
+    PreparationService     — опознание, копирование, разбор склада,
+                             чтение отчётов МП, разрешение конфликтов.
+    FinalProcessingService — фильтрация предитоговых файлов и
+                             формирование файлов продаж одним проходом,
+                             разрешение дублей КИЗов.
     FinalizePricesService  — установка цен и финализация ИТОГ-файлов.
 
 Роль в программе:
@@ -32,9 +32,11 @@ from utils.sells_fbs_report_utils import (
     FileTypeDetector, ReturnsTxtWriter,
 )
 from utils.path_manager import PathManager
-from utils.sales_file_generator import SalesFileGenerator, SalesFileRowsReader
+from utils.sales_file_generator import (
+    SalesFileGenerator, SalesDuplicatesResolver,
+)
 from utils.fbs_buferprices import FbsBufferPrices
-from utils.kiz_utils import KizUtils, KizDuplicatesFinder
+from utils.kiz_utils import KizUtils
 
 class PreparationService:
     """Сервис шага «Подготовка»: опознание, копирование, разбор,
@@ -1266,82 +1268,67 @@ class PreparationService:
             ),
         }
 
-class FilterPreFinalService:
-    """Сервис фильтрации предитоговых файлов.
+class FinalProcessingService:
+    """Сервис обработки предитоговых файлов и формирования продаж.
 
     Роль:
-        Для каждого продавца берёт файл из «Обработки» и оставляет
-        только строки со статусом «В ОБОРОТЕ» и допустимым
-        владельцем (см. TextUtils.get_allowed_companies).
-        Файл перезаписывается на месте — дальнейшие шаги пайплайна
-        работают с уже очищенными данными.
+        Один проход по продавцам выполняет три задачи:
+            1. Фильтрация строк (статус «В ОБОРОТЕ» + допустимый
+               владелец) с перезаписью файла на месте.
+            2. Сбор {kiz: (norm_brand, raw_brand)} из всех
+               отфильтрованных файлов (первое вхождение).
+            3. Формирование файлов продаж: для каждой строки, где
+               владелец ≠ текущий продавец, add_sale_row.
+        Затем — удаление записей из used_kiz.json по брендам
+        requires_saving=False, разрешение дублей КИЗов в папке
+        «Продажи», сводка.
 
     Публичный API:
-        filter_files(target_dir, sellers, log_callback).
+        completion(target_dir, sellers).
     """
 
     def __init__(self, kiz_validator, log_manager_v2,
-                 brand_unknown_resolver=None) -> None:
+                 brand_unknown_resolver=None,
+                 duplicate_keeper_resolver=None) -> None:
         """Конструктор.
 
         Вход:
-            kiz_validator — KizValidator: на шаге фильтрации
-                            удаляются записи из used_kiz.json по
-                            брендам с requires_saving=False.
+            kiz_validator — KizValidator (load, batch, remove_kizs).
             log_manager_v2 — LogManagerV2, фабрика логгеров V2.
-            brand_unknown_resolver — Callable[[dict[str, list[str]]],
-                            dict[str, int]] | None. Callback для
-                            UI-разрешения неизвестных брендов:
-                            принимает brands_unknown, возвращает
-                            {"total", "resolved", "skipped"}. Вызов —
-                            только в UI-потоке. None — UI-разрешение
-                            недоступно, неизвестные бренды остаются
-                            как есть.
-
-        Роль: сохраняет ссылки. Логгер создаётся в начале
-              filter_files, когда уже известна рабочая папка.
+            brand_unknown_resolver — Callable[[dict], dict] | None.
+                Callback UI-разрешения неизвестных брендов.
+            duplicate_keeper_resolver — Callable[[str, dict[Path, str]],
+                Path | None] | None. Callback UI-выбора файла-получателя.
         """
         self.kiz_validator = kiz_validator
         self._log_manager_v2 = log_manager_v2
         self._brand_unknown_resolver = brand_unknown_resolver
+        self._duplicate_keeper_resolver = duplicate_keeper_resolver
 
-    def filter_files(self, target_dir, sellers) -> None:
-        """Фильтрует предитоговые файлы и чистит used_kiz.json.
+    def completion(self, target_dir, sellers) -> None:
+        """Обработка файлов и формирование продаж одним проходом.
 
         Вход:
-            target_dir — корневая папка задачи.
-            sellers — список Seller с восстановленными .brands
-                      (см. SellsFBSWindow._current_sellers).
-
-        Выход: нет.
-
-        Роль:
-            Основной цикл — существующая фильтрация строк по
-            статусу и владельцу + перезапись файлов. Второй цикл —
-            сбор пар {kiz: brand_key} из уже отфильтрованных файлов.
-            Пересечение с used_kiz.json + маппинг key → Brand +
-            KizUtils.filter_for_removal определяют, какие записи
-            удалить. Удаление — batch-контекстом, чтобы был один
-            физический save на выходе.
+            target_dir — корень рабочей папки.
+            sellers — список Seller с восстановленными .brands.
         """
+        # ============================================================
+        # Фаза 1. Контекст, логгер, загрузка базы.
+        # ============================================================
         ctx = TaskContext(
             target_dir,
             "ЧЗ_МП_{date}",
-            "log_фильтрация.txt",
+            "log_обработка.txt",
             subfolders=["Логи", "Отчёты", "Обработка", "Продажи"],
         )
-
         logger = self._log_manager_v2.create_logger_v2(
-            source="FilterPreFinalService.sells_fbs_service",
+            source="FinalProcessingService.sells_fbs_service",
             domain="chz_mp",
             work_folder=ctx.logs_dir,
-            log_filename="log_фильтрация.txt",
+            log_filename="log_обработка.txt",
         )
-        logger.status("Сбор данных начат")
-        logger.info(
-            "\n==================== Этап: Сбор данных ====================\n"
-        )
-        logger.report("\n==================== Этап: Сбор данных ====================\n")
+        logger.status("Обработка файлов начата")
+        logger.report("=== ОБРАБОТКА ФАЙЛОВ ===")
         logger.report(f"Рабочая папка: {ctx.work_folder}")
         logger.status("Загрузка базы КИЗов для валидации")
         try:
@@ -1363,29 +1350,40 @@ class FilterPreFinalService:
             )
 
         allowed_companies = TextUtils.get_allowed_companies(sellers)
-        files_found: int = 0
-        files_not_found: int = 0
-        files_not_opened: list = []
-        sellers_without_files: list = []
-        sellers_without_kiz: list = []
-        total_rows_sum: int = 0
-        total_kept_sum: int = 0
-        total_removed_sum: int = 0
+        sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
+
+        # ============================================================
+        # Фаза 2. Единый цикл по продавцам.
+        # ============================================================
+        kiz_to_brand_data: dict = {}
         status_counts_agg: dict = {}
         owner_counts_agg: dict = {}
-        # ------------------------------------------------------------------
-        # 1. Основной цикл: фильтрация строк в предитоговых файлах.
-        # ------------------------------------------------------------------
-        kiz_to_brand_data: dict = {}
+        files_found = 0
+        files_not_found = 0
+        files_not_opened = 0
+        files_empty = 0
+        sellers_without_files: list = []
+        sellers_without_kiz: list = []
+        total_rows_sum = 0
+        total_kept_sum = 0
+        own_kiz_count = 0
+        invalid_rows_count = 0
+        unknown_owner_count = 0
+        sale_row_errors = 0
+        per_receiver_created: dict = {}
+        per_receiver_inn: dict = {}
+
         for seller in sellers:
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
-                sellers_without_files.append(seller.name)
                 files_not_found += 1
+                sellers_without_files.append(seller.name)
                 logger.report(
-                    f"Файл для продавца '{seller.name}' не найден – пропущен"
+                    f"Файл для продавца '{seller.name}' "
+                    f"не найден – пропущен"
                 )
                 continue
+
             files_found += 1
             logger.status(f"Обработка файла: {file_path.name}")
             logger.report(f"Обработка файла: {file_path.name}")
@@ -1395,12 +1393,21 @@ class FilterPreFinalService:
                 description="предитоговый файл", read_only=False,
             )
             if wb is None:
-                files_not_opened.append(f"{seller.name}.xlsx")
+                files_not_opened += 1
                 continue
+
+            filtered_rows = []
+            filter_stats = {
+                "status": {}, "owner": {},
+                "total_kept": 0, "total_removed": 0,
+            }
+            headers: list = []
+            original_sheet_title = ""
 
             try:
                 sheet = wb.active
                 if sheet.max_row < 2:
+                    files_empty += 1
                     logger.report(
                         "  Файл пуст (только заголовки) – пропущен"
                     )
@@ -1409,53 +1416,57 @@ class FilterPreFinalService:
                 original_sheet_title = sheet.title
                 headers = [cell.value for cell in sheet[1]]
 
-                filtered_rows, stats = ExcelHelper.filter_and_clean_rows(
-                    sheet,
-                    status_col=4,          # столбец D
-                    owner_col=12,          # столбец L
-                    allowed_owners=allowed_companies,
-                    required_status="В ОБОРОТЕ",
+                filtered_rows, filter_stats = (
+                    ExcelHelper.filter_and_clean_rows(
+                        sheet,
+                        status_col=4,
+                        owner_col=12,
+                        allowed_owners=allowed_companies,
+                        required_status="В ОБОРОТЕ",
+                    )
                 )
                 total_rows_sum += (
-                        stats['total_kept'] + stats['total_removed']
+                    filter_stats['total_kept']
+                    + filter_stats['total_removed']
                 )
-                total_kept_sum += stats['total_kept']
-                total_removed_sum += stats['total_removed']
+                total_kept_sum += filter_stats['total_kept']
 
-
-                for status_name, count in stats['status'].items():
+                for status_name, count in filter_stats['status'].items():
                     status_counts_agg[status_name] = (
-                            status_counts_agg.get(status_name, 0) + count
+                        status_counts_agg.get(status_name, 0) + count
                     )
-                for owner_name, count in stats['owner'].items():
+                for owner_name, count in filter_stats['owner'].items():
                     owner_counts_agg[owner_name] = (
-                            owner_counts_agg.get(owner_name, 0) + count
+                        owner_counts_agg.get(owner_name, 0) + count
                     )
 
-                if stats['total_kept'] == 0:
+                if filter_stats['total_kept'] == 0:
                     sellers_without_kiz.append(seller.name)
-                logger.report(f"  Всего строк: {sheet.max_row - 1}")
-                if stats['status']:
+                logger.report(
+                    f"  Всего строк: {sheet.max_row - 1}"
+                )
+                if filter_stats['status']:
                     logger.report("  Удалено по статусу:")
                     for status, count in sorted(
-                        stats['status'].items(),
+                        filter_stats['status'].items(),
                         key=lambda x: x[0].lower(),
                     ):
                         logger.report(
                             f"    Статус '{status}': {count} строк"
                         )
-                if stats['owner']:
+                if filter_stats['owner']:
                     logger.report("  Удалено по владельцу:")
                     for owner, count in sorted(
-                        stats['owner'].items(),
+                        filter_stats['owner'].items(),
                         key=lambda x: x[0].lower(),
                     ):
                         logger.report(
                             f"    Владелец '{owner}': {count} строк"
                         )
-                logger.report(f"  Сохранено: {stats['total_kept']} строк")
-
-                if stats['total_kept'] == 0:
+                logger.report(
+                    f"  Сохранено: {filter_stats['total_kept']} строк"
+                )
+                if filter_stats['total_kept'] == 0:
                     logger.report(
                         "  Нет строк для сохранения – файл будет "
                         "очищен (только заголовки)"
@@ -1470,392 +1481,70 @@ class FilterPreFinalService:
             )
             logger.info(
                 f"\nОбработка файла: {seller.name}.xlsx — "
-                f"сохранено {stats['total_kept']} строк"
-            )
-        lines = ["\nФильтрация строк:"]
-        lines.append(f"  Продавцов обработано: {len(sellers)}")
-        lines.append(f"  Файлов найдено: {files_found}")
-        lines.append(f"  Файлов не найдено: {files_not_found}")
-        lines.append(f"  Всего строк: {total_rows_sum}")
-        lines.append(f"  Оставлено: {total_kept_sum}")
-        lines.append(
-            f"  Удалено по статусу: {sum(status_counts_agg.values())}"
-        )
-        lines.append(
-            f"  Удалено по владельцу: {sum(owner_counts_agg.values())}"
-        )
-        logger.info("\n".join(lines))
-
-        #разбивка по статусам. Только при непустом agg.
-        if status_counts_agg:
-            lines = ["\nУдалено по статусам:"]
-            for status_name in sorted(
-                    status_counts_agg.keys(), key=lambda x: x.lower()
-            ):
-                lines.append(
-                    f'  "{status_name}": {status_counts_agg[status_name]}'
-                )
-            logger.info("\n".join(lines))
-
-        #разбивка по владельцам.
-        empty_owner_count = owner_counts_agg.get("(пусто)", 0)
-        other_owners = {
-            k: v for k, v in owner_counts_agg.items() if k != "(пусто)"
-        }
-        if other_owners or empty_owner_count > 0:
-            lines = ["\nУдалено по владельцам (не из списка продавцов):"]
-            for owner_name in sorted(
-                    other_owners.keys(), key=lambda x: x.lower()
-            ):
-                lines.append(f'  "{owner_name}": {other_owners[owner_name]}')
-            if empty_owner_count > 0:
-                lines.append(
-                    f"  Без указания владельца: {empty_owner_count}"
-                )
-            logger.info("\n".join(lines))
-
-        # два отдельных info для продавцов без файлов/КИЗов.
-        if sellers_without_files:
-            logger.info(
-                f"\nПродавцы без файлов: "
-                f"{', '.join(sellers_without_files)}"
-            )
-        if sellers_without_kiz:
-            logger.info(
-                f"\nПродавцы без КИЗов после фильтрации: "
-                f"{', '.join(sellers_without_kiz)}"
+                f"сохранено {filter_stats['total_kept']} строк"
             )
 
-        # файлы, которые не открылись.
-        if files_not_opened:
-            logger.info(
-                f"\nНе открылись файлы: {', '.join(files_not_opened)}"
-            )
+            # Единый проход по отфильтрованным строкам.
+            for row_idx, values in filtered_rows:
+                parsed = PreFinalRow.from_row(values)
+                if parsed is None:
+                    invalid_rows_count += 1
+                    logger.report(
+                        f"  Строка {row_idx}: некорректные данные "
+                        f"(нет КИЗа или владельца) – пропущена"
+                    )
+                    continue
 
-        # статус перед вторым циклом — только если sellers непуст.
-        if sellers:
-            logger.status("Сбор КИЗов из отфильтрованных файлов")
-
-        # ------------------------------------------------------------------
-        # 2. Второй цикл — сбор пар {kiz: (норм_ключ, сырая_строка)} из
-        #    отфильтрованных файлов. Первое вхождение КИЗа приоритетно
-        #    (порядок sellers задаёт обход).
-        # ------------------------------------------------------------------
-
-        for seller in sellers:
-            file_path = ctx.processing_dir / f"{seller.name}.xlsx"
-            if not file_path.is_file():
-                continue
-
-            wb = WorkbookOpener.open(
-                file_path, logger=logger,
-                description="предитоговый файл", read_only=True,
-            )
-            if wb is None:
-                continue
-
-            try:
-                sheet = wb.active
-                for row_idx, row in enumerate(
-                        sheet.iter_rows(min_row=2, values_only=True),
-                        start=2,
-                ):
-                    parsed = PreFinalRow.from_row(row)
-                    if parsed is None:
-                        continue
-                    if parsed.kiz in kiz_to_brand_data:
-                        continue
+                # Filter-цель: kiz → (norm_brand, raw_brand), первое.
+                if parsed.kiz not in kiz_to_brand_data:
                     kiz_to_brand_data[parsed.kiz] = (
                         TextUtils.normalize(parsed.brand),
                         parsed.brand,
                     )
-            finally:
-                wb.close()
 
-        # ------------------------------------------------------------------
-        # 3. Пересечение с used_kiz.json + маппинг key → Brand + отбор.
-        # ------------------------------------------------------------------
-        used_kiz_keys = set(self.kiz_validator.storage.get_all().keys())
-        intersection = {
-            k: v for k, v in kiz_to_brand_data.items()
-            if k in used_kiz_keys
-        }
-
-        # Уникальные Brand из sellers[].brands, дедуп по имени.
-        seen_names: set = set()
-        unique_brands: list = []
-        for seller in sellers:
-            for brand in seller.brands:
-                if brand.name not in seen_names:
-                    seen_names.add(brand.name)
-                    unique_brands.append(brand)
-
-        brand_key_to_brand = TextUtils.build_key_mapping(
-            unique_brands,
-            key_extractor=lambda b: b.get_all_keys(),
-            logger=logger,
-        )
-
-        total_in_files = len(kiz_to_brand_data)
-
-        to_delete, stats, brands_unknown = KizUtils.filter_for_removal(
-            intersection, brand_key_to_brand, logger=logger,
-        )
-
-        # ------------------------------------------------------------------
-        # 4. Сводка.
-        # ------------------------------------------------------------------
-        logger.report("\n=== СВОДКА ПО ФИЛЬТРАЦИИ КИЗОВ ===")
-        logger.report(
-            f"Всего уникальных КИЗов в предитоговых файлах "
-            f"после фильтрации: {total_in_files}"
-        )
-        logger.report(
-            f"Из них есть в used_kiz.json: {stats['total']}"
-        )
-        logger.report(f"С пустым брендом: {stats['empty_brand']}")
-        logger.report(f"С неизвестным брендом: {stats['unknown_brand']}")
-        logger.report(f"Распознано брендов: {stats['recognized']}")
-        logger.report(
-            f"requires_saving=True → сохранено: {stats['saved']}"
-        )
-        logger.report(
-            f"requires_saving=False → удалено: {stats['deleted']}"
-        )
-
-        # info-сводка — дополнительно, после report-блока.
-        lines = ["\nСводка по фильтрации КИЗов:"]
-        lines.append(
-            f"  Всего уникальных КИЗов в предитоговых файлах: "
-            f"{total_in_files}"
-        )
-        lines.append(
-            f"  Из них есть в used_kiz.json: {stats['total']}"
-        )
-        lines.append(f"  С пустым брендом: {stats['empty_brand']}")
-        lines.append(
-            f"  С неизвестным брендом: {stats['unknown_brand']}"
-        )
-        lines.append(f"  Распознано брендов: {stats['recognized']}")
-        lines.append(f"  сохранено: {stats['saved']}")
-        lines.append(f"  удалено: {stats['deleted']}")
-        logger.info("\n".join(lines))
-
-        if brands_unknown:
-            if self._brand_unknown_resolver is None:
-                logger.warning(
-                    f"\nUI-обработка неизвестных брендов недоступна: "
-                    f"{len(brands_unknown)} ключей остаются "
-                    f"неизвестными"
+                # Generate-цель: определить отправителя по владельцу.
+                owner_seller = TextUtils.find_seller_by_company(
+                    parsed.owner_company, sellers
                 )
-            else:
-                # NEW A.5: статус перед разрешением.
-                logger.status("Запрос решений по неизвестным брендам")
-                try:
-                    result = self._brand_unknown_resolver(brands_unknown)
-                except Exception as e:
-                    logger.critical(
-                        f"Ошибка обработки неизвестных брендов: {e}",
-                        can_influence=False,
-                    )
-                    # NEW B.10: info о завершении с ошибкой.
-                    logger.info(
-                        "\nОбработка неизвестных брендов завершилась "
-                        "ошибкой"
-                    )
-                else:
-                    if isinstance(result, dict) and all(
-                            key in result
-                            for key in ("total", "resolved", "skipped")
-                    ):
-                        logger.info(
-                            f"\nРазрешение неизвестных брендов: всего "
-                            f"{result['total']}, разрешено "
-                            f"{result['resolved']}, пропущено "
-                            f"{result['skipped']}"
-                        )
-                    else:
-                        logger.warning(
-                            "Callback неизвестных брендов вернул "
-                            "некорректный результат"
-                        )
-                        logger.info(
-                            "\nОбработка неизвестных брендов вернула "
-                            "некорректный результат"
-                        )
-
-        # ------------------------------------------------------------------
-        # 5. Удаление из used_kiz.json — одним batch-контекстом.
-        # ------------------------------------------------------------------
-        if to_delete:
-            X = len(used_kiz_keys)
-            logger.status("Удаление записей из базы КИЗов")
-            with self.kiz_validator.batch():
-                deleted = self.kiz_validator.remove_kizs(to_delete)
-            Y = X - deleted
-            if deleted != len(to_delete):
-                logger.warning(
-                    f"remove_kizs: запрошено удалить {len(to_delete)}, "
-                    f"реально удалено {deleted} – расхождение"
-                )
-            lines = [
-                "\nБаза КИЗов:",
-                f"  Было: {X}",
-                f"  Стало: {Y}",
-                f"  Удалено: {deleted}",
-            ]
-            logger.info("\n".join(lines))
-
-        logger.report("\n=== ФИЛЬТРАЦИЯ ЗАВЕРШЕНА ===")
-
-        #info-отбивка конца, 50 знаков =.
-        logger.info("\n==================================================\n")
-
-        # финальный статус этапа.
-        logger.status(
-            "Сбор данных завершён. Можете переходить к этапу "
-            "формирования файлов продаж."
-        )
-
-class GenerateSalesService:
-    """Сервис формирования файлов продаж.
-
-    Роль:
-        По предитоговым файлам продавцов строит файлы передачи
-        КИЗов между продавцами. Владелец КИЗа (столбец L, читается
-        через PreFinalRow) определяет отправителя, текущий продавец —
-        получателя. Если владелец = текущий продавец, строка
-        пропускается. Файлы продаж пишет SalesFileGenerator в
-        подпапку Продажи/, пустые файлы в конце удаляются.
-
-    Публичный API:
-        generate(target_dir, sellers, log_callback).
-    """
-
-    def __init__(self, log_manager_v2, duplicate_keeper_resolver=None) -> None:
-        """Конструктор.
-
-        Вход:
-            log_manager_v2 — LogManagerV2, фабрика логгеров V2.
-            duplicate_keeper_resolver — Callable[[str, dict[Path, str]],
-                Path | None] | None. Callback для UI-разрешения
-                дублей: принимает (kiz, file_to_receiver), возвращает
-                Path выбранного файла или None при отмене. Вызов —
-                только в UI-потоке. None — UI-разрешение недоступно,
-                межфайловые дубли остаются как есть.
-
-        Роль: сохраняет ссылки. Логгер создаётся в начале generate.
-        """
-        self._log_manager_v2 = log_manager_v2
-        self._duplicate_keeper_resolver = duplicate_keeper_resolver
-
-    def generate(self, target_dir, sellers) -> None:
-        """Запускает формирование файлов продаж."""
-        # TaskContext — только пути, без логгера.
-        ctx = TaskContext(
-            target_dir,
-            "ЧЗ_МП_{date}",
-            "log_продажи.txt",
-            subfolders=["Логи", "Отчёты", "Обработка", "Продажи"],
-        )
-
-        logger = self._log_manager_v2.create_logger_v2(
-            source="GenerateSalesService.sells_fbs_service",
-            domain="chz_mp",
-            work_folder=ctx.logs_dir,
-            log_filename="log_продажи.txt",
-        )
-        logger.status("Формирование файлов продаж начато")
-
-        logger.info(
-            "\n==================== Этап: Продажи ====================\n"
-        )
-        logger.report("=== ФОРМИРОВАНИЕ ФАЙЛОВ ПРОДАЖ ===")
-        logger.report(f"Рабочая папка: {ctx.work_folder}")
-
-        sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
-        files_found = 0
-        files_not_found = 0
-        files_not_opened = 0
-        files_empty = 0
-        sellers_without_files = []
-        own_kiz_count = 0
-        invalid_rows_count = 0
-        unknown_owner_count = 0
-
-        for seller in sellers:
-            file_path = ctx.processing_dir / f"{seller.name}.xlsx"
-            if not file_path.is_file():
-                # NEW A.2: файла нет — учёт.
-                files_not_found += 1
-                sellers_without_files.append(seller.name)
-                logger.report(
-                    f"Файл для продавца '{seller.name}' не найден – пропущен"
-                )
-                continue
-
-            files_found += 1
-            logger.status(f"Обработка файла: {seller.name}.xlsx")
-            logger.report(f"\nОбработка файла: {file_path.name}")
-            wb = WorkbookOpener.open(
-                file_path, logger=logger,
-                description="предитоговый файл", read_only=True,
-            )
-            if wb is None:
-                files_not_opened += 1
-                continue
-
-            try:
-                sheet = wb.active
-                if sheet.max_row < 2:
-                    files_empty += 1
+                if owner_seller is None:
+                    unknown_owner_count += 1
                     logger.report(
-                        "  Файл пуст (только заголовки) – пропущен"
+                        f"  Строка {row_idx}: владелец "
+                        f"'{parsed.owner_company}' не найден "
+                        f"среди продавцов – пропущена"
                     )
                     continue
 
-                for row_idx, row in enumerate(
-                    sheet.iter_rows(min_row=2, values_only=True),
-                    start=2,
-                ):
-                    prefinal = PreFinalRow.from_row(row)
-                    if prefinal is None:
-                        invalid_rows_count += 1
-                        logger.report(
-                            f"  Строка {row_idx}: некорректные данные "
-                            f"(нет КИЗа или владельца) – пропущена"
-                        )
-                        continue
+                if owner_seller.name == seller.name:
+                    own_kiz_count += 1
+                    continue
 
-                    # Находим продавца-владельца по company.
-                    owner_seller = TextUtils.find_seller_by_company(
-                        prefinal.owner_company, sellers
-                    )
-                    if owner_seller is None:
-                        unknown_owner_count += 1
-                        logger.report(
-                            f"  Строка {row_idx}: владелец "
-                            f"'{prefinal.owner_company}' не найден "
-                            f"среди продавцов – пропущена"
-                        )
-                        continue
-
-                    if owner_seller.name == seller.name:
-                        own_kiz_count += 1
-                        continue
-
+                try:
                     sales_gen.add_sale_row(
                         from_seller_name=owner_seller.name,
                         to_seller_name=seller.name,
                         to_seller_inn=seller.inn,
-                        product_name=prefinal.product_name,
-                        raw_kiz=prefinal.kiz,
-                        owner_company=prefinal.owner_company,
-                        brand=prefinal.brand,
+                        product_name=parsed.product_name,
+                        raw_kiz=parsed.kiz,
+                        owner_company=parsed.owner_company,
+                        brand=parsed.brand,
                     )
-            finally:
-                wb.close()
+                except Exception as e:
+                    sale_row_errors += 1
+                    logger.warning(
+                        f" Строка {row_idx}: ошибка записи "
+                        f"продажи ({e}) – пропущена"
+                    )
+                    continue
 
+                per_receiver_created.setdefault(seller.name, {})
+                per_receiver_created[seller.name][owner_seller.name] = (
+                    per_receiver_created[seller.name]
+                    .get(owner_seller.name, 0) + 1
+                )
+                per_receiver_inn[seller.name] = seller.inn
+
+        # Info-сводка по обработке файлов.
         lines = ["\nОбработка файлов продавцов:"]
         lines.append(f"  Продавцов обработано: {len(sellers)}")
         lines.append(f"  Файлов найдено: {files_found}")
@@ -1882,136 +1571,235 @@ class GenerateSalesService:
             logger.warning(
                 f"\nСтрок с неизвестным владельцем: {unknown_owner_count}"
             )
+        if sale_row_errors > 0:
+            logger.warning(
+                f"\nОшибок записи продаж: {sale_row_errors}"
+            )
 
+        if sellers_without_kiz:
+            logger.info(
+                f"\nПродавцы без КИЗов после фильтрации: "
+                f"{', '.join(sellers_without_kiz)}"
+            )
 
-        # ---- УДАЛЕНИЕ ПУСТЫХ ФАЙЛОВ ПРОДАЖ ----
-        logger.report("\n--- ПРОВЕРКА ФАЙЛОВ ПРОДАЖ ---")
-        removed = sales_gen.remove_empty_files()
-        for file_path in sales_gen.get_created_files():
-            logger.report(f"  Файл сохранён: {file_path.name}")
+        # ============================================================
+        # Фаза 3. Фильтрация по брендам.
+        # ============================================================
+        used_kiz_keys = set(
+            self.kiz_validator.storage.get_all().keys()
+        )
+        intersection = {
+            k: v for k, v in kiz_to_brand_data.items()
+            if k in used_kiz_keys
+        }
 
-        if removed:
-            logger.report(f"  Удалено пустых файлов: {removed}")
+        seen_names: set = set()
+        unique_brands: list = []
+        for seller in sellers:
+            for brand in seller.brands:
+                if brand.name not in seen_names:
+                    seen_names.add(brand.name)
+                    unique_brands.append(brand)
 
-        # ---- СТАТИСТИКА ПРОДАЖ ----
-        logger.report("\n--- СТАТИСТИКА ПРОДАЖ ---")
-        stats = sales_gen.get_stats()
-        if stats:
-            for (from_seller, to_seller), count in sorted(stats.items()):
-                logger.report(
-                    f"  {from_seller} → {to_seller}: {count} КИЗов"
+        brand_key_to_brand = TextUtils.build_key_mapping(
+            unique_brands,
+            key_extractor=lambda b: b.get_all_keys(),
+            logger=logger,
+        )
+
+        total_in_files = len(kiz_to_brand_data)
+
+        to_delete, stats, brands_unknown = KizUtils.filter_for_removal(
+            intersection, brand_key_to_brand, logger=logger,
+        )
+
+        logger.report("\n=== СВОДКА ПО ФИЛЬТРАЦИИ КИЗОВ ===")
+        logger.report(
+            f"Всего уникальных КИЗов в предитоговых файлах "
+            f"после фильтрации: {total_in_files}"
+        )
+        logger.report(
+            f"Из них есть в used_kiz.json: {stats['total']}"
+        )
+        logger.report(f"С пустым брендом: {stats['empty_brand']}")
+        logger.report(
+            f"С неизвестным брендом: {stats['unknown_brand']}"
+        )
+        logger.report(
+            f"Распознано уникальных брендов: "
+            f"{stats['unique_recognized']}"
+        )
+        logger.report(
+            f"requires_saving=True → сохранено: {stats['saved']}"
+        )
+        logger.report(
+            f"requires_saving=False → удалено: {stats['deleted']}"
+        )
+
+        lines = ["\nСводка по фильтрации КИЗов:"]
+        lines.append(
+            f"  Всего уникальных КИЗов в предитоговых файлах: "
+            f"{total_in_files}"
+        )
+        lines.append(
+            f"  Из них есть в used_kiz.json: {stats['total']}"
+        )
+        lines.append(f"  С пустым брендом: {stats['empty_brand']}")
+        lines.append(
+            f"  С неизвестным брендом: {stats['unknown_brand']}"
+        )
+        lines.append(
+            f"  Распознано уникальных брендов: "
+            f"{stats['unique_recognized']}"
+        )
+        lines.append(f"  сохранено: {stats['saved']}")
+        lines.append(f"  удалено: {stats['deleted']}")
+        logger.info("\n".join(lines))
+
+        if brands_unknown:
+            if self._brand_unknown_resolver is None:
+                logger.warning(
+                    f"\nUI-обработка неизвестных брендов недоступна: "
+                    f"{len(brands_unknown)} ключей остаются "
+                    f"неизвестными"
                 )
-        else:
-            logger.report("  Нет строк для передачи между продавцами")
+            else:
+                logger.status("Запрос решений по неизвестным брендам")
+                try:
+                    result = self._brand_unknown_resolver(
+                        brands_unknown,
+                    )
+                except Exception as e:
+                    logger.critical(
+                        f"Ошибка обработки неизвестных брендов: {e}",
+                        can_influence=False,
+                    )
+                    logger.info(
+                        "\nОбработка неизвестных брендов завершилась "
+                        "ошибкой"
+                    )
+                else:
+                    if isinstance(result, dict) and all(
+                        key in result
+                        for key in ("total", "resolved", "skipped")
+                    ):
+                        logger.info(
+                            f"\nРазрешение неизвестных брендов: всего "
+                            f"{result['total']}, разрешено "
+                            f"{result['resolved']}, пропущено "
+                            f"{result['skipped']}"
+                        )
+                    else:
+                        logger.warning(
+                            "Callback неизвестных брендов вернул "
+                            "некорректный результат"
+                        )
+                        logger.info(
+                            "\nОбработка неизвестных брендов вернула "
+                            "некорректный результат"
+                        )
 
-        # ---- ПОИСК И РАЗРЕШЕНИЕ ДУБЛЕЙ КИЗОВ ----
+        if to_delete:
+            X = len(used_kiz_keys)
+            logger.status("Удаление записей из базы КИЗов")
+            with self.kiz_validator.batch():
+                deleted = self.kiz_validator.remove_kizs(to_delete)
+            Y = X - deleted
+            if deleted != len(to_delete):
+                logger.warning(
+                    f"remove_kizs: запрошено удалить {len(to_delete)}, "
+                    f"реально удалено {deleted} – расхождение"
+                )
+            lines = [
+                "\nБаза КИЗов:",
+                f"  Было: {X}",
+                f"  Стало: {Y}",
+                f"  Удалено: {deleted}",
+            ]
+            logger.info("\n".join(lines))
+
+        # Info: удалено по статусам.
+        if status_counts_agg:
+            lines = ["\nУдалено по статусам:"]
+            for status_name in sorted(
+                status_counts_agg.keys(), key=lambda x: x.lower()
+            ):
+                lines.append(
+                    f'  "{status_name}": '
+                    f"{status_counts_agg[status_name]}"
+                )
+            logger.info("\n".join(lines))
+
+        # Info: удалено по владельцам.
+        empty_owner_count = owner_counts_agg.get("(пусто)", 0)
+        other_owners = {
+            k: v for k, v in owner_counts_agg.items()
+            if k != "(пусто)"
+        }
+        if other_owners or empty_owner_count > 0:
+            lines = ["\nУдалено по владельцам (не из списка продавцов):"]
+            for owner_name in sorted(
+                other_owners.keys(), key=lambda x: x.lower()
+            ):
+                lines.append(
+                    f'  "{owner_name}": {other_owners[owner_name]}'
+                )
+            if empty_owner_count > 0:
+                lines.append(
+                    f"  Без указания владельца: {empty_owner_count}"
+                )
+            logger.info("\n".join(lines))
+
+        # ============================================================
+        # Фаза 4. Дубли.
+        # ============================================================
         logger.report("\n--- ПРОВЕРКА ДУБЛЕЙ КИЗОВ ---")
         logger.status("Проверка дублей КИЗов")
-        intra_file, inter_file = KizDuplicatesFinder.find(
-            ctx.sales_dir, logger,
-        )
-
-        # 6.4 — intra-file дедупликация.
-        intra_files_count = len(intra_file)
-        intra_deleted_rows = 0
-        logger.status("Удаление дублей внутри файлов")
-        for file_path in intra_file:
-            deleted = SalesFileRowsReader.remove_duplicates_in_file(
-                file_path, logger,
-            )
-            intra_deleted_rows += deleted
-            logger.debug(
-                f"КИЗ в файле {file_path.name}: удалено дублей {deleted}"
-            )
-
-        # 6.5–6.6 — inter-file обработка через callback.
-        inter_count = len(inter_file)
-        resolved_count = 0
-        removed_occurrences = 0
-
-        if inter_file:
-            if self._duplicate_keeper_resolver is None:
-                logger.warning(
-                    f"UI-обработка дублей недоступна: {inter_count} "
-                    f"КИЗов остаются в нескольких файлах"
-                )
-                logger.status("UI-обработка дублей недоступна")
-            else:
-                logger.status("Обработка межфайловых дублей")
-                for kiz, file_paths in inter_file.items():
-                    file_to_receiver = {
-                        p: (sales_gen.get_receiver_name(p) or p.name)
-                        for p in file_paths
-                    }
-                    logger.status(f"Разрешение дубля: {kiz}")
-                    try:
-                        chosen = self._duplicate_keeper_resolver(
-                            kiz, file_to_receiver,
-                        )
-                    except Exception as e:
-                        logger.critical(
-                            f"Ошибка в резолвере дублей: {e}",
-                            can_influence=False,
-                        )
-                        chosen = None
-                    if chosen is None or chosen not in file_paths:
-                        chosen = file_paths[0]
-                    resolved_count += 1
-
-                    removed_names = []
-                    for p in file_paths:
-                        if p == chosen:
-                            continue
-                        ok = SalesFileRowsReader.remove_kiz(
-                            p, kiz, logger,
-                        )
-                        if ok:
-                            removed_occurrences += 1
-                            removed_names.append(p.name)
-                        else:
-                            logger.warning(
-                                f"Не удалось удалить КИЗ {kiz} "
-                                f"из {p.name}"
-                            )
-
-                    logger.debug(
-                        f"КИЗ {kiz}: найден в "
-                        f"{[p.name for p in file_paths]}; "
-                        f"оставлен в {chosen.name}; "
-                        f"удалён из {removed_names}"
-                    )
-
-        empty_removed_after = 0
-        if intra_files_count > 0 or inter_count > 0:
-            empty_removed_after = sales_gen.remove_empty_files()
-
-        logger.report(
-            f"Найдено внутрифайловых дублей: {intra_files_count} файлов, "
-            f"удалено {intra_deleted_rows} строк"
-        )
-        logger.report(
-            f"Найдено межфайловых дублей: {inter_count} КИЗов"
-        )
-        logger.report(
-            f"Разрешено в пользу файла: {resolved_count}; "
-            f"удалено вхождений: {removed_occurrences}"
-        )
-        logger.report(
-            f"После чистки удалено пустых файлов: {empty_removed_after}"
+        dup_stats = SalesDuplicatesResolver.resolve(
+            ctx.sales_dir, sales_gen,
+            self._duplicate_keeper_resolver, logger,
         )
         lines = ["\nДубли КИЗов:"]
         lines.append(
-            f"  Внутрифайловых: {intra_files_count} файлов, "
-            f"удалено {intra_deleted_rows} строк"
+            f"  Внутрифайловых: {dup_stats['intra_files']} файлов, "
+            f"удалено {dup_stats['intra_deleted_rows']} строк"
         )
-        lines.append(f"  Межфайловых: {inter_count} КИЗов")
-        lines.append(f"  Разрешено в пользу файла: {resolved_count}")
-        lines.append(f"  Удалено вхождений: {removed_occurrences}")
+        lines.append(
+            f"  Межфайловых: {dup_stats['inter_count']} КИЗов"
+        )
+        lines.append(
+            f"  Разрешено в пользу файла: {dup_stats['resolved']}"
+        )
+        lines.append(
+            f"  Удалено вхождений: {dup_stats['removed_occurrences']}"
+        )
         logger.info("\n".join(lines))
 
-        logger.report("\n=== ФОРМИРОВАНИЕ ПРОДАЖ ЗАВЕРШЕНО ===")
+        # ============================================================
+        # Фаза 5. Сводка «Созданы файлы продаж».
+        # ============================================================
+        lines: list = []
+        for seller in sellers:
+            to_name = seller.name
+            per_from = per_receiver_created.get(to_name)
+            if not per_from:
+                continue
+            inn = per_receiver_inn.get(to_name, "")
+            lines.append(f" Для {to_name}:")
+            for from_name, count in per_from.items():
+                lines.append(
+                    f" {from_name} - {to_name} _ {inn}: {count} КИЗов"
+                )
+        if lines:
+            lines.insert(0, "\nСозданы файлы продаж:")
+            logger.info("\n".join(lines))
+
+        # ============================================================
+        # Фаза 6. Финал.
+        # ============================================================
+        logger.report("\n=== ОБРАБОТКА ЗАВЕРШЕНА ===")
+        logger.status("Обработка завершена")
         logger.info("\n==================================================\n")
-        logger.status("Формирование файлов продаж завершено")
 
 class FinalizePricesService:
     """Сервис внесения цен и финализации итоговых файлов.
@@ -2164,19 +1952,23 @@ class FinalizePricesService:
         sellers_with_error = 0
         sellers_without_files = []
         average_changes = {}  # {seller_name: (old, new)}
-        cluster_totals = {}  # {seller_name: total_clusters}
-        cluster_filled = {}  # {seller_name: filled_rows}
-        total_clusters = 0
-        total_processed = 0
-        total_skipped_no_numeric = 0
-        total_skipped_all_numeric = 0
-        total_cluster_filled = 0
         per_seller_stage1 = {}  # {seller_name: stage1_count}
-        per_seller_stage2 = {}  # {seller_name: stage2_stats.filled_rows}
+        per_seller_filled_rows = {}  # {seller_name: filled_rows этапа 2}
         per_seller_stage3 = {}  # {seller_name: stage3_count}
         total_stage1 = 0
-        total_stage2 = 0
         total_stage3 = 0
+
+        # Агрегаты этапа 2 (GTIN-заполнение).
+        total_gtins_in_prices = 0
+        total_filled_rows = 0
+        total_unique_gtins_filled = 0
+        total_skipped_already_priced = 0
+        total_skipped_no_gtin = 0
+        total_skipped_not_in_prices = 0
+        total_unique_gtins_not_in_prices = 0
+
+        per_seller_gtins_in_prices = {}
+        per_seller_unique_gtins_filled = {}
 
         for seller in sellers:
             price_map = all_prices.get(seller.name, {})
@@ -2319,33 +2111,64 @@ class FinalizePricesService:
                     f"Подстановка цен по GTIN для {seller.name}"
                 )
                 # Этап 2 — кластеры GTIN.
-                stage2_stats = PriceFiller.fill_by_gtin_clusters(sheet)
-                logger.report(
-                    f"  Кластеров GTIN: {stage2_stats.total_clusters}"
+                stage2_stats = PriceFiller.fill_by_gtin_clusters(
+                    sheet, price_map, logger=logger,
                 )
-                logger.report(
-                    f"  Обработано кластеров: {stage2_stats.processed}"
+                if stage2_stats.total_gtins_in_prices:
+                    logger.report(
+                        f"  GTIN в ценах: "
+                        f"{stage2_stats.total_gtins_in_prices}"
+                    )
+                if stage2_stats.skipped_already_priced:
+                    logger.report(
+                        f"  Пропущено (цена уже стоит): "
+                        f"{stage2_stats.skipped_already_priced}"
+                    )
+                if stage2_stats.skipped_no_gtin:
+                    logger.report(
+                        f"  Пропущено (нет GTIN): "
+                        f"{stage2_stats.skipped_no_gtin}"
+                    )
+                if stage2_stats.skipped_not_in_prices:
+                    logger.report(
+                        f"  Пропущено (GTIN нет в ценах): "
+                        f"{stage2_stats.skipped_not_in_prices} строк, "
+                        f"{stage2_stats.unique_gtins_not_in_prices} "
+                        f"уникальных"
+                    )
+                if stage2_stats.filled_rows:
+                    logger.report(
+                        f"  Установлено цен по GTIN: "
+                        f"{stage2_stats.filled_rows} строк, "
+                        f"{stage2_stats.unique_gtins_filled} уникальных "
+                        f"GTIN"
+                    )
+                per_seller_filled_rows[seller.name] = (
+                    stage2_stats.filled_rows
                 )
-                logger.report(
-                    f"  Пропущено (нет числовых): "
-                    f"{stage2_stats.skipped_no_numeric}"
+                per_seller_gtins_in_prices[seller.name] = (
+                    stage2_stats.total_gtins_in_prices
                 )
-                logger.report(
-                    f"  Пропущено (все числовые): "
-                    f"{stage2_stats.skipped_all_numeric}"
+                per_seller_unique_gtins_filled[seller.name] = (
+                    stage2_stats.unique_gtins_filled
                 )
-                logger.report(
-                    f"  Установлено цен по кластерам GTIN: "
-                    f"{stage2_stats.filled_rows}"
+                total_gtins_in_prices += (
+                    stage2_stats.total_gtins_in_prices
                 )
-                cluster_totals[seller.name] = stage2_stats.total_clusters
-                cluster_filled[seller.name] = stage2_stats.filled_rows
-                total_clusters += stage2_stats.total_clusters
-                total_processed += stage2_stats.processed
-                total_skipped_no_numeric += stage2_stats.skipped_no_numeric
-                total_skipped_all_numeric += stage2_stats.skipped_all_numeric
-                total_cluster_filled += stage2_stats.filled_rows
-                per_seller_stage2[seller.name] = stage2_stats.filled_rows
+                total_filled_rows += stage2_stats.filled_rows
+                total_unique_gtins_filled += (
+                    stage2_stats.unique_gtins_filled
+                )
+                total_skipped_already_priced += (
+                    stage2_stats.skipped_already_priced
+                )
+                total_skipped_no_gtin += stage2_stats.skipped_no_gtin
+                total_skipped_not_in_prices += (
+                    stage2_stats.skipped_not_in_prices
+                )
+                total_unique_gtins_not_in_prices += (
+                    stage2_stats.unique_gtins_not_in_prices
+                )
                 # Этап 3 — генерация по средней.
                 logger.status(
                     f"Генерация цен по средней для {seller.name}"
@@ -2414,41 +2237,66 @@ class FinalizePricesService:
                 lines.append(f"  {seller_name}: {old_display} → {new}")
             logger.info("\n".join(lines))
 
-        # NEW B.6: расширенный отчёт по кластерам GTIN.
-        lines = ["\nКластеры GTIN:"]
-        # Блок «По продавцам» — только для продавцов, дошедших
-        # до fill_by_gtin_clusters, с total_clusters > 0.
-        per_seller_lines = []
-        for seller in sellers:
-            if seller.name not in cluster_totals:
-                continue
-            total_c = cluster_totals[seller.name]
-            if total_c == 0:
-                continue
-            filled = cluster_filled.get(seller.name, 0)
-            per_seller_lines.append(
-                f"    {seller.name}: {total_c} кластеров, "
-                f"{filled} цен"
+            # GTIN-заполнение (этап 2).
+            lines = ["\nGTIN-заполнение:"]
+            per_seller_lines = []
+            for seller in sellers:
+                filled = per_seller_filled_rows.get(seller.name, 0)
+                total_g = per_seller_gtins_in_prices.get(seller.name, 0)
+                if filled == 0 and total_g == 0:
+                    continue
+                unique_filled = per_seller_unique_gtins_filled.get(
+                    seller.name, 0,
+                )
+                per_seller_lines.append(
+                    f"    {seller.name}: {total_g} GTIN в ценах, "
+                    f"{filled} строк / {unique_filled} GTIN установлено"
+                )
+
+            has_any = bool(per_seller_lines) or (
+                    total_gtins_in_prices > 0
+                    or total_skipped_already_priced > 0
+                    or total_skipped_no_gtin > 0
+                    or total_skipped_not_in_prices > 0
+                    or total_filled_rows > 0
             )
-        if per_seller_lines:
-            lines.append("  По продавцам:")
-            lines.extend(per_seller_lines)
-            lines.append("")
-        lines.append(f"  Всего кластеров: {total_clusters}")
-        lines.append(f"  Обработано (распределено): {total_processed}")
-        lines.append(
-            f"  Пропущено (нет числовых): {total_skipped_no_numeric}"
-        )
-        lines.append(
-            f"  Пропущено (все числовые): {total_skipped_all_numeric}"
-        )
-        lines.append(f"  Установлено цен: {total_cluster_filled}")
-        logger.info("\n".join(lines))
+
+            if has_any:
+                if per_seller_lines:
+                    lines.append("  По продавцам:")
+                    lines.extend(per_seller_lines)
+                if total_gtins_in_prices > 0:
+                    lines.append(
+                        f"  Всего GTIN в ценах: {total_gtins_in_prices}"
+                    )
+                if total_skipped_already_priced > 0:
+                    lines.append(
+                        f"  Пропущено (цена уже стоит): "
+                        f"{total_skipped_already_priced}"
+                    )
+                if total_skipped_no_gtin > 0:
+                    lines.append(
+                        f"  Пропущено (нет GTIN): "
+                        f"{total_skipped_no_gtin}"
+                    )
+                if total_skipped_not_in_prices > 0:
+                    lines.append(
+                        f"  Пропущено (GTIN нет в ценах): "
+                        f"{total_skipped_not_in_prices} строк, "
+                        f"{total_unique_gtins_not_in_prices} уникальных"
+                    )
+                if total_filled_rows > 0:
+                    lines.append(
+                        f"  Установлено цен по GTIN: "
+                        f"{total_filled_rows} строк, "
+                        f"{total_unique_gtins_filled} уникальных GTIN"
+                    )
+                logger.info("\n".join(lines))
 
         # NEW B.7: расширенный отчёт о внесённых ценах.
         # total_stage2 не заполнялся отдельно — используем
         # total_cluster_filled как источник «По кластерам GTIN».
-        total_stage2_effective = total_cluster_filled
+        total_stage2_effective = total_filled_rows
         total_all = total_stage1 + total_stage2_effective + total_stage3
         pct1 = (
             round(total_stage1 * 100 / total_all) if total_all > 0 else 0
@@ -2472,7 +2320,7 @@ class FinalizePricesService:
         per_seller_lines = []
         for seller in sellers:
             s1 = per_seller_stage1.get(seller.name, 0)
-            s2 = per_seller_stage2.get(seller.name, 0)
+            s2 = per_seller_filled_rows.get(seller.name, 0)
             s3 = per_seller_stage3.get(seller.name, 0)
             total_s = s1 + s2 + s3
             if total_s == 0:

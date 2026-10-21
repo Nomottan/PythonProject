@@ -11,17 +11,19 @@
     set_status/set_info/_precheck_target_dir/closeEvent/
     on_accumulate_sales — унаследованы, окно отвечает только за
     свою раскладку и обработчики шагов.
+
+Структура файла:
+    КОНСТАНТЫ → ИНИЦИАЛИЗАЦИЯ → ОБРАБОТЧИКИ КНОПОК →
+    ПРИВАТНЫЕ МЕТОДЫ → ХУКИ → ВЗАИМОДЕЙСТВИЕ С ОКНОМ.
 """
 
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
 )
-from ui.styles import ColorCalculator
-from ui.widgets.path_selector import PathSelector
+from ui.styles import ColorCalculator, WindowStyle
 from services.returns_service import (
     ReturnsPreparationService, KizExportService, KizTransferService,
 )
@@ -39,19 +41,22 @@ class ReturnsWindow(BaseServiceWindow):
         BaseServiceWindow._run_async_step. Логи шагов идут в
         status_log (унаследован); короткие подсказки — в
         status_label (унаследован).
+
+    Цвет:
+        BG_COLOR вычисляется в __init__ от цвета MainWindow через
+        WindowStyle.resolve_parent_bg. Классовый BG_COLOR оставлен
+        как fallback, если окно создаётся без родителя.
     """
+
+    # ============================================================
+    # КОНСТАНТЫ
+    # ============================================================
 
     LOGGER_SOURCE = "ReturnsWindow.returns_window"
     LOGGER_DOMAIN = "returns"
 
-    # BG_COLOR вычисляется через ColorCalculator.derive от нейтрального
-    # (50,50,50): r+2(r//5), g+g//5, b+2(b//5) → (70, 60, 70).
-    BG_COLOR = ColorCalculator.derive(
-        (50, 50, 50),
-        r_fn=lambda r: r + 2 * (r // 5),
-        g_fn=lambda g: g + g // 5,
-        b_fn=lambda b: b + 2 * (b // 5),
-    )
+    # Fallback; реальный BG_COLOR вычисляется в __init__ от parent.
+    BG_COLOR = (50, 50, 50)
 
     # Кнопки, блокируемые на время шага пайплайна.
     # btn_accumulate сюда не входит — это отдельная операция.
@@ -62,6 +67,10 @@ class ReturnsWindow(BaseServiceWindow):
         "btn_prepare_transfer",
     )
 
+    # ============================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # ============================================================
+
     def __init__(self, parent=None, log_manager_v2=None):
         """Конструктор.
 
@@ -69,25 +78,29 @@ class ReturnsWindow(BaseServiceWindow):
             parent — MainWindow.
             log_manager_v2 — LogManagerV2 или None.
 
-        Роль: строит раскладку и подключает сигналы. Логгер,
-              target_dir, status_label, status_log и main_layout
-              созданы базовым классом.
+        Роль: вычисляет цвет от родителя, строит состояние,
+              элементы и макет. Порядок блоков: состояние →
+              элементы → макет.
         """
+        # Цвет — от родителя. Формула: r+2(r//5), g+g//5, b+2(b//5).
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (50, 50, 50))
+        self.BG_COLOR = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r *2 ,
+            g_fn=lambda g: g + g // 3,
+            b_fn=lambda b: b + 2 * (b // 5),
+        )
+
         super().__init__(
             parent,
             title="Подготовка возвратов в оборот",
             log_manager_v2=log_manager_v2,
         )
 
-        # Специфичное для окна состояние.
+        # ---------- СОСТОЯНИЕ ----------
         self.source_file = None
 
-        # ---------- ЭЛЕМЕНТЫ ----------
-        self.btn_choose_file = ButtonFactory.create_button(
-            self, "Выбрать файл", (120, 90, 120, 0.8),
-        )
-        self.btn_choose_file.clicked.connect(self.select_source_file)
-
+        # ---------- ЭЛЕМЕНТЫ: описание ----------
         self.header_label = LabelFactory.create_label(
             self,
             text=(
@@ -105,122 +118,61 @@ class ReturnsWindow(BaseServiceWindow):
             word_wrap=True,
         )
 
-        self.file_label = LabelFactory.create_label(
-            self, "Файл не выбран",
-            bg_color=(64, 48, 66, 128),
-            text_color=None,
-            padding="4px 8px",
-            border_radius=5,
-            alignment=Qt.AlignLeft | Qt.AlignVCenter,
-            font_family="Consolas, monospace",
-            font_size=10,
+        # ---------- ЭЛЕМЕНТЫ: файл возвратов ----------
+        (self.file_row,
+         self.btn_choose_file,
+         self.file_label) = self._create_file_picker_row(
+            "Выбрать файл",
+            "last_returns_dir",
+            "Выберите Excel-файл с возвратами",
+            "Excel (*.xlsx)",
+            button_color=(120, 90, 120, 0.8),
         )
 
-        self.path_selector = PathSelector(
-            self,
-            initial_path=self.target_dir,
-            dialog_title="Выберите целевую папку",
-        )
-        self.path_selector.path_changed.connect(self._on_target_dir_changed)
+        self.btn_choose_file.setFixedWidth(120)
+        self.file_label.setFixedWidth(190)
+        self.btn_choose_file.clicked.connect(self.select_source_file)
 
-        self.btn_prepare = ButtonFactory.create_button(
-            self, "Подготовка", (100, 50, 100),
-            padding="6px 12px", fixed_size=(180, 35),
-        )
-        self.btn_prepare.clicked.connect(self.on_prepare)
+        # ---------- ЭЛЕМЕНТЫ: путь ----------
+        # path_selector создаётся в BaseServiceWindow.
+        self.path_selector.setFixedWidth(315)
 
-        self.btn_export_kiz = ButtonFactory.create_button(
-            self, "Выгрузить КИЗы для возврата", (130, 50, 100),
-            padding="8px 16px", fixed_size=(220, 35),
+        # ---------- ЭЛЕМЕНТЫ: кнопки шагов ----------
+        _action_configs = [
+            ("btn_prepare", "Подготовка",
+             (100, 50, 100), "6px 12px", (150, 35)),
+            ("btn_export_kiz", "Для возврата",
+             (130, 50, 100), "8px 16px", (150, 35)),
+            ("btn_prepare_transfer", "Для передачи",
+             (100, 50, 70), "8px 16px", (150, 35)),
+        ]
+        _action_handlers = {
+            "btn_prepare": "on_prepare",
+            "btn_export_kiz": "on_export_kiz",
+            "btn_prepare_transfer": "on_prepare_transfer",
+        }
+        ButtonFactory.create_buttons_from_config(
+            self, _action_configs, _action_handlers,
         )
-        self.btn_export_kiz.clicked.connect(self.on_export_kiz)
-
-        self.btn_prepare_transfer = ButtonFactory.create_button(
-            self, "Подготовить КИЗы для передачи", (100, 50, 70),
-            padding="8px 16px", fixed_size=(220, 35),
-        )
-        self.btn_prepare_transfer.clicked.connect(self.on_prepare_transfer)
 
         # Гейтинг: шаги 2 и 3 недоступны до подготовки.
         self.btn_export_kiz.setEnabled(False)
         self.btn_prepare_transfer.setEnabled(False)
 
         # ---------- МАКЕТ ----------
-        center_layout = QVBoxLayout()
-        center_layout.setSpacing(10)
-        center_layout.setAlignment(Qt.AlignCenter)
-
-        center_layout.addWidget(self.header_label)
-
-        file_row = LayoutFactory.create_row(
-            self, self.btn_choose_file, self.file_label, spacing=5,
+        box = LayoutFactory.create_service_box(
+            self,
+            path_selector=self.path_selector,
+            status_label=self.status_label,
+            left_buttons=[self.btn_prepare],
+            right_items=[self.btn_export_kiz, self.btn_prepare_transfer],
+            file_row=self.file_row,
+            right_stretch_top=True,
         )
-        center_layout.addWidget(file_row)
 
-        center_layout.addWidget(self.path_selector)
-
-        prepare_layout = QHBoxLayout()
-        prepare_layout.addWidget(self.btn_prepare)
-        center_layout.addLayout(prepare_layout)
-
-        # status_label — из базового класса.
-        center_layout.addWidget(self.status_label)
-
-        bottom_row = LayoutFactory.create_row(
-            self, self.btn_export_kiz, self.btn_prepare_transfer, spacing=20,
+        self._add_service_page(
+            self.header_label, box, self._create_accumulate_row(),
         )
-        center_layout.addWidget(bottom_row)
-
-        # status_log — из базового класса.
-        center_layout.addWidget(self.status_log)
-
-        center_layout.addStretch(1)
-
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addStretch()
-        self.btn_accumulate = ButtonFactory.create_button(
-            self, "Собрать продажи", (60, 90, 120, 0.8),
-            padding="8px 16px", fixed_size=(160, 35),
-        )
-        # on_accumulate_sales унаследован от BaseServiceWindow.
-        self.btn_accumulate.clicked.connect(self.on_accumulate_sales)
-        bottom_layout.addWidget(self.btn_accumulate)
-        center_layout.addLayout(bottom_layout)
-
-        self.main_layout.addLayout(center_layout)
-
-        if self.logger:
-            self.logger.debug("ReturnsWindow.__init__: окно инициализировано")
-
-    # ============================================================
-    # ХУКИ БАЗОВОГО КЛАССА
-    # ============================================================
-
-    def _current_sellers(self) -> list:
-        """Возвращает список продавцов с брендами.
-
-        Вход: нет.
-        Выход: list[Seller] с заполненными .brands.
-        Роль: переопределение базового — для возвратов нужны
-              продавцы с полной информацией о брендах.
-        """
-        return self.main_window.sellers_brands_service.get_sellers_with_brands()
-
-    def _on_target_dir_changed_hook(self) -> None:
-        """Сброс кнопок шагов 2–3 при смене папки.
-
-        Вход: нет.
-        Выход: нет.
-        Роль: хук вызывается базовым _on_target_dir_changed после
-              очистки логов и обновления target_dir.
-        """
-        self.btn_export_kiz.setEnabled(False)
-        self.btn_prepare_transfer.setEnabled(False)
-
-    def cleanup(self) -> None:
-        """Сброс состояния окна при закрытии."""
-        self.source_file = None
-        self.file_label.setText("Файл не выбран")
 
     # ============================================================
     # ОБРАБОТЧИКИ КНОПОК
@@ -243,11 +195,6 @@ class ReturnsWindow(BaseServiceWindow):
             label_widget=self.file_label,
             on_success=self._on_source_file_selected,
         )
-
-    def _on_source_file_selected(self, path: str) -> None:
-        """Сохраняет выбранный файл и подсказывает следующий шаг."""
-        self.source_file = path
-        self.set_status("Файл выбран. Нажмите «Подготовка».")
 
     @log_button_action("btn_prepare", "Ошибка в on_prepare: {e}")
     def on_prepare(self) -> None:
@@ -275,8 +222,71 @@ class ReturnsWindow(BaseServiceWindow):
             on_success=self._on_prepare_finished,
         )
 
+    @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
+    def on_export_kiz(self) -> None:
+        """Шаг 2: выгрузка КИЗов для возврата."""
+        if not self._precheck_target_dir():
+            return
+
+        service = KizExportService(
+            self.main_window.kiz_validator,
+            self.log_manager_v2,
+            overwrite_requester=self._request_export_mode,
+        )
+        if self.logger:
+            self.logger.debug("on_export_kiz: KizExportService создан")
+
+        self._run_async_step(
+            service=service,
+            target_method=service.export,
+            kwargs={},
+            start_message="Выгрузка КИЗов...",
+            finish_message="Выгрузка КИЗов завершена.",
+            step_name="on_export_kiz",
+            enable_after=self.btn_prepare_transfer,
+        )
+
+    @log_button_action(
+        "btn_prepare_transfer",
+        "Ошибка в on_prepare_transfer: {e}",
+    )
+    def on_prepare_transfer(self) -> None:
+        """Шаг 3: подготовка КИЗов для передачи между продавцами."""
+        if not self._precheck_target_dir():
+            return
+
+        service = KizTransferService(self.log_manager_v2)
+        if self.logger:
+            self.logger.debug(
+                "on_prepare_transfer: KizTransferService создан"
+            )
+
+        self._run_async_step(
+            service=service,
+            target_method=service.prepare_transfer,
+            kwargs={},
+            start_message="Подготовка передач КИЗов...",
+            finish_message="Подготовка передач КИЗов завершена.",
+            step_name="on_prepare_transfer",
+            enable_after=None,
+        )
+
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: CALLBACK'И И ДИАЛОГИ
+    # ============================================================
+
+    def _on_source_file_selected(self, path: str) -> None:
+        """Callback выбора файла возвратов.
+
+        Вход: path — выбранный путь.
+        Выход: нет.
+        Роль: сохраняет self.source_file и подсказывает шаг.
+        """
+        self.source_file = path
+        self.set_status("Файл выбран. Нажмите «Подготовка».")
+
     def _on_prepare_finished(self, result) -> None:
-        """Реакция на завершение prepare.
+        """Callback on_success шага prepare.
 
         Вход:
             result — dict {new, old, dup, saved} или None.
@@ -343,30 +353,6 @@ class ReturnsWindow(BaseServiceWindow):
         dialog.exec()
         return dialog.get_resolution()
 
-    @log_button_action("btn_export_kiz", "Ошибка в on_export_kiz: {e}")
-    def on_export_kiz(self) -> None:
-        """Шаг 2: выгрузка КИЗов для возврата."""
-        if not self._precheck_target_dir():
-            return
-
-        service = KizExportService(
-            self.main_window.kiz_validator,
-            self.log_manager_v2,
-            overwrite_requester=self._request_export_mode,
-        )
-        if self.logger:
-            self.logger.debug("on_export_kiz: KizExportService создан")
-
-        self._run_async_step(
-            service=service,
-            target_method=service.export,
-            kwargs={},
-            start_message="Выгрузка КИЗов...",
-            finish_message="Выгрузка КИЗов завершена.",
-            step_name="on_export_kiz",
-            enable_after=self.btn_prepare_transfer,
-        )
-
     def _request_export_mode(self) -> bool | None:
         """Callback от KizExportService: спросить режим записи .txt.
 
@@ -418,27 +404,45 @@ class ReturnsWindow(BaseServiceWindow):
             return False
         return None
 
-    @log_button_action(
-        "btn_prepare_transfer",
-        "Ошибка в on_prepare_transfer: {e}",
-    )
-    def on_prepare_transfer(self) -> None:
-        """Шаг 3: подготовка КИЗов для передачи между продавцами."""
-        if not self._precheck_target_dir():
-            return
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: ХУКИ БАЗОВОГО КЛАССА
+    # ============================================================
 
-        service = KizTransferService(self.log_manager_v2)
-        if self.logger:
-            self.logger.debug(
-                "on_prepare_transfer: KizTransferService создан"
-            )
+    def _current_sellers(self) -> list:
+        """Возвращает список продавцов с брендами.
 
-        self._run_async_step(
-            service=service,
-            target_method=service.prepare_transfer,
-            kwargs={},
-            start_message="Подготовка передач КИЗов...",
-            finish_message="Подготовка передач КИЗов завершена.",
-            step_name="on_prepare_transfer",
-            enable_after=None,
+        Вход: нет.
+        Выход: list[Seller] с заполненными .brands.
+        Роль: переопределение базового — для возвратов нужны
+              продавцы с полной информацией о брендах.
+        """
+        return (
+            self.main_window.sellers_brands_service
+            .get_sellers_with_brands()
         )
+
+    def _on_target_dir_changed_hook(self) -> None:
+        """Сброс кнопок шагов 2–3 при смене папки.
+
+        Вход: нет.
+        Выход: нет.
+        Роль: хук вызывается базовым _on_target_dir_changed после
+              очистки логов и обновления target_dir.
+        """
+        self.btn_export_kiz.setEnabled(False)
+        self.btn_prepare_transfer.setEnabled(False)
+
+    # ============================================================
+    # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
+    # ============================================================
+
+    def cleanup(self) -> None:
+        """Сброс состояния окна при закрытии.
+
+        Вход: нет.
+        Выход: нет.
+        Роль: вызывается из базового closeEvent. Сбрасывает
+              source_file и текст лейбла файла.
+        """
+        self.source_file = None
+        self.file_label.setText("Файл не выбран")

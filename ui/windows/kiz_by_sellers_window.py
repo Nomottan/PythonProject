@@ -12,33 +12,52 @@
     set_status/set_info/_precheck_target_dir/closeEvent/
     on_accumulate_sales — унаследованы. Окно отвечает за раскладку
     и обработчик открытия диалога распределения.
+
+Структура файла:
+    КОНСТАНТЫ → ИНИЦИАЛИЗАЦИЯ → ОБРАБОТЧИКИ КНОПОК →
+    ХУКИ → ВЗАИМОДЕЙСТВИЕ С ОКНОМ.
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QVBoxLayout
+
 from ui.styles import ColorCalculator, WindowStyle
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
 )
-from ui.widgets.path_selector import PathSelector
 from ui.windows.kiz_by_sellers_dialogs import KizBySellersDialog
 from utils.log_tools.decorators import log_button_action
+
 
 class KizBySellersWindow(BaseServiceWindow):
     """Окно аккумуляции и распределения продаж.
 
-    Роль:Q
+    Роль:
         Объединяет два действия: аккумуляцию продаж (кнопка
         унаследована от BaseServiceWindow) и распределение
         BestMark-файла (диалог KizBySellersDialog).
+
+    Цвет:
+        BG_COLOR вычисляется в __init__ от цвета MainWindow через
+        WindowStyle.resolve_parent_bg. Классовый BG_COLOR оставлен
+        как fallback, если окно создаётся без родителя.
     """
+
+    # ============================================================
+    # КОНСТАНТЫ
+    # ============================================================
 
     LOGGER_SOURCE = "KizBySellersWindow.kiz_by_sellers_window"
     LOGGER_DOMAIN = "sales"
 
+    # Fallback; реальный BG_COLOR вычисляется в __init__ от parent.
     BG_COLOR = (50, 50, 50)
+
     PIPELINE_BUTTONS = ("btn_accumulate", "btn_open_distribute")
+
+    # ============================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # ============================================================
 
     def __init__(self, parent=None, log_manager_v2=None):
         """Конструктор.
@@ -47,8 +66,10 @@ class KizBySellersWindow(BaseServiceWindow):
             parent — MainWindow.
             log_manager_v2 — LogManagerV2 или None.
 
-        Роль: строит раскладку, подключает сигналы.
+        Роль: вычисляет цвет от родителя, строит элементы
+              и макет.
         """
+        # Цвет — от родителя. Формула: 2r+r//5, g-g//5, b.
         parent_bg = WindowStyle.resolve_parent_bg(parent, (50, 50, 50))
         self.BG_COLOR = ColorCalculator.derive(
             parent_bg,
@@ -56,14 +77,15 @@ class KizBySellersWindow(BaseServiceWindow):
             g_fn=lambda g: g - g // 5,
             b_fn=lambda b: b,
         )
+
         super().__init__(
             parent,
             title="Продажи КИЗов",
             log_manager_v2=log_manager_v2,
         )
 
-        # ---------- ОПИСАНИЕ (D4) ----------
-        desc_label = LabelFactory.create_label(
+        # ---------- ЭЛЕМЕНТЫ: описание ----------
+        self.desc_label = LabelFactory.create_label(
             self,
             text=(
                 "Аккумуляция и распределение файлов продаж:\n"
@@ -80,15 +102,12 @@ class KizBySellersWindow(BaseServiceWindow):
             word_wrap=True,
         )
 
-        # ---------- ВЫБОР ПАПКИ ----------
-        self.path_selector = PathSelector(
-            self,
-            initial_path=self.target_dir,
-            dialog_title="Выберите целевую папку",
-        )
-        self.path_selector.path_changed.connect(self._on_target_dir_changed)
+        # ---------- ЭЛЕМЕНТЫ: путь ----------
+        # path_selector создаётся в BaseServiceWindow.
+        # Ширина: 180 + 10 + 180 = 370 — под ряд кнопок.
+        self.path_selector.setFixedWidth(370)
 
-        # ---------- КНОПКИ ----------
+        # ---------- ЭЛЕМЕНТЫ: кнопки ----------
         self.btn_accumulate = ButtonFactory.create_button(
             self, "Собрать продажи", (60, 90, 120, 0.8),
             padding="8px 16px", fixed_size=(180, 35),
@@ -105,19 +124,21 @@ class KizBySellersWindow(BaseServiceWindow):
         )
 
         # ---------- МАКЕТ ----------
-        center = QVBoxLayout()
-        center.setSpacing(10)
-        center.setAlignment(Qt.AlignCenter)
-        center.addWidget(desc_label)
-        center.addWidget(self.path_selector)
-        center.addWidget(self.status_label)
-        center.addWidget(LayoutFactory.create_row(
+        bottom_widget = LayoutFactory.create_row(
             self, self.btn_accumulate, self.btn_open_distribute,
-            spacing=8,
-        ))
-        center.addStretch(1)
-        center.addWidget(self.status_log)
-        self.main_layout.addLayout(center)
+            spacing=10,
+        )
+        box = LayoutFactory.create_service_box(
+            self,
+            path_selector=self.path_selector,
+            status_label=self.status_label,
+            left_buttons=[],
+            bottom_widget=bottom_widget,
+        )
+
+        self._add_service_page(
+            self.desc_label, box, accumulate_row=None,
+        )
 
         if self.logger:
             self.logger.debug(
@@ -125,30 +146,7 @@ class KizBySellersWindow(BaseServiceWindow):
             )
 
     # ============================================================
-    # ХУКИ БАЗОВОГО КЛАССА
-    # ============================================================
-
-    def _on_target_dir_changed_hook(self) -> None:
-        """Хук смены целевой папки.
-
-        Вход: нет.
-        Выход: нет.
-        Роль: обе кнопки всегда доступны — сброс не требуется.
-        """
-        pass
-
-    def cleanup(self) -> None:
-        """Хук очистки при закрытии.
-
-        Вход: нет.
-        Выход: нет.
-        Роль: специфичных данных нет — сбрасывать нечего.
-        """
-        if self.logger:
-            self.logger.debug("KizBySellersWindow.cleanup")
-
-    # ============================================================
-    # ОБРАБОТЧИКИ
+    # ОБРАБОТЧИКИ КНОПОК
     # ============================================================
 
     @log_button_action(
@@ -182,3 +180,30 @@ class KizBySellersWindow(BaseServiceWindow):
             self.logger.debug(
                 "on_open_distribute_dialog: диалог закрыт"
             )
+
+    # ============================================================
+    # ХУКИ БАЗОВОГО КЛАССА
+    # ============================================================
+
+    def _on_target_dir_changed_hook(self) -> None:
+        """Хук смены целевой папки.
+
+        Вход: нет.
+        Выход: нет.
+        Роль: обе кнопки всегда доступны — сброс не требуется.
+        """
+        pass
+
+    # ============================================================
+    # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
+    # ============================================================
+
+    def cleanup(self) -> None:
+        """Хук очистки при закрытии.
+
+        Вход: нет.
+        Выход: нет.
+        Роль: специфичных данных нет — только debug.
+        """
+        if self.logger:
+            self.logger.debug("KizBySellersWindow.cleanup")

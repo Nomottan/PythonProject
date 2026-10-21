@@ -79,6 +79,97 @@ class LayoutFactory:
         return container
 
     @staticmethod
+    def create_service_box(parent, path_selector, status_label, left_buttons,
+                           right_items=None, file_row=None,
+                           bottom_widget=None, right_stretch_top=False):
+        """Создаёт стандартный бокс сервисного окна.
+
+        Вход:
+            parent — родительский виджет.
+            path_selector — виджет выбора пути.
+            status_label — лейбл статуса (растягивается в левой колонке).
+            left_buttons — список виджетов для левой колонки (под статусом).
+            right_items — список виджетов для правой колонки.
+            file_row — виджет строки выбора файла (опционально).
+            bottom_widget — виджет нижней строки (опционально, если
+                            колонки не нужны — просто status + row).
+            right_stretch_top — прижать right_items к низу правой
+                            колонки (stretch сверху). По умолчанию
+                            False — элементы сверху.
+
+        Выход: QWidget с готовой компоновкой.
+        """
+        box = QWidget(parent)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # 1. Шапка: выбор пути и (опционально) выбор файла.
+        layout.addWidget(path_selector, alignment=Qt.AlignCenter)
+        if file_row:
+            layout.addWidget(file_row, alignment=Qt.AlignCenter)
+
+        # 2. Основная часть: либо колонки, либо простая строка.
+        if bottom_widget:
+            layout.addWidget(status_label, alignment=Qt.AlignCenter)
+            layout.addWidget(bottom_widget, alignment=Qt.AlignCenter)
+        else:
+            left_col = QVBoxLayout()
+            left_col.addWidget(status_label, 1)
+            for btn in left_buttons:
+                left_col.addWidget(btn)
+
+            right_col = QVBoxLayout()
+            right_col.setSpacing(5)
+            if right_stretch_top:
+                right_col.addStretch(1)
+            if right_items:
+                for item in right_items:
+                    right_col.addWidget(item)
+
+            columns = QHBoxLayout()
+            columns.addLayout(left_col)
+            columns.addLayout(right_col)
+
+            wrapper = QHBoxLayout()
+            wrapper.addStretch()
+            wrapper.addLayout(columns)
+            wrapper.addStretch()
+            layout.addLayout(wrapper)
+
+        return box
+
+    @staticmethod
+    def create_service_page(header_widget, box, status_log,
+                            accumulate_row=None):
+        """Собирает стандартную вертикальную страницу сервиса.
+
+        Вход:
+            header_widget — верхний лейбл (desc_label / header_label /
+                            instruction_label).
+            box — центральный бокс (из create_service_box).
+            status_log — прокручиваемый лог (StatusLog).
+            accumulate_row — QLayout с кнопкой «Собрать продажи»
+                            или None, если операция не нужна.
+
+        Выход: QVBoxLayout — готов к addLayout() в main_layout.
+
+        Роль: единый макет сервисной страницы. Структура:
+              header → box → stretch(1) → status_log
+              → (accumulate_row). Margins наследуются от QVBoxLayout
+              по умолчанию — поведение совпадает с прежним.
+        """
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.addWidget(header_widget)
+        layout.addWidget(box)
+        layout.addStretch(1)
+        layout.addWidget(status_log)
+        if accumulate_row is not None:
+            layout.addLayout(accumulate_row)
+        return layout
+
+    @staticmethod
     def create_column(parent, *widgets, spacing=10, margins=(0, 0, 0, 0),
                       alignment=Qt.AlignCenter, fixed_width=None,
                       fixed_height=None, stretch_factors=None,

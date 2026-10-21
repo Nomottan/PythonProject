@@ -5,7 +5,7 @@ from utils.excel_helper import (
     ExcelHelper, WorkbookOpener, WorkbookWriter,
 )
 from utils.text_utils import TextUtils
-from utils.kiz_utils import KizUtils
+from utils.kiz_utils import KizUtils, KizDuplicatesFinder
 from services.subservices.logging import LoggerV2
 if TYPE_CHECKING:
     from services.subservices.logging import LogManagerV2
@@ -96,7 +96,7 @@ class SalesFileGenerator:
         file_path = self.work_folder / file_name
 
         for kiz_short in storage_list:
-            gtin = kiz_short[2:16] if len(kiz_short) >= 16 else ""
+            gtin = KizUtils.extract_gtin(kiz_short)
             row_data = [product_name, kiz_short, gtin, "5%"]
 
             ok = WorkbookWriter.append(
@@ -534,3 +534,155 @@ class KizFilterDetailsWriter:
                 logger.report("    (нет)")
             logger.report("")
             logger.report("-" * 40)
+
+class SalesDuplicatesResolver:
+    """Разрешение дублей КИЗов в файлах продаж.
+
+    Роль:
+        Единая точка обработки дублей — и внутрифайловых, и
+        межфайловых. Внутрифайловые удаляются автоматически
+        (SalesFileRowsReader.remove_duplicates_in_file),
+        межфайловые — через resolver_callback (UI-выбор
+        файла-получателя).
+    """
+
+    @staticmethod
+    def resolve(sales_dir, sales_gen, resolver_callback, logger) -> dict:
+        """Разрешает дубли КИЗов в папке продаж.
+
+        Вход:
+            sales_dir — Path к папке «Продажи».
+            sales_gen — SalesFileGenerator текущей сессии (для
+                        get_receiver_name и remove_empty_files).
+            resolver_callback — Callable[[str, dict[Path, str]],
+                                Path | None] | None. Вызывается в
+                                UI-потоке для выбора файла-получателя.
+                                None — межфайловые дубли не разрешаются.
+            logger — LoggerV2.
+
+        Выход:
+            dict с ключами intra_files, intra_deleted_rows,
+            inter_count, resolved, removed_occurrences,
+            empty_removed_after (все int).
+
+        Роль:
+            Шаги:
+                1. sales_gen.remove_empty_files() — до поиска
+                   (без логирования, вызов результата не используется).
+                2. KizDuplicatesFinder.find — внутрифайловые и
+                   межфайловые.
+                3. Внутрифайловые дубли — remove_duplicates_in_file
+                   по каждому файлу.
+                4. Межфайловые — через resolver_callback (или
+                   warning, если callback=None).
+                5. Удаление пустых файлов после чистки, если были
+                   удаления.
+                6. Сводка logger.report (4 строки) и возврат dict.
+        """
+        # Шаг 1. Удаление пустых файлов до поиска.
+        sales_gen.remove_empty_files()
+
+        # Шаг 2. Поиск дублей.
+        intra_file, inter_file = KizDuplicatesFinder.find(
+            sales_dir, logger,
+        )
+
+        # Шаг 3. Внутрифайловые дубли.
+        intra_files_count = len(intra_file)
+        intra_deleted_rows = 0
+        logger.status("Удаление дублей внутри файлов")
+        for file_path in intra_file:
+            deleted = SalesFileRowsReader.remove_duplicates_in_file(
+                file_path, logger,
+            )
+            intra_deleted_rows += deleted
+            logger.debug(
+                f"КИЗ в файле {file_path.name}: удалено дублей {deleted}"
+            )
+
+        # Шаг 4. Межфайловые дубли.
+        inter_count = len(inter_file)
+        resolved_count = 0
+        removed_occurrences = 0
+
+        if inter_file:
+            if resolver_callback is None:
+                logger.warning(
+                    f"UI-обработка дублей недоступна: {inter_count} "
+                    f"КИЗов остаются в нескольких файлах"
+                )
+                logger.status("UI-обработка дублей недоступна")
+            else:
+                logger.status("Обработка межфайловых дублей")
+                for kiz, file_paths in inter_file.items():
+                    file_to_receiver = {
+                        p: (sales_gen.get_receiver_name(p) or p.name)
+                        for p in file_paths
+                    }
+                    logger.status(f"Разрешение дубля: {kiz}")
+                    try:
+                        chosen = resolver_callback(
+                            kiz, file_to_receiver,
+                        )
+                    except Exception as e:
+                        logger.critical(
+                            f"Ошибка в резолвере дублей: {e}",
+                            can_influence=False,
+                        )
+                        chosen = None
+                    if chosen is None or chosen not in file_paths:
+                        chosen = file_paths[0]
+                    resolved_count += 1
+
+                    removed_names = []
+                    for p in file_paths:
+                        if p == chosen:
+                            continue
+                        ok = SalesFileRowsReader.remove_kiz(
+                            p, kiz, logger,
+                        )
+                        if ok:
+                            removed_occurrences += 1
+                            removed_names.append(p.name)
+                        else:
+                            logger.warning(
+                                f"Не удалось удалить КИЗ {kiz} "
+                                f"из {p.name}"
+                            )
+
+                    logger.debug(
+                        f"КИЗ {kiz}: найден в "
+                        f"{[p.name for p in file_paths]}; "
+                        f"оставлен в {chosen.name}; "
+                        f"удалён из {removed_names}"
+                    )
+
+        # Шаг 5. Удаление пустых файлов после чистки.
+        empty_removed_after = 0
+        if intra_files_count > 0 or inter_count > 0:
+            empty_removed_after = sales_gen.remove_empty_files()
+
+        # Шаг 6. Сводка.
+        logger.report(
+            f"Найдено внутрифайловых дублей: {intra_files_count} файлов, "
+            f"удалено {intra_deleted_rows} строк"
+        )
+        logger.report(
+            f"Найдено межфайловых дублей: {inter_count} КИЗов"
+        )
+        logger.report(
+            f"Разрешено в пользу файла: {resolved_count}; "
+            f"удалено вхождений: {removed_occurrences}"
+        )
+        logger.report(
+            f"После чистки удалено пустых файлов: {empty_removed_after}"
+        )
+
+        return {
+            "intra_files": intra_files_count,
+            "intra_deleted_rows": intra_deleted_rows,
+            "inter_count": inter_count,
+            "resolved": resolved_count,
+            "removed_occurrences": removed_occurrences,
+            "empty_removed_after": empty_removed_after,
+        }

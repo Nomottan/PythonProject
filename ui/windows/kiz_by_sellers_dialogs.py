@@ -62,8 +62,8 @@ class KizBySellersDialog(BaseEditDialog):
         parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 50, 60))
         self.bg_color = ColorCalculator.derive(
             parent_bg,
-            r_fn=lambda r: (2 * r + r // 5)//2,
-            g_fn=lambda g: g - g // 5,
+            r_fn=lambda r: r + r // 5,
+            g_fn=lambda g: g - g // 8,
             b_fn=lambda b: b//2,
             alpha=0.95,
         )
@@ -78,7 +78,7 @@ class KizBySellersDialog(BaseEditDialog):
             close_on_click_outside=False,
             modal=True,
             center=True,
-            width=500,
+            width=250,
             height=180,
             log_manager_v2=log_manager_v2,
         )
