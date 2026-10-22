@@ -671,6 +671,8 @@ class ReturnsTransferReader:
 
         return ReturnsTransferData(
             rows=rows_out,
+            pending_rows=pending_rows,
+            conflicts=conflicts,
             total_rows=total_rows,
             unique_brands=unique_brands,
         )

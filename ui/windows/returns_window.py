@@ -255,7 +255,10 @@ class ReturnsWindow(BaseServiceWindow):
         if not self._precheck_target_dir():
             return
 
-        service = KizTransferService(self.log_manager_v2)
+        service = KizTransferService(
+            self.log_manager_v2,
+            priority_resolver=self._request_priority_resolution,
+        )
         if self.logger:
             self.logger.debug(
                 "on_prepare_transfer: KizTransferService создан"

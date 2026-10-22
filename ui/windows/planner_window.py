@@ -11,10 +11,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from ui.factories.factories import WindowFactory, ButtonFactory, LabelFactory
-from ui.windows.planner_task_dialogs import NewTaskDialog
-from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
 from ui.base.planner_base_window import _BasePlannerListWindow
+from ui.windows.planner_themes_dialog import PlannerThemesDialog
+from ui.windows.planner_task_dialogs import NewTaskDialog
+from utils.log_tools.decorators import log_button_action
 from utils.filter_utils import FieldDef
+from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
+
 
 class PlannerWindow(_BasePlannerListWindow):
     """Окно планировщика задач.
@@ -65,6 +68,13 @@ class PlannerWindow(_BasePlannerListWindow):
         self.new_task_btn.clicked.connect(self._on_new_task)
         bottom_layout.addWidget(self.new_task_btn)
         bottom_layout.addStretch()
+
+        self.btn_more = ButtonFactory.create_button(
+            self, "Дополнительно", bg_color=(40, 40, 40), padding="8px 16px",
+        )
+        self.btn_more.clicked.connect(self._on_open_themes_dialog)
+        bottom_layout.addWidget(self.btn_more)
+
         self.archive_btn = ButtonFactory.create_button(
             self, "Архив", bg_color=(40, 40, 40), padding="8px 16px",
         )
@@ -172,6 +182,17 @@ class PlannerWindow(_BasePlannerListWindow):
         return btn
 
     # ---------- Обработчики ----------
+    @log_button_action("btn_more", "Ошибка при открытии окна тем: {e}")
+    def _on_open_themes_dialog(self):
+        """Открывает окно настройки тем задач."""
+        if self.parent() is None or not hasattr(self.parent(), "main_config"):
+            return
+
+        main_config = self.parent().main_config
+        dialog = PlannerThemesDialog(
+            self, main_config, log_manager_v2=self.log_manager_v2,
+        )
+        dialog.exec()
 
     def _on_new_task(self):
         """Открывает диалог, создаёт задачу, перерисовывает список."""

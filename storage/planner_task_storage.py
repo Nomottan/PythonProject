@@ -9,7 +9,6 @@
 from models.planner_task import PlannerTask
 from storage.base_json_storage import ListJsonStorage
 
-
 class PlannerTaskStorage(ListJsonStorage):
     """Хранилище активных задач планировщика.
 

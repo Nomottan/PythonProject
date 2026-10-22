@@ -138,5 +138,5 @@ class CompositeWidgetFactory(BaseWidgetFactory):
         Роль: локальный импорт — диалог живёт в ui/windows и тянет
               за собой MessageDialog; в шапку фабрики его не тянем.
         """
-        from ui.windows.planner_day_picker_dialog import PlannerDayPickerDialog
+        from ui.windows.planner_task_dialogs import PlannerDayPickerDialog
         return PlannerDayPickerDialog(parent, selected)

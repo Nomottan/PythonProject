@@ -9,14 +9,47 @@ QSS собирается через ui.styles.WidgetStyle.apply_*. Класс
 не наследует BaseWidgetFactory.
 """
 
-from PySide6.QtCore import QDateTime, QDate
+from PySide6.QtCore import QDateTime, QDate, QEvent
 from PySide6.QtWidgets import (
     QLineEdit, QCheckBox, QComboBox, QTextEdit, QSpinBox,
-    QDateTimeEdit, QAbstractSpinBox, QDateEdit,
+    QDateTimeEdit, QAbstractSpinBox, QDateEdit, QApplication
 )
 from ui.styles import WidgetStyle, ColorCalculator
 from ui.factories.base_factory import BaseWidgetFactory
 
+
+class AutoCommitLineEdit(QLineEdit):
+    """QLineEdit, который сохраняет значение при клике в любое место вне поля.
+
+    Использует QApplication.widgetAt для точного определения цели клика.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def __del__(self):
+        """Обязательно удаляем фильтр при уничтожении виджета."""
+        try:
+            app = QApplication.instance()
+            if app:
+                app.removeEventFilter(self)
+        except RuntimeError:
+            pass
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress and self.hasFocus():
+            # Получаем виджет, по которому кликнули
+            global_pos = event.globalPosition().toPoint()
+            clicked_widget = QApplication.widgetAt(global_pos)
+
+            # Если кликнули НЕ по этому полю и НЕ по его дочерним элементам — снимаем фокус
+            if clicked_widget != self and not self.isAncestorOf(clicked_widget):
+                self.clearFocus()
+
+        return super().eventFilter(obj, event)
 
 class InputWidgetFactory:
     """Фабрика для создания полей ввода.
@@ -56,7 +89,8 @@ class InputWidgetFactory:
 
         Выход: QLineEdit с QSS.
         """
-        line_edit = QLineEdit(text, parent)
+        line_edit = AutoCommitLineEdit(parent)
+        line_edit.setText(text)
 
         if object_name:
             line_edit.setObjectName(object_name)

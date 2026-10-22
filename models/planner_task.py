@@ -12,6 +12,100 @@ from enum import Enum
 from typing import Optional
 
 
+class ThemeKey(Enum):
+    """Фиксированный Enum из 8 тем с цветом и дефолтным именем.
+
+    Пользователь может переименовывать темы; цвета и имена — в коде.
+    Хранится только diff переименований — через build_diff.
+    Значения членов — строки для JSON. Цвет и имя — свойства.
+    """
+
+    class _Data:
+        COLORS = {
+            "white": (80, 80, 80),
+            "cyan": (40, 80, 80),
+            "magenta": (80, 40, 80),
+            "yellow": (80, 80, 40),
+            "blue": (40, 40, 80),
+            "green": (40, 80, 40),
+            "red": (80, 40, 40),
+            "black": (40, 40, 40),
+        }
+        NAMES = {
+            "white": "Белая",
+            "cyan": "Циан",
+            "magenta": "Маджента",
+            "yellow": "Жёлтая",
+            "blue": "Синяя",
+            "green": "Зелёная",
+            "red": "Красная",
+            "black": "Чёрная",
+        }
+
+    WHITE = "white"
+    CYAN = "cyan"
+    MAGENTA = "magenta"
+    YELLOW = "yellow"
+    BLUE = "blue"
+    GREEN = "green"
+    RED = "red"
+    BLACK = "black"
+
+    @property
+    def color(self) -> tuple:
+        """Возвращает кортеж цвета (r, g, b)."""
+        return self._Data.COLORS[self.value]
+
+    @property
+    def default_name(self) -> str:
+        """Возвращает дефолтное имя темы."""
+        return self._Data.NAMES[self.value]
+
+    @classmethod
+    def resolve_effective_name(cls, key, raw_names: dict) -> str:
+        """Возвращает имя темы с учётом сохранённых переименований.
+
+        Вход:
+            key — элемент ThemeKey.
+            raw_names — словарь сохранённых переименований.
+
+        Выход: строка эффективного имени.
+
+        Роль:
+            Защита от невалидных данных: если raw_names не dict,
+            значение не строка, пустое или длиннее 10 символов —
+            возвращается дефолтное имя.
+        """
+        if not isinstance(key, cls):
+            raise ValueError("key должен быть элементом ThemeKey")
+        raw = raw_names.get(key.value) if isinstance(raw_names, dict) else None
+        if raw is None:
+            return key.default_name
+        if not isinstance(raw, str):
+            return key.default_name
+        stripped = raw.strip()
+        if not stripped or len(stripped) > 10:
+            return key.default_name
+        return stripped
+
+    @classmethod
+    def build_diff(cls, effective_names: dict) -> dict:
+        """Собирает diff переименований для сохранения в JSON.
+
+        Вход:
+            effective_names — {ThemeKey: str}.
+
+        Выход: dict {str: str} только для тем, чьё имя
+               отличается от дефолтного. Порядок — по объявлению
+               ThemeKey.
+        """
+        diff = {}
+        for key in cls:
+            name = effective_names.get(key)
+            if name is not None and name != key.default_name:
+                diff[key.value] = name
+        return diff
+
 class TaskStatus(Enum):
     """Статус задачи.
 

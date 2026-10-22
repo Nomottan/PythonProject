@@ -686,7 +686,7 @@ class KizTransferService:
         logger.status("Генерация файлов продаж")
         # Прогон готовых строк через генератор — без дополнительных
         # проверок: всё уже проверено в reader'е.
-        for transfer in data.rows:
+        for transfer in all_rows:
             sales_gen.add_sale_row(
                 from_seller_name=transfer.from_seller_name,
                 to_seller_name=transfer.to_seller_name,
