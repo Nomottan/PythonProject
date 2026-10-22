@@ -38,9 +38,7 @@ from ui.windows.message_dialog import NotificationDialog
 from models.models import Brand
 from utils.text_utils import TextUtils
 from utils.unknown_resolver import ResolverRouter
-from services.sells_fbs_service import (
-    PreparationService, FinalProcessingService, FinalizePricesService,
-)
+from services.sells_fbs_service import PreparationService, FinalProcessingService
 from utils.log_tools.decorators import log_button_action
 
 
@@ -72,7 +70,6 @@ class SellsFBSWindow(BaseServiceWindow):
     PIPELINE_BUTTONS = (
         "btn_prepare",
         "btn_processing",
-        "btn_finalize_prices",
         "btn_files",
     )
 
@@ -127,8 +124,8 @@ class SellsFBSWindow(BaseServiceWindow):
                 "Загрузи файлы и отчёты\n"
                 "Шаг 1: Нажми Подготовка. Файлы будут скопированы и разобраны в рабочую директорию, оригиналы нетронуты\n"
                 "Проведи все файлы через BestMark в Excell файлы сохранив названия\n"
-                "Шаг 2: Нажми Обработка. Файлы будут очищены от некорректных статусов и владельцев, а также собраны файлы для продаж продавцам не их КИЗов\n"
-                "Шаг 3: Нажми Установка цен.\n"
+                "Шаг 2: Нажми Обработка. Файлы будут очищены от некорректных статусов и владельцев, собраны файлы для продаж, установлены цены и финализированы ИТОГ-файлы.\n"
+                "Шаг 3: Проверка (в разработке)\n"
                 "Проведи продажи через ЭДО. После выводи их из оборота"
             ),
             bg_color=(0, 0, 0, 0),
@@ -149,14 +146,14 @@ class SellsFBSWindow(BaseServiceWindow):
         # ---------- ЭЛЕМЕНТЫ: кнопки действий ----------
         _action_configs = [
             ("btn_prepare", "Подготовка", (80, 90, 120), "8px 16px", (180, 35)),
+            ("btn_data_verification", "Проверка", (40, 130, 120), "8px 16px", (180, 35)),
             ("btn_processing", "Обработка", (60, 110, 120), "8px 16px", (180, 35)),
-            ("btn_finalize_prices", "Установка цен", (40, 130, 120), "8px 16px", (180, 35)),
             ("btn_prices", "Цены", (40, 40, 40), "2px 2px", (35, 20)),
         ]
         _action_handlers = {
             "btn_prepare": "on_prepare",
+            "btn_data_verification": "on_data_verification",
             "btn_processing": "on_processing",
-            "btn_finalize_prices": "on_finalize_prices",
             "btn_prices": "on_open_prices_window",
         }
         ButtonFactory.create_buttons_from_config(
@@ -164,7 +161,6 @@ class SellsFBSWindow(BaseServiceWindow):
         )
         # Все кнопки шагов изначально отключены, кроме подготовки.
         self.btn_processing.setEnabled(False)
-        self.btn_finalize_prices.setEnabled(False)
         self.btn_files.clicked.connect(self.select_files)
 
         # ---------- МАКЕТ ----------
@@ -173,8 +169,8 @@ class SellsFBSWindow(BaseServiceWindow):
             path_selector=self.path_selector,
             status_label=self.status_label,
             left_buttons=[
-                self.btn_prepare, self.btn_processing,
-                self.btn_finalize_prices, self.btn_prices,
+                self.btn_prepare, self.btn_data_verification,
+                self.btn_processing, self.btn_prices,
             ],
             right_items=[self.btn_files, self.list_files],
         )
@@ -238,11 +234,14 @@ class SellsFBSWindow(BaseServiceWindow):
         if not self._precheck_target_dir():
             return
 
+        saved_prices = self.main_window.main_config.get("seller_prices", {})
+
         service = FinalProcessingService(
             self.main_window.kiz_validator,
             self.log_manager_v2,
             brand_unknown_resolver=self._brand_request_unknown_decision,
             duplicate_keeper_resolver=self._duplicate_sale_request_keeper,
+            price_requester=self._request_average_price,
         )
         if self.logger:
             self.logger.debug(
@@ -252,46 +251,22 @@ class SellsFBSWindow(BaseServiceWindow):
         self._run_async_step(
             service=service,
             target_method=service.completion,
-            kwargs={},
+            kwargs={"saved_prices": saved_prices},
             start_message="Обработка файлов...",
             finish_message="Обработка завершена.",
             step_name="on_processing",
-            enable_after=self.btn_finalize_prices,
-        )
-
-    @log_button_action("btn_finalize_prices", "Ошибка в on_finalize_prices: {e}")
-    def on_finalize_prices(self) -> None:
-        """Шаг 4: установка цен и финализация ИТОГ-файлов."""
-        if not self._precheck_target_dir():
-            return
-
-        saved_prices = self.main_window.main_config.get("seller_prices", {})
-
-        service = FinalizePricesService(
-            self.main_window.kiz_validator,
-            self.log_manager_v2,
-            price_requester=self._request_average_price,
-        )
-        if self.logger:
-            self.logger.debug(
-                "on_finalize_prices: FinalizePricesService создан"
-            )
-
-        self._run_async_step(
-            service=service,
-            target_method=service.finalize,
-            kwargs={"saved_prices": saved_prices},
-            start_message="Внесение цен и финализация...",
-            finish_message="Цены установлены, файлы финализированы.",
-            step_name="on_finalize_prices",
             enable_after=None,
         )
+
+    @log_button_action("btn_data_verification", "Ошибка в on_data_verification: {e}")
+    def on_data_verification(self) -> None:
+        """Шаг 3: заглушка сервиса проверки данных."""
+        self.set_status("Сервис проверки данных в разработке")
+        self.set_info("Сервис проверки данных в разработке")
 
     @log_button_action("btn_prices", "Ошибка при открытии окна цен: {e}")
     def on_open_prices_window(self) -> None:
         """Открывает окно редактирования сохранённых цен."""
-        if not self._precheck_target_dir():
-            return
         window = PricesEditWindow(
             self,
             sellers_brands_service=self.main_window.sellers_brands_service,
@@ -304,7 +279,7 @@ class SellsFBSWindow(BaseServiceWindow):
     # ============================================================
 
     def _request_average_price(self, seller_name: str) -> int | None:
-        """Callback от FinalizePricesService: спросить цену у пользователя.
+        """Callback от FinalProcessingService: спросить цену у пользователя.
 
         Вход: seller_name — имя продавца.
         Выход: int — цена; None — отмена.
@@ -684,15 +659,14 @@ class SellsFBSWindow(BaseServiceWindow):
     # ============================================================
 
     def _on_target_dir_changed_hook(self) -> None:
-        """Сброс кнопок шагов 2–4 при смене папки.
+        """Сброс кнопки обработки при смене папки.
 
         Вход: нет.
         Выход: нет.
         Роль: базовый _on_target_dir_changed уже очистил status_log
-              и обновил target_dir; здесь — только сброс кнопок.
+              и обновил target_dir; здесь — только сброс btn_processing.
         """
         self.btn_processing.setEnabled(False)
-        self.btn_finalize_prices.setEnabled(False)
 
     def _current_sellers(self) -> list:
         """Возвращает продавцов с восстановленными связями Brand.

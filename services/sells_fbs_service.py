@@ -1289,7 +1289,8 @@ class FinalProcessingService:
 
     def __init__(self, kiz_validator, log_manager_v2,
                  brand_unknown_resolver=None,
-                 duplicate_keeper_resolver=None) -> None:
+                 duplicate_keeper_resolver=None,
+                 price_requester=None) -> None:
         """Конструктор.
 
         Вход:
@@ -1299,21 +1300,57 @@ class FinalProcessingService:
                 Callback UI-разрешения неизвестных брендов.
             duplicate_keeper_resolver — Callable[[str, dict[Path, str]],
                 Path | None] | None. Callback UI-выбора файла-получателя.
+            price_requester — опциональный callable(seller_name) -> int | None.
+                Вызывается, когда нужно спросить цену у пользователя.
+                Обязан выполняться в UI-потоке и возвращать либо
+                int-цену, либо None при отмене.
         """
         self.kiz_validator = kiz_validator
         self._log_manager_v2 = log_manager_v2
         self._brand_unknown_resolver = brand_unknown_resolver
         self._duplicate_keeper_resolver = duplicate_keeper_resolver
+        self._price_requester = price_requester
 
-    def completion(self, target_dir, sellers) -> None:
-        """Обработка файлов и формирование продаж одним проходом.
+    def _load_prices_from_json(self, processing_dir, logger) -> dict:
+        """Читает цены из буфера FbsBufferPrices.
+
+        Вход:
+            processing_dir — папка «Обработка» рабочей папки.
+            logger — LoggerV2 для сообщения об отсутствии файла.
+
+        Выход:
+            dict {seller_name: {storage_kiz: price}} или {}.
+
+        Роль:
+            Тонкая обёртка над FbsBufferPrices.load(): добавляет
+            только report-сообщение при пустом результате. Ошибки
+            чтения FbsBufferPrices глотает сам и возвращает {}.
+        """
+        data = FbsBufferPrices(processing_dir).load()
+        if not data:
+            logger.report(
+                f"  {FbsBufferPrices.FILENAME} не найден или пуст – "
+                f"цены не будут применены"
+            )
+        return data
+
+    def completion(self, target_dir, sellers, saved_prices=None) -> dict:
+        """Обработка файлов и формирование продаж с установкой цен.
 
         Вход:
             target_dir — корень рабочей папки.
             sellers — список Seller с восстановленными .brands.
+            saved_prices — dict {seller_name: средняя}, может быть пуст.
+
+        Выход:
+            Обновлённый saved_prices (та же ссылка, что и входная,
+            если она была передана).
         """
+        if saved_prices is None:
+            saved_prices = {}
+
         # ============================================================
-        # Фаза 1. Контекст, логгер, загрузка базы.
+        # Фаза 1. Контекст, логгер, загрузка базы и цен.
         # ============================================================
         ctx = TaskContext(
             target_dir,
@@ -1326,6 +1363,10 @@ class FinalProcessingService:
             domain="chz_mp",
             work_folder=ctx.logs_dir,
             log_filename="log_обработка.txt",
+        )
+        logger.debug(
+            f"completion: старт, sellers={len(sellers)}, "
+            f"saved_prices={len(saved_prices)}"
         )
         logger.status("Обработка файлов начата")
         logger.report("=== ОБРАБОТКА ФАЙЛОВ ===")
@@ -1349,11 +1390,24 @@ class FinalProcessingService:
                 "без сохранённой базы"
             )
 
+        logger.status("Загрузка цен из отчётов WB")
+        all_prices = self._load_prices_from_json(ctx.processing_dir, logger)
+        if all_prices:
+            logger.info(
+                f"\nЦены из отчётов WB загружены: "
+                f"{len(all_prices)} продавцов"
+            )
+        else:
+            logger.info(
+                "\nЦены из отчётов WB не обнаружены — средние "
+                "будут взяты из сохранённых или запрошены"
+            )
+
         allowed_companies = TextUtils.get_allowed_companies(sellers)
         sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
 
         # ============================================================
-        # Фаза 2. Единый цикл по продавцам.
+        # Фаза 2. Единый цикл по продавцам с предзаполнением цен.
         # ============================================================
         kiz_to_brand_data: dict = {}
         status_counts_agg: dict = {}
@@ -1372,6 +1426,8 @@ class FinalProcessingService:
         sale_row_errors = 0
         per_receiver_created: dict = {}
         per_receiver_inn: dict = {}
+        per_seller_stage1: dict = {}
+        total_stage1 = 0
 
         for seller in sellers:
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
@@ -1386,7 +1442,11 @@ class FinalProcessingService:
 
             files_found += 1
             logger.status(f"Обработка файла: {file_path.name}")
-            logger.report(f"Обработка файла: {file_path.name}")
+            logger.report(
+                f"Обработка КИЗов файла продавца: {seller.name}"
+            )
+
+            price_map = all_prices.get(seller.name, {})
 
             wb = WorkbookOpener.open(
                 file_path, logger=logger,
@@ -1409,7 +1469,7 @@ class FinalProcessingService:
                 if sheet.max_row < 2:
                     files_empty += 1
                     logger.report(
-                        "  Файл пуст (только заголовки) – пропущен"
+                        " Файл пуст (только заголовки) – пропущен"
                     )
                     continue
 
@@ -1443,73 +1503,93 @@ class FinalProcessingService:
                 if filter_stats['total_kept'] == 0:
                     sellers_without_kiz.append(seller.name)
                 logger.report(
-                    f"  Всего строк: {sheet.max_row - 1}"
+                    f" Всего строк: {sheet.max_row - 1}"
                 )
                 if filter_stats['status']:
-                    logger.report("  Удалено по статусу:")
+                    logger.report(" Удалено по статусу:")
                     for status, count in sorted(
                         filter_stats['status'].items(),
                         key=lambda x: x[0].lower(),
                     ):
                         logger.report(
-                            f"    Статус '{status}': {count} строк"
+                            f"   Статус '{status}': {count} строк"
                         )
                 if filter_stats['owner']:
-                    logger.report("  Удалено по владельцу:")
+                    logger.report(" Удалено по владельцу:")
                     for owner, count in sorted(
                         filter_stats['owner'].items(),
                         key=lambda x: x[0].lower(),
                     ):
                         logger.report(
-                            f"    Владелец '{owner}': {count} строк"
+                            f"   Владелец '{owner}': {count} строк"
                         )
                 logger.report(
-                    f"  Сохранено: {filter_stats['total_kept']} строк"
+                    f" Сохранено: {filter_stats['total_kept']} строк"
                 )
                 if filter_stats['total_kept'] == 0:
                     logger.report(
-                        "  Нет строк для сохранения – файл будет "
+                        " Нет строк для сохранения – файл будет "
                         "очищен (только заголовки)"
                     )
             finally:
                 wb.close()
 
-            rows_for_write = [values for _, values in filtered_rows]
+            rows_for_write = []
+            for _, values in filtered_rows:
+                new_values = list(values)
+                kiz = ""
+                if len(new_values) >= PriceFiller.KIZ_COL:
+                    raw_kiz = new_values[PriceFiller.KIZ_COL - 1]
+                    kiz = str(raw_kiz).strip() if raw_kiz is not None else ""
+                if kiz and kiz != PriceFiller.HEADER_KIZ and kiz in price_map:
+                    if len(new_values) < PriceFiller.PRICE_COL:
+                        new_values.extend(
+                            [None] * (PriceFiller.PRICE_COL - len(new_values))
+                        )
+                    new_values[PriceFiller.PRICE_COL - 1] = price_map[kiz]
+                    per_seller_stage1[seller.name] = (
+                        per_seller_stage1.get(seller.name, 0) + 1
+                    )
+                    total_stage1 += 1
+                rows_for_write.append(new_values)
+
             WorkbookWriter.overwrite(
                 file_path, headers, rows_for_write,
                 sheet_name=original_sheet_title, logger=logger,
             )
+            if per_seller_stage1.get(seller.name, 0) > 0:
+                logger.report(
+                    f" Установлено цен из отчёта: "
+                    f"{per_seller_stage1[seller.name]}"
+                )
             logger.info(
-                f"\nОбработка файла: {seller.name}.xlsx — "
+                f"\nОбработка КИЗов файла: {seller.name}.xlsx — "
                 f"сохранено {filter_stats['total_kept']} строк"
             )
 
-            # Единый проход по отфильтрованным строкам.
             for row_idx, values in filtered_rows:
                 parsed = PreFinalRow.from_row(values)
                 if parsed is None:
                     invalid_rows_count += 1
                     logger.report(
-                        f"  Строка {row_idx}: некорректные данные "
+                        f" Строка {row_idx}: некорректные данные "
                         f"(нет КИЗа или владельца) – пропущена"
                     )
                     continue
 
-                # Filter-цель: kiz → (norm_brand, raw_brand), первое.
                 if parsed.kiz not in kiz_to_brand_data:
                     kiz_to_brand_data[parsed.kiz] = (
                         TextUtils.normalize(parsed.brand),
                         parsed.brand,
                     )
 
-                # Generate-цель: определить отправителя по владельцу.
                 owner_seller = TextUtils.find_seller_by_company(
                     parsed.owner_company, sellers
                 )
                 if owner_seller is None:
                     unknown_owner_count += 1
                     logger.report(
-                        f"  Строка {row_idx}: владелец "
+                        f" Строка {row_idx}: владелец "
                         f"'{parsed.owner_company}' не найден "
                         f"среди продавцов – пропущена"
                     )
@@ -1718,7 +1798,6 @@ class FinalProcessingService:
             ]
             logger.info("\n".join(lines))
 
-        # Info: удалено по статусам.
         if status_counts_agg:
             lines = ["\nУдалено по статусам:"]
             for status_name in sorted(
@@ -1730,7 +1809,6 @@ class FinalProcessingService:
                 )
             logger.info("\n".join(lines))
 
-        # Info: удалено по владельцам.
         empty_owner_count = owner_counts_agg.get("(пусто)", 0)
         other_owners = {
             k: v for k, v in owner_counts_agg.items()
@@ -1795,154 +1873,11 @@ class FinalProcessingService:
             logger.info("\n".join(lines))
 
         # ============================================================
-        # Фаза 6. Финал.
+        # Фаза 6. Установка цен и финализация.
         # ============================================================
-        logger.report("\n=== ОБРАБОТКА ЗАВЕРШЕНА ===")
-        logger.status("Обработка завершена")
-        logger.info("\n==================================================\n")
-
-class FinalizePricesService:
-    """Сервис внесения цен и финализации итоговых файлов.
-
-    Роль:
-        Для каждого продавца создаёт ИТОГ в корне рабочей папки
-        (копия предитогового файла из «Обработки») и заполняет
-        цены в три этапа через PriceFiller:
-            1. Цены из отчёта МП — точное совпадение по КИЗу.
-            2. Распределение числовых цен внутри кластеров GTIN.
-            3. Генерация по средней для оставшихся нечисловых.
-
-        Исходник в «Обработке» не изменяется — вся работа идёт
-        с копией. Средняя определяется AveragePriceResolver;
-        если ни один источник не подошёл — вызывается
-        price_requester, переданный из UI.
-
-    Публичный API:
-        finalize(target_dir, sellers, saved_prices).
-    """
-
-    def __init__(self, kiz_validator, log_manager_v2,
-                 price_requester=None) -> None:
-        """Конструктор.
-
-        Вход:
-            kiz_validator — KizValidator: доступ к used_kiz.json
-                            (load, clean_old_entries, batch).
-            log_manager_v2 — LogManagerV2, фабрика логгеров V2.
-            price_requester — опциональный callable(seller_name) -> int | None.
-                              Вызывается, когда нужно спросить цену у
-                              пользователя. Обязан выполняться в
-                              UI-потоке и возвращать либо int-цену,
-                              либо None при отмене.
-
-        Роль:
-            Сохраняет ссылки. Логгер создаётся в начале finalize —
-            когда уже известна рабочая папка. Диалог ввода цены
-            сервис сам не открывает: этим занимается окно.
-        """
-        self.kiz_validator = kiz_validator
-        self._log_manager_v2 = log_manager_v2
-        self._price_requester = price_requester
-
-    def _load_prices_from_json(self, processing_dir, logger) -> dict:
-        """Читает цены из буфера FbsBufferPrices.
-
-        Вход:
-            processing_dir — папка «Обработка» рабочей папки.
-            logger — LoggerV2 для сообщения об отсутствии файла.
-
-        Выход:
-            dict {seller_name: {storage_kiz: price}} или {}.
-
-        Роль:
-            Тонкая обёртка над FbsBufferPrices.load(): добавляет
-            только report-сообщение при пустом результате. Ошибки
-            чтения FbsBufferPrices глотает сам и возвращает {}.
-        """
-        data = FbsBufferPrices(processing_dir).load()
-        if not data:
-            logger.report(
-                f"  {FbsBufferPrices.FILENAME} не найден или пуст – "
-                f"цены не будут применены"
-            )
-        return data
-
-    def finalize(self, target_dir, sellers, saved_prices=None) -> dict:
-        """Финализация цен по продавцам.
-
-        Вход:
-            target_dir — корень рабочей папки.
-            sellers — список Seller.
-            saved_prices — dict {seller_name: средняя}, может быть пуст.
-
-        Выход:
-            Обновлённый saved_prices (та же ссылка, что и входная,
-            если она была передана).
-
-        Роль:
-            Создаёт TaskContext (пути) и LoggerV2. Для каждого
-            продавца: определяет среднюю через AveragePriceResolver,
-            при необходимости запрашивает её через price_requester,
-            проверяет, не обработан ли ИТОГ, копирует исходник,
-            применяет три этапа через PriceFiller и сохраняет.
-        """
-        if saved_prices is None:
-            saved_prices = {}
-
-        # TaskContext — только пути.
-        ctx = TaskContext(
-            target_dir,
-            "ЧЗ_МП_{date}",
-            "log_цены.txt",
-            subfolders=["Логи", "Отчёты", "Обработка", "Продажи"],
-        )
-
-        # Логгер V2 с историческим именем файла.
-        logger = self._log_manager_v2.create_logger_v2(
-            source="FinalizePricesService.sells_fbs_service",
-            domain="chz_mp",
-            work_folder=ctx.logs_dir,
-            log_filename="log_цены.txt",
-        )
-        logger.status("Внесение цен и финализация начато")
-        logger.info(
-            "\n==================== Этап: Цены ====================\n"
-        )
+        logger.status("Установка цен и финализация")
         logger.report("=== ВНЕСЕНИЕ ЦЕН И ФИНАЛИЗАЦИЯ ===")
-        logger.report(f"Рабочая папка: {ctx.work_folder}")
-        logger.status("Загрузка базы КИЗов для валидации")
-        try:
-            self.kiz_validator.load()
-            if self.kiz_validator.storage.get_all():
-                logger.info(
-                    "Загружены сохранённые данные по ранее "
-                    "списанным КИЗам"
-                )
-            else:
-                logger.warning(
-                    "\nНе получилось загрузить данные — валидация "
-                    "без сохранённой базы"
-                )
-        except Exception:
-            logger.warning(
-                "\nНе получилось загрузить данные — валидация "
-                "без сохранённой базы"
-            )
-        logger.status("Загрузка цен из отчётов WB")
-        # Цены из отчётов читаем один раз — до цикла по продавцам.
-        all_prices = self._load_prices_from_json(
-            ctx.processing_dir, logger
-        )
-        if all_prices:
-            logger.info(
-                f"\nЦены из отчётов WB загружены: "
-                f"{len(all_prices)} продавцов"
-            )
-        else:
-            logger.info(
-                "\nЦены из отчётов WB не обнаружены — средние "
-                "будут взяты из сохранённых или запрошены"
-            )
+        logger.debug(f"Фаза 6: старт, all_prices={len(all_prices)}")
 
         sellers_processed = 0
         sellers_skipped_ready = 0
@@ -1951,14 +1886,12 @@ class FinalizePricesService:
         sellers_skipped_cancelled = 0
         sellers_with_error = 0
         sellers_without_files = []
-        average_changes = {}  # {seller_name: (old, new)}
-        per_seller_stage1 = {}  # {seller_name: stage1_count}
-        per_seller_filled_rows = {}  # {seller_name: filled_rows этапа 2}
-        per_seller_stage3 = {}  # {seller_name: stage3_count}
-        total_stage1 = 0
+        average_changes = {}
+        per_seller_filled_rows = {}
+        per_seller_stage3 = {}
+        per_seller_gtins_in_prices = {}
+        per_seller_unique_gtins_filled = {}
         total_stage3 = 0
-
-        # Агрегаты этапа 2 (GTIN-заполнение).
         total_gtins_in_prices = 0
         total_filled_rows = 0
         total_unique_gtins_filled = 0
@@ -1967,22 +1900,23 @@ class FinalizePricesService:
         total_skipped_not_in_prices = 0
         total_unique_gtins_not_in_prices = 0
 
-        per_seller_gtins_in_prices = {}
-        per_seller_unique_gtins_filled = {}
-
         for seller in sellers:
             price_map = all_prices.get(seller.name, {})
             prices_list = list(price_map.values())
 
-            logger.report(f"\nОбработка продавца: {seller.name}")
-            logger.status(f"Обработка продавца: {seller.name}")
-            # ---- 1. Определяем среднюю через резолвер. ----
+            new_name = FilenameUtils.format_with_extension(
+                f"ИТОГ {seller.name} {{date}}", ctx.date_str
+            )
+            new_path = ctx.work_folder / new_name
+
+            logger.report(f"\nУстановка цен в файле продавца: {seller.name}")
+            logger.status(f"Установка цен: {new_path.name}")
+
             decision = AveragePriceResolver.resolve(
                 saved_prices, seller.name, prices_list
             )
 
             if decision.need_dialog:
-                # Ни цен из отчёта, ни сохранённых цен вообще нет.
                 if self._price_requester is None:
                     sellers_skipped_no_requester += 1
                     logger.warning(
@@ -1990,59 +1924,41 @@ class FinalizePricesService:
                         f"пропускаю продавца '{seller.name}'"
                     )
                     continue
-                logger.status(
-                    f"Запрос цены для продавца: {seller.name}"
-                )
+                logger.status(f"Запрос цены для продавца: {seller.name}")
                 user_price = self._price_requester(seller.name)
                 if user_price is None:
                     sellers_skipped_cancelled += 1
                     logger.report(
-                        f"  Пользователь отменил ввод для продавца "
+                        f" Пользователь отменил ввод для продавца "
                         f"'{seller.name}' – пропускаем"
                     )
                     continue
                 average_price = user_price
                 old_price = saved_prices.get(seller.name)
                 if old_price != average_price:
-                    average_changes[seller.name] = (
-                        old_price, average_price,
-                    )
+                    average_changes[seller.name] = (old_price, average_price)
                 saved_prices[seller.name] = average_price
-                logger.report(
-                    f"  Пользователь ввёл цену: {average_price}"
-                )
+                logger.report(f" Пользователь ввёл цену: {average_price}")
             else:
                 average_price = decision.price
                 old_price = saved_prices.get(seller.name)
                 if old_price != average_price:
-                    average_changes[seller.name] = (
-                        old_price, average_price,
-                    )
-                # Различаем источник в логе для диагностики.
+                    average_changes[seller.name] = (old_price, average_price)
                 if prices_list:
                     logger.report(
-                        f"  Загружено {len(prices_list)} цен из отчёта, "
+                        f" Загружено {len(prices_list)} цен из отчёта, "
                         f"средняя: {average_price}"
                     )
                 elif saved_prices.get(seller.name):
                     logger.report(
-                        f"  Использую сохранённую цену: {average_price}"
+                        f" Использую сохранённую цену: {average_price}"
                     )
                 else:
                     logger.report(
-                        f"  Использую случайную среднюю с другого "
+                        f" Использую случайную среднюю с другого "
                         f"продавца: {average_price}"
                     )
 
-            # ---- 2. Проверка существующего ИТОГа ----
-            new_name = FilenameUtils.format_with_extension(
-                f"ИТОГ {seller.name} {{date}}", ctx.date_str
-            )
-            new_path = ctx.work_folder / new_name
-
-            # REPLACE: было self._is_processed(new_path, ctx) — стало
-            # ExcelHelper.is_column_numeric. Номера столбцов берутся
-            # из PriceFiller, чтобы не плодить магические числа.
             if new_path.is_file() and ExcelHelper.is_column_numeric(
                 new_path,
                 price_col=PriceFiller.PRICE_COL,
@@ -2058,10 +1974,8 @@ class FinalizePricesService:
                 saved_prices[seller.name] = average_price
                 continue
 
-            # ---- 3. Предитоговый файл в «Обработке». ----
             file_path = ctx.processing_dir / f"{seller.name}.xlsx"
             if not file_path.is_file():
-                # NEW D: счётчик skip-no-file + сбор имён.
                 sellers_skipped_no_file += 1
                 sellers_without_files.append(seller.name)
                 logger.report(
@@ -2069,7 +1983,6 @@ class FinalizePricesService:
                 )
                 continue
 
-            # ---- 4. Копирование в корень как ИТОГ. ----
             result = FileHelper.copy_file_with_log(
                 file_path, new_path, logger,
                 description="итоговый файл", overwrite=True,
@@ -2082,7 +1995,6 @@ class FinalizePricesService:
                 continue
             logger.report(f"Файл скопирован в корень: {new_path.name}")
 
-            # ---- 5. Открытие ИТОГа и три этапа через PriceFiller. ----
             wb = WorkbookOpener.open(
                 new_path, logger=logger,
                 description="итоговый файл", read_only=False,
@@ -2094,51 +2006,41 @@ class FinalizePricesService:
                 sheet = wb.active
                 if sheet.max_row < 2:
                     logger.report(
-                        "  Файл пуст (только заголовки) – пропущен"
+                        " Файл пуст (только заголовки) – пропущен"
                     )
                     continue
 
-                # Этап 1 — цены из отчёта.
-                stage1_count = PriceFiller.fill_from_report(
-                    sheet, price_map
-                )
-                per_seller_stage1[seller.name] = stage1_count
-                total_stage1 += stage1_count
-                logger.report(
-                    f"  Установлено цен из отчёта: {stage1_count}"
-                )
-                logger.status(
-                    f"Подстановка цен по GTIN для {seller.name}"
-                )
-                # Этап 2 — кластеры GTIN.
+                stage1_count = per_seller_stage1.get(seller.name, 0)
+
+                logger.status(f"Подстановка цен по GTIN для {seller.name}")
                 stage2_stats = PriceFiller.fill_by_gtin_clusters(
                     sheet, price_map, logger=logger,
                 )
                 if stage2_stats.total_gtins_in_prices:
                     logger.report(
-                        f"  GTIN в ценах: "
+                        f" GTIN в ценах: "
                         f"{stage2_stats.total_gtins_in_prices}"
                     )
                 if stage2_stats.skipped_already_priced:
                     logger.report(
-                        f"  Пропущено (цена уже стоит): "
+                        f" Пропущено (цена уже стоит): "
                         f"{stage2_stats.skipped_already_priced}"
                     )
                 if stage2_stats.skipped_no_gtin:
                     logger.report(
-                        f"  Пропущено (нет GTIN): "
+                        f" Пропущено (нет GTIN): "
                         f"{stage2_stats.skipped_no_gtin}"
                     )
                 if stage2_stats.skipped_not_in_prices:
                     logger.report(
-                        f"  Пропущено (GTIN нет в ценах): "
+                        f" Пропущено (GTIN нет в ценах): "
                         f"{stage2_stats.skipped_not_in_prices} строк, "
                         f"{stage2_stats.unique_gtins_not_in_prices} "
                         f"уникальных"
                     )
                 if stage2_stats.filled_rows:
                     logger.report(
-                        f"  Установлено цен по GTIN: "
+                        f" Установлено цен по GTIN: "
                         f"{stage2_stats.filled_rows} строк, "
                         f"{stage2_stats.unique_gtins_filled} уникальных "
                         f"GTIN"
@@ -2169,30 +2071,25 @@ class FinalizePricesService:
                 total_unique_gtins_not_in_prices += (
                     stage2_stats.unique_gtins_not_in_prices
                 )
-                # Этап 3 — генерация по средней.
-                logger.status(
-                    f"Генерация цен по средней для {seller.name}"
-                )
+
+                logger.status(f"Генерация цен по средней для {seller.name}")
                 stage3_count = PriceFiller.fill_by_average(
                     sheet, average_price
                 )
                 per_seller_stage3[seller.name] = stage3_count
                 total_stage3 += stage3_count
                 logger.report(
-                    f"  Сгенерировано цен по средней: {stage3_count}"
+                    f" Сгенерировано цен по средней: {stage3_count}"
                 )
 
-                # ---- 6. Сохранение ИТОГа. ----
                 wb.save(new_path)
                 logger.report(
-                    f"  Итоговый файл сохранён: {new_path.name}"
+                    f" Итоговый файл сохранён: {new_path.name}"
                 )
                 saved_prices[seller.name] = average_price
                 sellers_processed += 1
 
             except Exception as e:
-                # Ошибка обработки одного файла не должна валить
-                # весь прогон — остальные продавцы продолжают.
                 sellers_with_error += 1
                 logger.critical(
                     f"Ошибка обработки файла {new_path.name}: {e}",
@@ -2228,8 +2125,6 @@ class FinalizePricesService:
             )
         logger.info("\n".join(lines))
 
-        # NEW B.5: изменения средних цен — только если были изменения.
-        # old_display — str(old) если old is not None, иначе "—".
         if average_changes:
             lines = ["\nИзменения средних цен:"]
             for seller_name, (old, new) in average_changes.items():
@@ -2237,65 +2132,61 @@ class FinalizePricesService:
                 lines.append(f"  {seller_name}: {old_display} → {new}")
             logger.info("\n".join(lines))
 
-            # GTIN-заполнение (этап 2).
-            lines = ["\nGTIN-заполнение:"]
-            per_seller_lines = []
-            for seller in sellers:
-                filled = per_seller_filled_rows.get(seller.name, 0)
-                total_g = per_seller_gtins_in_prices.get(seller.name, 0)
-                if filled == 0 and total_g == 0:
-                    continue
-                unique_filled = per_seller_unique_gtins_filled.get(
-                    seller.name, 0,
-                )
-                per_seller_lines.append(
-                    f"    {seller.name}: {total_g} GTIN в ценах, "
-                    f"{filled} строк / {unique_filled} GTIN установлено"
-                )
-
-            has_any = bool(per_seller_lines) or (
-                    total_gtins_in_prices > 0
-                    or total_skipped_already_priced > 0
-                    or total_skipped_no_gtin > 0
-                    or total_skipped_not_in_prices > 0
-                    or total_filled_rows > 0
+        lines = ["\nGTIN-заполнение:"]
+        per_seller_lines = []
+        for seller in sellers:
+            filled = per_seller_filled_rows.get(seller.name, 0)
+            total_g = per_seller_gtins_in_prices.get(seller.name, 0)
+            if filled == 0 and total_g == 0:
+                continue
+            unique_filled = per_seller_unique_gtins_filled.get(
+                seller.name, 0,
+            )
+            per_seller_lines.append(
+                f"    {seller.name}: {total_g} GTIN в ценах, "
+                f"{filled} строк / {unique_filled} GTIN установлено"
             )
 
-            if has_any:
-                if per_seller_lines:
-                    lines.append("  По продавцам:")
-                    lines.extend(per_seller_lines)
-                if total_gtins_in_prices > 0:
-                    lines.append(
-                        f"  Всего GTIN в ценах: {total_gtins_in_prices}"
-                    )
-                if total_skipped_already_priced > 0:
-                    lines.append(
-                        f"  Пропущено (цена уже стоит): "
-                        f"{total_skipped_already_priced}"
-                    )
-                if total_skipped_no_gtin > 0:
-                    lines.append(
-                        f"  Пропущено (нет GTIN): "
-                        f"{total_skipped_no_gtin}"
-                    )
-                if total_skipped_not_in_prices > 0:
-                    lines.append(
-                        f"  Пропущено (GTIN нет в ценах): "
-                        f"{total_skipped_not_in_prices} строк, "
-                        f"{total_unique_gtins_not_in_prices} уникальных"
-                    )
-                if total_filled_rows > 0:
-                    lines.append(
-                        f"  Установлено цен по GTIN: "
-                        f"{total_filled_rows} строк, "
-                        f"{total_unique_gtins_filled} уникальных GTIN"
-                    )
-                logger.info("\n".join(lines))
+        has_any = bool(per_seller_lines) or (
+                total_gtins_in_prices > 0
+                or total_skipped_already_priced > 0
+                or total_skipped_no_gtin > 0
+                or total_skipped_not_in_prices > 0
+                or total_filled_rows > 0
+        )
 
-        # NEW B.7: расширенный отчёт о внесённых ценах.
-        # total_stage2 не заполнялся отдельно — используем
-        # total_cluster_filled как источник «По кластерам GTIN».
+        if has_any:
+            if per_seller_lines:
+                lines.append("  По продавцам:")
+                lines.extend(per_seller_lines)
+            if total_gtins_in_prices > 0:
+                lines.append(
+                    f"  Всего GTIN в ценах: {total_gtins_in_prices}"
+                )
+            if total_skipped_already_priced > 0:
+                lines.append(
+                    f"  Пропущено (цена уже стоит): "
+                    f"{total_skipped_already_priced}"
+                )
+            if total_skipped_no_gtin > 0:
+                lines.append(
+                    f"  Пропущено (нет GTIN): "
+                    f"{total_skipped_no_gtin}"
+                )
+            if total_skipped_not_in_prices > 0:
+                lines.append(
+                    f"  Пропущено (GTIN нет в ценах): "
+                    f"{total_skipped_not_in_prices} строк, "
+                    f"{total_unique_gtins_not_in_prices} уникальных"
+                )
+            if total_filled_rows > 0:
+                lines.append(
+                    f"  Установлено цен по GTIN: "
+                    f"{total_filled_rows} строк, "
+                    f"{total_unique_gtins_filled} уникальных GTIN"
+                )
+            logger.info("\n".join(lines))
+
         total_stage2_effective = total_filled_rows
         total_all = total_stage1 + total_stage2_effective + total_stage3
         pct1 = (
@@ -2315,8 +2206,6 @@ class FinalizePricesService:
         )
         lines.append(f"  По средней: {total_stage3} ({pct3}%)")
         lines.append(f"  Всего: {total_all}")
-        # Блок «По продавцам» — только для продавцов, дошедших
-        # до wb.save (успешно завершённых), с total > 0.
         per_seller_lines = []
         for seller in sellers:
             s1 = per_seller_stage1.get(seller.name, 0)
@@ -2336,14 +2225,22 @@ class FinalizePricesService:
         logger.info("\n".join(lines))
 
         logger.report("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
-
-        # NEW B.8: info-отбивка конца, 50 знаков =.
-        logger.info("\n==================================================\n")
-
-        # NEW A.8: финальный статус этапа.
         logger.status(
             "Внесение цен и финализация завершены. "
             "Работа с отчётами завершена"
         )
+        logger.debug(
+            f"Фаза 6: завершена, sellers_processed={sellers_processed}"
+        )
 
+        # ============================================================
+        # Фаза 7. Финал.
+        # ============================================================
+        logger.report("\n=== ОБРАБОТКА ЗАВЕРШЕНА ===")
+        logger.status("Обработка завершена")
+        logger.info("\n==================================================\n")
+        logger.debug(
+            f"completion: завершён, обработано={sellers_processed}, "
+            f"возврат saved_prices({len(saved_prices)})"
+        )
         return saved_prices
