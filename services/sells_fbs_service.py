@@ -37,6 +37,7 @@ from utils.sales_file_generator import (
 )
 from utils.fbs_buferprices import FbsBufferPrices
 from utils.kiz_utils import KizUtils
+from services.kiz_validator import KizValidator
 
 class PreparationService:
     """Сервис шага «Подготовка»: опознание, копирование, разбор,
@@ -1267,6 +1268,415 @@ class PreparationService:
                 len(p) for p in prices_by_seller.values()
             ),
         }
+
+class DataVerificationService:
+    """Необязательный сервис проверки.
+
+    Сверяет КИЗы из отчётов с пулом КИЗов файла продавца (BestMark / ИТОГ).
+    Режим (final / processing) определяется автоматически. Не пишет
+    в used_kiz.json — работает через KizValidator(dry_run=True,
+    ignore_existing=True).
+    """
+
+    def __init__(self, kiz_validator, log_manager_v2) -> None:
+        """Конструктор.
+
+        Вход:
+            kiz_validator — KizValidator: используется только для load().
+            log_manager_v2 — LogManagerV2, фабрика логгеров V2.
+        """
+        self.kiz_validator = kiz_validator
+        self._log_manager_v2 = log_manager_v2
+
+    def verify(self, target_dir, sellers) -> None:
+        """Запускает проверку данных.
+
+        Вход:
+            target_dir — корень рабочей папки.
+            sellers — список Seller с восстановленными .brands.
+        """
+        # ============================================================
+        # Фаза 1. Контекст, логгер, загрузка базы.
+        # ============================================================
+        ctx = TaskContext(
+            target_dir,
+            "ЧЗ_МП_{date}",
+            "log_проверка.txt",
+            subfolders=["Логи", "Отчёты", "Обработка", "Продажи"],
+        )
+        logger = self._log_manager_v2.create_logger_v2(
+            source="DataVerificationService.data_verification_service",
+            domain="chz_mp",
+            work_folder=ctx.logs_dir,
+            log_filename="log_проверка.txt",
+        )
+        logger.status("Проверка данных начата")
+        logger.report("=== ПРОВЕРКА ДАННЫХ ===")
+        logger.report(f"Рабочая папка: {ctx.work_folder}")
+
+        logger.status("Загрузка базы КИЗов для валидации")
+        try:
+            self.kiz_validator.load()
+            if self.kiz_validator.storage.get_all():
+                logger.info(
+                    "Загружены сохранённые данные по ранее "
+                    "списанным КИЗам"
+                )
+            else:
+                logger.info(
+                    "Не получилось загрузить данные — валидация "
+                    "без сохранённой базы"
+                )
+        except Exception:
+            logger.info(
+                "Не получилось загрузить данные — валидация "
+                "без сохранённой базы"
+            )
+
+        validator = KizValidator(
+            self.kiz_validator.storage,
+            dry_run=True,
+            ignore_existing=True,
+        )
+
+        # ============================================================
+        # Фаза 2. Определение режима.
+        # ============================================================
+        intent_mode = "processing"
+        for seller in sellers:
+            final_name = f"ИТОГ {seller.name} {ctx.date_str}.xlsx"
+            if (ctx.work_folder / final_name).is_file():
+                intent_mode = "final"
+                break
+
+        logger.debug(
+            f"verify: старт, sellers={len(sellers)}, mode={intent_mode}"
+        )
+
+        # ============================================================
+        # Фаза 3. Этап 1 (только processing).
+        # ============================================================
+        if intent_mode == "final":
+            logger.debug("verify: режим final, пропускаю этап 1")
+        else:
+            missing_names = set()
+            for seller in sellers:
+                txt_path = ctx.processing_dir / f"{seller.name}.txt"
+                xlsx_path = ctx.processing_dir / f"{seller.name}.xlsx"
+
+                if not txt_path.is_file() and xlsx_path.is_file():
+                    logger.debug(
+                        f"Этап 1: {seller.name} — txt нет, xlsx есть"
+                    )
+                elif txt_path.is_file() and xlsx_path.is_file():
+                    logger.debug(
+                        f"Этап 1: {seller.name} — оба файла есть"
+                    )
+                elif not txt_path.is_file() and not xlsx_path.is_file():
+                    logger.debug(
+                        f"Этап 1: {seller.name} — ни txt, ни xlsx"
+                    )
+                elif txt_path.is_file() and not xlsx_path.is_file():
+                    missing_names.add(seller.name)
+
+            if missing_names:
+                logger.status("Не все txt файлы проведены через BestMark")
+                for seller in sellers:
+                    if seller.name in missing_names:
+                        logger.report(
+                            f" {seller.name}: txt есть, xlsx "
+                            f"отсутствует — стоп"
+                        )
+                logger.report(
+                    "Проверка прервана: не все txt проведены "
+                    "через BestMark"
+                )
+                logger.info(
+                    f"\nОбработанные файлы отсутствуют: "
+                    f"{', '.join(sorted(missing_names))}. "
+                    f"Проверка отменена."
+                )
+                return
+
+        # ============================================================
+        # Фаза 4. Основной проход.
+        # ============================================================
+        missing_reports: dict = {}
+        no_expected_matches: dict = {}
+        no_matched: dict = {}
+        missing_seller_files: set = set()
+        unreadable_reports: dict = {}
+        checked_sellers = 0
+        checked_reports = 0
+
+        for seller in sellers:
+            if intent_mode == "final":
+                seller_path = (
+                    ctx.work_folder
+                    / f"ИТОГ {seller.name} {ctx.date_str}.xlsx"
+                )
+            else:
+                seller_path = ctx.processing_dir / f"{seller.name}.xlsx"
+
+            if not seller_path.is_file():
+                logger.status(f"Пропуск {seller.name}: файла нет")
+                logger.report(
+                    f" {seller.name}: файла для проверки нет — пропуск"
+                )
+                missing_seller_files.add(seller.name)
+                continue
+
+            logger.status(f"Проверка {seller.name}")
+
+            pool: set = set()
+            wb = None
+            try:
+                wb = WorkbookOpener.open(
+                    seller_path, logger=logger, read_only=True,
+                    description="файл проверки",
+                )
+                if wb is None:
+                    logger.critical(
+                        f"Ошибка чтения файла продавца {seller.name}: "
+                        f"не открылся",
+                        can_influence=False,
+                    )
+                    missing_seller_files.add(seller.name)
+                    continue
+
+                sheet = wb.active
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    if len(row) >= PriceFiller.KIZ_COL:
+                        kiz_val = row[PriceFiller.KIZ_COL - 1]
+                        if kiz_val is not None:
+                            k_str = str(kiz_val).strip()
+                            if k_str and k_str != PriceFiller.HEADER_KIZ:
+                                pool.add(k_str)
+            except Exception as e:
+                logger.critical(
+                    f"Ошибка чтения файла продавца {seller.name}: {e}",
+                    can_influence=False,
+                )
+                missing_seller_files.add(seller.name)
+                continue
+            finally:
+                if wb is not None:
+                    try:
+                        wb.close()
+                    except Exception:
+                        pass
+
+            # Поиск отчётов.
+            found_reports = []
+            missing_platforms = []
+            found_platforms = set()
+            safe_seller = TextUtils.sanitize_filename(
+                seller.name
+            ).lower()
+
+            for path in ctx.reports_dir.glob("Отчёт_*.xlsx"):
+                if safe_seller not in path.stem.lower():
+                    continue
+                stem_upper = path.stem.upper()
+                stem_lower = path.stem.lower()
+                if "WB" in stem_upper:
+                    found_reports.append(("WB", path))
+                    found_platforms.add("WB")
+                elif "OZON" in stem_upper:
+                    found_reports.append(("OZON", path))
+                    found_platforms.add("OZON")
+                elif "склада" in stem_lower:
+                    found_reports.append(("склада", path))
+                    found_platforms.add("склада")
+
+            for platform in ("WB", "OZON", "склада"):
+                if platform not in found_platforms:
+                    missing_platforms.append(platform)
+
+            if missing_platforms:
+                missing_reports[seller.name] = missing_platforms
+
+            logger.debug(
+                f"Проверка {seller.name}: пул КИЗов={len(pool)}, "
+                f"отчётов={len(found_reports)}, "
+                f"отсутствует площадок="
+                f"{len(missing_reports.get(seller.name, []))}"
+            )
+
+            if found_reports:
+                logger.report(f"\nПроверка отчётов {seller.name}:")
+
+            for platform, path in found_reports:
+                try:
+                    if platform == "WB":
+                        reader = WBReportReader
+                    elif platform == "OZON":
+                        reader = OZONReportReader
+                    else:
+                        reader = WarehouseReportReader
+
+                    result = reader.read(path, sellers, validator, logger)
+
+                    if result.reason is not None or result.data is None:
+                        reason = result.reason or "не прочитан"
+                        logger.report(f" Отчёт {path.name}: {reason}")
+                        unreadable_reports.setdefault(
+                            seller.name, []
+                        ).append((path.name, reason))
+                        continue
+
+                    data = result.data
+                    if data.added == 0:
+                        logger.report(
+                            f" Отчёт {path.name}: КИЗов к списанию "
+                            f"нет — проверка вхождений не требуется"
+                        )
+                        no_expected_matches.setdefault(
+                            seller.name, []
+                        ).append(path.name)
+                        continue
+
+                    logger.debug(
+                        f" Отчёт {path.name}: added={data.added}, "
+                        f"проверено до 3 вхождений"
+                    )
+                    found = 0
+                    for full_kiz in data.full_kizs:
+                        storage = KizUtils.clean_kiz_for_storage(
+                            full_kiz, logger=None,
+                        )
+                        if not storage:
+                            continue
+                        k = storage[0]
+                        if k in pool:
+                            pool.discard(k)
+                            found += 1
+                        if found >= 3:
+                            break
+
+                    if found == 3:
+                        logger.report(
+                            f" Отчёт {path.name}: 3 вхождения, "
+                            f"признан полностью проверенным"
+                        )
+                    elif found == 2:
+                        logger.report(
+                            f" Отчёт {path.name}: 2 вхождения, "
+                            f"признан относительно проверенным"
+                        )
+                    elif found == 1:
+                        logger.report(
+                            f" Отчёт {path.name}: 1 вхождение, "
+                            f"признан сомнительно проверенным"
+                        )
+                    else:
+                        logger.report(
+                            f" Отчёт {path.name}: внимание, "
+                            f"вхождений нет"
+                        )
+                        no_matched.setdefault(
+                            seller.name, []
+                        ).append(path.name)
+
+                    checked_reports += 1
+                except Exception as e:
+                    logger.critical(
+                        f"Ошибка чтения отчёта {path.name}: {e}",
+                        can_influence=False,
+                    )
+                    unreadable_reports.setdefault(
+                        seller.name, []
+                    ).append((path.name, "ошибка чтения"))
+                    continue
+
+            checked_sellers += 1
+
+        # ============================================================
+        # Фаза 5. Пустой вход.
+        # ============================================================
+        if checked_sellers == 0:
+            logger.status("Файлов для проверки нет")
+            logger.report("Проверка завершена без данных")
+            logger.info(
+                "\nФайлов нет: либо были удалены, либо не требуются "
+                "списывать КИЗы."
+            )
+            return
+
+        # ============================================================
+        # Фаза 6. Финальные info-блоки.
+        # ============================================================
+        logger.info("\n" + "=" * 60)
+
+        if missing_reports:
+            lines = ["Отсутствующие отчёты:"]
+            for seller in sellers:
+                if seller.name in missing_reports:
+                    lines.append(f" Продавец {seller.name}:")
+                    for platform in ("WB", "OZON", "склада"):
+                        if platform in missing_reports[seller.name]:
+                            safe_name = TextUtils.sanitize_filename(
+                                seller.name
+                            )
+                            lines.append(
+                                f" Отчёт_{platform}_{safe_name}_"
+                                f"{ctx.date_str}.xlsx"
+                            )
+            logger.info("\n".join(lines))
+            logger.info("")
+
+        if no_expected_matches:
+            lines = [
+                "Отчёты в которых не должно было быть совпадений "
+                "из-за отсутствия КИЗов к списанию:"
+            ]
+            for seller in sellers:
+                if seller.name in no_expected_matches:
+                    lines.append(f" Продавец {seller.name}:")
+                    for report_name in no_expected_matches[seller.name]:
+                        lines.append(f"    {report_name}")
+            logger.info("\n".join(lines))
+            logger.info("")
+
+        if no_matched:
+            lines = ["Отчёты в которых не было найдено совпадений:"]
+            for seller in sellers:
+                if seller.name in no_matched:
+                    lines.append(f" Продавец {seller.name}:")
+                    for report_name in no_matched[seller.name]:
+                        lines.append(f"    {report_name}")
+            logger.info("\n".join(lines))
+            logger.info("")
+
+        if missing_seller_files:
+            lines = ["Продавцы без файла для проверки:"]
+            for seller in sellers:
+                if seller.name in missing_seller_files:
+                    lines.append(f" {seller.name}")
+            logger.info("\n".join(lines))
+            logger.info("")
+
+        if unreadable_reports:
+            lines = ["Не прочитавшиеся отчёты:"]
+            for seller in sellers:
+                if seller.name in unreadable_reports:
+                    lines.append(f" Продавец {seller.name}:")
+                    for report_name, reason in unreadable_reports[seller.name]:
+                        lines.append(f" {report_name} ({reason})")
+            logger.info("\n".join(lines))
+            logger.info("")
+
+        logger.info("\n" + "=" * 60)
+
+        # ============================================================
+        # Фаза 7. Финал.
+        # ============================================================
+        logger.status("Проверка завершена")
+        logger.report("\n=== ПРОВЕРКА ЗАВЕРШЕНА ===")
+        logger.debug(
+            f"verify: завершён, проверено продавцов={checked_sellers}, "
+            f"отчётов={checked_reports}"
+        )
 
 class FinalProcessingService:
     """Сервис обработки предитоговых файлов и формирования продаж.

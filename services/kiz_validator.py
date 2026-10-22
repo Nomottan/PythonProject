@@ -39,15 +39,35 @@ class KizValidator:
         методы возвращают ValidationResult или bool.
     """
 
-    def __init__(self, storage: KizStorage) -> None:
+    def __init__(self, storage: KizStorage, dry_run: bool = False,
+                 ignore_existing: bool = False) -> None:
         """Конструктор.
 
-        Вход: storage — KizStorage с загруженными данными.
-        Роль: сохраняет ссылку. Логгера своего нет — используется
-              logger внутри storage (публичные каналы debug/report/
-              warning/error).
+        Вход:
+            storage — KizStorage с загруженными данными.
+            dry_run — если True, публичные методы валидации
+                      возвращают результат, но не вызывают
+                      storage.add_or_update. report/warning идут
+                      в storage как обычно.
+            ignore_existing — если True, validate_for_sale ведёт
+                      себя так, будто КИЗа в базе нет (ADDED с
+                      fallback по дате, без записи). Допустим
+                      только при dry_run=True — иначе ValueError.
+                      Смысл: DataVerificationService считает
+                      «что было бы в чистой базе», не завися от
+                      истории списаний.
+
+        Роль: сохраняет ссылку и флаги. Логгера своего нет —
+              используется logger внутри storage (публичные
+              каналы debug/report/warning/error).
         """
+        if ignore_existing and not dry_run:
+            raise ValueError(
+                "ignore_existing допустим только при dry_run=True"
+            )
         self.storage = storage
+        self._dry_run = dry_run
+        self._ignore_existing = ignore_existing
 
     # ---------- Управление хранилищем ----------
 
@@ -120,7 +140,8 @@ class KizValidator:
         # --- ЧЗ_МП: без проверок, всегда списываем ---
         if sale_date_str is None:
             today_str = datetime.now().strftime("%d-%m-%Y")
-            self.storage.add_or_update(kiz, today_str, None)
+            if not self._dry_run:
+                self.storage.add_or_update(kiz, today_str, None)
             self.storage.report(
                 f"Списание (ЧЗ_МП): {kiz} – сегодня {today_str}"
             )
@@ -136,11 +157,15 @@ class KizValidator:
             )
         sale_str = sale_dt.strftime("%d-%m-%Y")
 
-        existing = self.storage.get(kiz)
+        if self._ignore_existing:
+            existing = None
+        else:
+            existing = self.storage.get(kiz)
 
-        # 1. Новый КИЗ — списываем.
+            # 1. Новый КИЗ — списываем.
         if existing is None:
-            self.storage.add_or_update(kiz, sale_str, None)
+            if not self._dry_run:
+                self.storage.add_or_update(kiz, sale_str, None)
             self.storage.report(
                 f"Списание (новый): {kiz} – продажа {sale_str}"
             )
@@ -151,7 +176,8 @@ class KizValidator:
 
         # 2. Аномалия: нет даты продажи — списываем.
         if existing_sold_str is None:
-            self.storage.add_or_update(kiz, sale_str, None)
+            if not self._dry_run:
+                self.storage.add_or_update(kiz, sale_str, None)
             self.storage.warning(
                 f"Списание (аномалия, нет sold_date): {kiz} – "
                 f"продажа {sale_str}"
@@ -177,7 +203,8 @@ class KizValidator:
             return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
 
         if sale_dt > existing_returned_dt:
-            self.storage.add_or_update(kiz, sale_str, None)
+            if not self._dry_run:
+                self.storage.add_or_update(kiz, sale_str, None)
             self.storage.report(
                 f"Списание (возврат был раньше): {kiz}, "
                 f"продажа {sale_str}"
@@ -200,7 +227,8 @@ class KizValidator:
         Роль:
             Если КИЗ есть в хранилище — обновляет дату возврата на
             сегодня. Если нет — warning и возвращает True (сервис
-            продолжает работу).
+            продолжает работу). При dry_run=True add_or_update не
+            вызывается; предупреждение и результат — те же.
         """
         existing = self.storage.get(kiz)
         if existing is None:
@@ -212,7 +240,10 @@ class KizValidator:
 
         # КИЗ есть — обновляем дату возврата.
         return_date = datetime.now().strftime("%d-%m-%Y")
-        self.storage.add_or_update(kiz, existing["sold_date"], return_date)
+        if not self._dry_run:
+            self.storage.add_or_update(
+                kiz, existing["sold_date"], return_date,
+            )
         self.storage.report(
             f"Возврат: для КИЗа {kiz} установлена дата возврата "
             f"{return_date}"

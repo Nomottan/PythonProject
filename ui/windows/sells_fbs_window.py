@@ -26,7 +26,7 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
     ListWidgetFactory,
 )
-from ui.styles import ColorCalculator, WindowStyle
+from ui.styles import ColorCalculator, WindowStyle, WidgetStyle
 from ui.windows.shared_dialogs import (
     PricesEditWindow, AveragePriceInputDialog, SaleDuplicatePickerDialog,
 )
@@ -38,7 +38,9 @@ from ui.windows.message_dialog import NotificationDialog
 from models.models import Brand
 from utils.text_utils import TextUtils
 from utils.unknown_resolver import ResolverRouter
-from services.sells_fbs_service import PreparationService, FinalProcessingService
+from services.sells_fbs_service import (
+    PreparationService, FinalProcessingService, DataVerificationService,
+)
 from utils.log_tools.decorators import log_button_action
 
 
@@ -125,7 +127,7 @@ class SellsFBSWindow(BaseServiceWindow):
                 "Шаг 1: Нажми Подготовка. Файлы будут скопированы и разобраны в рабочую директорию, оригиналы нетронуты\n"
                 "Проведи все файлы через BestMark в Excell файлы сохранив названия\n"
                 "Шаг 2: Нажми Обработка. Файлы будут очищены от некорректных статусов и владельцев, собраны файлы для продаж, установлены цены и финализированы ИТОГ-файлы.\n"
-                "Шаг 3: Проверка (в разработке)\n"
+                "Шаг 3: Проверка. Сверяет КИЗы из отчётов с файлами BestMark/ИТОГ. Необязательный шаг.\n"
                 "Проведи продажи через ЭДО. После выводи их из оборота"
             ),
             bg_color=(0, 0, 0, 0),
@@ -146,7 +148,7 @@ class SellsFBSWindow(BaseServiceWindow):
         # ---------- ЭЛЕМЕНТЫ: кнопки действий ----------
         _action_configs = [
             ("btn_prepare", "Подготовка", (80, 90, 120), "8px 16px", (180, 35)),
-            ("btn_data_verification", "Проверка", (40, 130, 120), "8px 16px", (180, 35)),
+            ("btn_data_verification", "Проверка", (30, 40, 30), "8px 16px", (180, 35)),
             ("btn_processing", "Обработка", (60, 110, 120), "8px 16px", (180, 35)),
             ("btn_prices", "Цены", (40, 40, 40), "2px 2px", (35, 20)),
         ]
@@ -161,6 +163,7 @@ class SellsFBSWindow(BaseServiceWindow):
         )
         # Все кнопки шагов изначально отключены, кроме подготовки.
         self.btn_processing.setEnabled(False)
+        self.btn_data_verification.setEnabled(False)
         self.btn_files.clicked.connect(self.select_files)
 
         # ---------- МАКЕТ ----------
@@ -226,6 +229,7 @@ class SellsFBSWindow(BaseServiceWindow):
             finish_message="Подготовка завершена.",
             step_name="on_prepare",
             enable_after=self.btn_processing,
+            on_success=self._on_prepare_finished,
         )
 
     @log_button_action("btn_processing", "Ошибка в on_processing: {e}")
@@ -256,13 +260,34 @@ class SellsFBSWindow(BaseServiceWindow):
             finish_message="Обработка завершена.",
             step_name="on_processing",
             enable_after=None,
+            on_success=self._on_processing_finished,
         )
 
     @log_button_action("btn_data_verification", "Ошибка в on_data_verification: {e}")
     def on_data_verification(self) -> None:
-        """Шаг 3: заглушка сервиса проверки данных."""
-        self.set_status("Сервис проверки данных в разработке")
-        self.set_info("Сервис проверки данных в разработке")
+        """Шаг 3: проверка данных."""
+        if not self._precheck_target_dir():
+            return
+
+        service = DataVerificationService(
+            self.main_window.kiz_validator,
+            self.log_manager_v2,
+        )
+        if self.logger:
+            self.logger.debug(
+                "on_data_verification: DataVerificationService создан"
+            )
+
+        self._run_async_step(
+            service=service,
+            target_method=service.verify,
+            kwargs={},
+            start_message="Проверка данных...",
+            finish_message="Проверка завершена.",
+            step_name="on_data_verification",
+            enable_after=None,
+            on_success=None,
+        )
 
     @log_button_action("btn_prices", "Ошибка при открытии окна цен: {e}")
     def on_open_prices_window(self) -> None:
@@ -274,9 +299,43 @@ class SellsFBSWindow(BaseServiceWindow):
         )
         window.exec()
 
-    # ============================================================
-    # ПРИВАТНЫЕ МЕТОДЫ: ЦЕНА
-    # ============================================================
+        # ============================================================
+        # ПРИВАТНЫЕ МЕТОДЫ: ОБВЯЗКА ПРОВЕРКИ
+        # ============================================================
+
+    def _on_prepare_finished(self, result=None) -> None:
+        """Вызывается из _run_async_step.on_success после Подготовки.
+
+        Вход: result — результат service.prepare (не используется).
+        Выход: нет.
+        Роль: меняет цвет кнопки Проверки на AFTER_PREPARE и
+              включает её. Выполняется в UI-потоке.
+        """
+        WidgetStyle.apply_button(
+            self.btn_data_verification,
+            bg_color=(30, 80, 40),
+            padding="8px 16px", border_radius=5, border="none",
+        )
+        self.btn_data_verification.setEnabled(True)
+
+    def _on_processing_finished(self, result=None) -> None:
+        """Вызывается из _run_async_step.on_success после Обработки.
+
+        Вход: result — обновлённый saved_prices (не используется).
+        Выход: нет.
+        Роль: меняет цвет кнопки Проверки на AFTER_PROCESSING и
+              включает её. Выполняется в UI-потоке.
+        """
+        WidgetStyle.apply_button(
+            self.btn_data_verification,
+            bg_color=(30, 80, 80),
+            padding="8px 16px", border_radius=5, border="none",
+        )
+        self.btn_data_verification.setEnabled(True)
+
+        # ============================================================
+        # ПРИВАТНЫЕ МЕТОДЫ: ЦЕНА
+        # ============================================================
 
     def _request_average_price(self, seller_name: str) -> int | None:
         """Callback от FinalProcessingService: спросить цену у пользователя.
@@ -659,14 +718,21 @@ class SellsFBSWindow(BaseServiceWindow):
     # ============================================================
 
     def _on_target_dir_changed_hook(self) -> None:
-        """Сброс кнопки обработки при смене папки.
+        """Сброс кнопок Обработки и Проверки при смене папки.
 
         Вход: нет.
         Выход: нет.
         Роль: базовый _on_target_dir_changed уже очистил status_log
-              и обновил target_dir; здесь — только сброс btn_processing.
+              и обновил target_dir; здесь — сброс btn_processing
+              и btn_data_verification (цвет + setEnabled).
         """
         self.btn_processing.setEnabled(False)
+        self.btn_data_verification.setEnabled(False)
+        WidgetStyle.apply_button(
+            self.btn_data_verification,
+            bg_color=(30, 40, 30),
+            padding="8px 16px", border_radius=5, border="none",
+        )
 
     def _current_sellers(self) -> list:
         """Возвращает продавцов с восстановленными связями Brand.
