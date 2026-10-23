@@ -10,14 +10,11 @@ closeEvent.
     Оба окна планировщика — наследники. Логгер V2 создаётся в
     базовом __init__, если передан log_manager_v2 и задан
     LOGGER_SOURCE у наследника.
-
-Переезд: раньше файл лежал в ui/windows/, теперь в ui/base/ —
-базовый класс логически относится к ui.base наравне с
-BaseEditDialog и BaseServiceWindow. Старый путь удалён.
 """
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, QLayout
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, QLayout,
+    QDialog
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -25,7 +22,8 @@ from ui.factories.factories import (
     WindowFactory, ButtonFactory, LabelFactory, ListWidgetFactory,
     BaseWidgetFactory, FilterFactory,
 )
-from models.planner_task import TaskPriority
+from models.planner_task import TaskPriority, ThemeKey
+from ui.styles import ColorCalculator
 
 
 class _BasePlannerListWindow(QMainWindow):
@@ -40,6 +38,13 @@ class _BasePlannerListWindow(QMainWindow):
         При необходимости расширяют COLUMN_BUILDERS.
     """
 
+    # ============================================================
+    # КОНСТАНТЫ
+    # ============================================================
+
+    LOGGER_SOURCE = None
+    LOGGER_DOMAIN = None
+
     # Интервал автообновления — 5 минут.
     RELOAD_INTERVAL_MS = 5 * 60 * 1000
 
@@ -47,9 +52,9 @@ class _BasePlannerListWindow(QMainWindow):
     ACCENT_SHIFT = 25
     ACCENT_ALPHA = 0.7
 
-    # NEW: идентификация для LoggerV2. Наследники переопределяют.
-    LOGGER_SOURCE = None
-    LOGGER_DOMAIN = None
+    # Нейтральный цвет для неизвестных значений.
+    NEUTRAL_COLOR = (120, 120, 120, 0.85)
+    DEADLINE_DATE_BG = (130, 40, 40, 0.85)
 
     PRIORITY_COLORS = {
         "Событие": (240, 240, 40, 0.85),
@@ -70,39 +75,43 @@ class _BasePlannerListWindow(QMainWindow):
         "Ожидание": (100, 100, 150, 0.85),
     }
 
-    # Нейтральный цвет для неизвестных значений.
-    NEUTRAL_COLOR = (120, 120, 120, 0.85)
-
     # Базовые строители колонок. Наследники могут дополнить.
     COLUMN_BUILDERS = {
         "title": "_build_title",
+        "checklist": "_build_checklist",
+        "theme": "_build_theme",
         "priority": "_build_priority",
         "status": "_build_status",
         "date": "_build_date",
         "specifications": "_build_specifications",
     }
+    CHECKLIST_EDITABLE = True
+
+    # ============================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # ============================================================
 
     def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8),
-                 log_manager_v2=None):
+                 log_manager_v2=None, main_config=None):
         """Конструктор.
 
         Вход:
             parent — родительское окно.
             title — заголовок окна.
             bg_color — цвет фона. Передаётся в WindowFactory и в скролл.
-            log_manager_v2 — LogManagerV2 или None. Если задан и
-                             LOGGER_SOURCE у наследника — создаётся
-                             self.logger.
-
-        Роль: строит общий каркас (заголовок, крестик, скролл,
-              tasks_layout), запускает таймер автообновления.
-
-        REPLACE: добавлены log_manager_v2 и создание self.logger.
+            log_manager_v2 — LogManagerV2 или None.
+            main_config — MainConfig или None.
         """
         super().__init__(parent)
-        self.bg_color = bg_color
 
-        # NEW: логгер V2.
+        # ---------- СОСТОЯНИЕ ----------
+        self.bg_color = bg_color
+        self.main_config = main_config
+        self.service_window = self
+        self.filter_panel = None
+        self._empty_label = None
+
+        # Логгер V2
         self.log_manager_v2 = log_manager_v2
         self.logger = None
         if log_manager_v2 is not None and self.LOGGER_SOURCE is not None:
@@ -111,17 +120,17 @@ class _BasePlannerListWindow(QMainWindow):
                 domain=self.LOGGER_DOMAIN,
             )
 
-        # Акцентный цвет для названий задач и даты — вычисляется
-        # от фона окна.
+        # Акцентный цвет для названий задач и даты
         self._accent_bg = self._calc_accent_color(bg_color)
         self._accent_text = BaseWidgetFactory.calc_text_color(self._accent_bg)
-        self.service_window = self
 
+        # ---------- МАКЕТ ----------
         main_layout = WindowFactory.setup_child_window(
             self, title, bg_color=self.bg_color,
         )
+        self._main_layout = main_layout
 
-        # Прокручиваемая область задач.
+        # Прокручиваемая область задач
         scroll = ListWidgetFactory.create_scroll_area(
             self, bg_color=self.bg_color, widget_resizable=False,
         )
@@ -135,16 +144,12 @@ class _BasePlannerListWindow(QMainWindow):
         self.tasks_layout.setContentsMargins(5, 5, 5, 5)
         self.tasks_layout.setSpacing(5)
         self.tasks_layout.setSizeConstraint(QLayout.SetMinAndMaxSize)
-        # Растяжка внизу — строки прижимаются к верхней кромке.
-        self.tasks_layout.addStretch()
+        self.tasks_layout.addStretch() # Растяжка внизу
 
         scroll.setWidget(content_widget)
         main_layout.addWidget(scroll)
 
-        # Сохраняем главный layout — наследники добавят свои кнопки.
-        self._main_layout = main_layout
-        self.filter_panel = None
-        self._empty_label = None
+        # Панель фильтров
         field_defs = self._get_filter_field_defs()
         if field_defs:
             self.filter_panel = FilterFactory.create_filter_panel(
@@ -155,74 +160,33 @@ class _BasePlannerListWindow(QMainWindow):
             )
             self._main_layout.insertWidget(1, self.filter_panel)
             self.filter_panel.filtered_changed.connect(self._reload_tasks)
-        # Таймер автообновления — общий для всех наследников.
+
+        # ---------- ТАЙМЕР ----------
         self._timer = QTimer(self)
         self._timer.setInterval(self.RELOAD_INTERVAL_MS)
         self._timer.timeout.connect(self._reload_tasks)
         self._timer.start()
 
-    # ---------- Вспомогательные ----------
-
-    @classmethod
-    def _calc_accent_color(cls, bg_color) -> tuple:
-        """Вычисляет акцентный цвет от фона окна.
-
-        Вход: bg_color — кортеж (r, g, b) или (r, g, b, a).
-        Выход: кортеж (r+shift, g+shift, b+shift, alpha).
-
-        Роль: используется для фона названия задачи и даты, чтобы
-              они визуально отделялись от основного фона.
-        """
-        if not isinstance(bg_color, (tuple, list)) or len(bg_color) < 3:
-            return (95, 80, 65, cls.ACCENT_ALPHA)
-        r, g, b = bg_color[:3]
-
-        def clamp(v):
-            return max(0, min(255, int(v)))
-
-        return (
-            clamp(r + cls.ACCENT_SHIFT),
-            clamp(g + cls.ACCENT_SHIFT),
-            clamp(b + cls.ACCENT_SHIFT),
-            cls.ACCENT_ALPHA,
-        )
-
-    # ---------- Абстрактный метод ----------
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: ИСТОЧНИКИ И ОТРИСОВКА
+    # ============================================================
 
     def _get_tasks(self):
         """Возвращает список задач для отрисовки. Наследник реализует."""
         raise NotImplementedError
 
     def _get_filter_field_defs(self) -> list:
-        """Возвращает список FieldDef для панели фильтров.
-
-        Наследники переопределяют. По умолчанию пусто — панель
-        не создаётся, поведение окна не меняется.
-        """
+        """Возвращает список FieldDef для панели фильтров."""
         return []
 
-    # ---------- Отрисовка ----------
-
     def _reload_tasks(self, filtered=None):
-        """Перерисовывает список задач.
-
-        Вход:
-            filtered — list | None. Если передан (сигнал
-                filtered_changed) — используется напрямую.
-                Если None — источник берётся из self.filter_panel
-                (если есть) или через self._get_tasks().
-
-        Роль: единая точка перерисовки для таймера, явных вызовов
-              и сигнала панели фильтров. При пустом результате
-              показывает лейбл вместо строк.
-        """
+        """Перерисовывает список задач."""
         # Очистка строк (кроме растяжки).
         while self.tasks_layout.count() > 1:
             item = self.tasks_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        # Ссылка на прошлый лейбл сброшена — виджет уже удалён выше.
         self._empty_label = None
 
         # Источник: аргумент → панель → наследник.
@@ -270,7 +234,6 @@ class _BasePlannerListWindow(QMainWindow):
                 continue
             widget = getattr(self, builder_name)(task)
             if widget is not None:
-                # Название растягивается, остальные — по содержимому.
                 if col_id == "title":
                     layout.addWidget(widget, 1)
                 else:
@@ -278,15 +241,29 @@ class _BasePlannerListWindow(QMainWindow):
         layout.addStretch(1)
         return row
 
-    # ---------- Билдеры колонок ----------
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: БИЛДЕРЫ КОЛОНОК
+    # ============================================================
+
+    @classmethod
+    def _calc_accent_color(cls, bg_color) -> tuple:
+        """Вычисляет акцентный цвет от фона окна."""
+        if not isinstance(bg_color, (tuple, list)) or len(bg_color) < 3:
+            return (95, 80, 65, cls.ACCENT_ALPHA)
+        r, g, b = bg_color[:3]
+
+        def clamp(v):
+            return max(0, min(255, int(v)))
+
+        return (
+            clamp(r + cls.ACCENT_SHIFT),
+            clamp(g + cls.ACCENT_SHIFT),
+            clamp(b + cls.ACCENT_SHIFT),
+            cls.ACCENT_ALPHA,
+        )
 
     def _build_title(self, task):
-        """Название задачи — кликабельная кнопка.
-
-        Вход: task — PlannerTask.
-        Выход: QPushButton с названием.
-        Роль: клик открывает NotificationDialog с описанием.
-        """
+        """Название задачи — кликабельная кнопка."""
         btn = ButtonFactory.create_button(
             self,
             text=task.title,
@@ -298,13 +275,95 @@ class _BasePlannerListWindow(QMainWindow):
             font_family="Consolas",
             font_size=11,
         )
-        btn.setMaximumWidth(300)
+        btn.setFixedWidth(150)
         btn.setToolTip(task.title)
         btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         btn.clicked.connect(
             lambda checked=False, t=task: self._on_title_clicked(t)
         )
         return btn
+
+    def _on_title_clicked(self, task):
+        """Клик по названию — уведомление с описанием."""
+        from ui.windows.message_dialog import NotificationDialog
+        text = task.description or "Подробное описание отсутствует."
+        NotificationDialog.notify(
+            self,
+            text,
+            bg_color=self.bg_color,
+            title_text=task.title,
+        )
+
+    def _build_checklist(self, task):
+        """Плашка чек-листа — «Чек-лист» или «Без чек-листа»."""
+        if not task.checklist_required:
+            lbl = LabelFactory.create_label(
+                self,
+                "Без чек-листа",
+                bg_color=self.NEUTRAL_COLOR,
+                font_weight="bold",
+            )
+            lbl.setFixedWidth(100)
+            return lbl
+
+        btn = ButtonFactory.create_button(
+            self,
+            "Чек-лист",
+            bg_color=ColorCalculator.derive(
+                self._accent_bg,
+                r_fn=lambda r: r + 10,
+                g_fn=lambda g: g + 15,
+                b_fn=lambda b: b + 20,
+                alpha=0.85,
+            ),
+            padding="4px 8px",
+            border_radius=4,
+        )
+        btn.setFixedWidth(100)
+        btn.clicked.connect(
+            lambda checked=False, t=task: self._on_open_checklist(t)
+        )
+        return btn
+
+    def _on_open_checklist(self, task) -> None:
+        """Открывает модальный диалог чек-листа."""
+        from ui.windows.planner_checklist_dialogs import ChecklistDialog
+
+        mode = "edit" if self.CHECKLIST_EDITABLE else "view"
+        dialog = ChecklistDialog(
+            self,
+            task=task,
+            bg_color=self.bg_color,
+            log_manager_v2=self.log_manager_v2,
+            mode=mode,
+        )
+        dialog.setWindowModality(Qt.WindowModal)
+        if dialog.exec() == QDialog.Accepted and self.CHECKLIST_EDITABLE:
+            result = dialog.get_result()
+            if result is not None:
+                self.service.update_checklist(task.task_id, result)
+        self._reload_tasks()
+
+    def _build_theme(self, task):
+        """Строит плашку темы задачи."""
+        try:
+            theme_key = ThemeKey(task.theme)
+        except (ValueError, TypeError):
+            theme_key = ThemeKey.BLACK
+
+        raw_themes = (
+            self.main_config.get("planner_themes", {})
+            if self.main_config is not None else {}
+        )
+        if not isinstance(raw_themes, dict):
+            raw_themes = {}
+
+        name = ThemeKey.resolve_effective_name(theme_key, raw_themes)
+        lbl = LabelFactory.create_label(
+            self, text=name, bg_color=theme_key.color, font_weight="bold",
+        )
+        lbl.setFixedWidth(120)
+        return lbl
 
     def _build_priority(self, task):
         """Приоритет задачи — цветной лейбл."""
@@ -326,89 +385,72 @@ class _BasePlannerListWindow(QMainWindow):
 
     def _build_date(self, task):
         """Дата создания задачи — лейбл с акцентным фоном."""
-        return LabelFactory.create_label(
+        lbl = LabelFactory.create_label(
             self,
             text=task.created_date,
-            bg_color=self._accent_bg,
+            bg_color=ColorCalculator.derive(
+                self._accent_bg,
+                r_fn=lambda r: r - 40,
+                g_fn=lambda g: g - 30,
+                b_fn=lambda b: b - 20,
+                alpha=self.ACCENT_ALPHA,
+            ),
             text_color=self._accent_text,
             alignment=Qt.AlignCenter,
-            min_size=(100, 0),
             padding="4px 8px",
             border_radius=4,
         )
-
-    DEADLINE_DATE_BG = (130, 40, 40, 0.85)
-
-    def _on_title_clicked(self, task):
-        """Клик по названию — уведомление с описанием.
-
-        Вход: task — PlannerTask.
-        Роль: общее поведение для обоих окон. Наследники могут
-              переопределить, если нужно другое действие.
-        """
-        from ui.windows.message_dialog import NotificationDialog
-        text = task.description or "Подробное описание отсутствует."
-        NotificationDialog.notify(
-            self,
-            text,
-            bg_color=self.bg_color,
-            title_text=task.title,
-        )
-
-    # ---------- Обработчики ----------
+        lbl.setFixedWidth(100)
+        return lbl
 
     def _build_specifications(self, task):
-        """Колонка спецификаций.
-
-        DEADLINE — дата дедлайна на красном фоне.
-        RECURRING (генератор) — next_generation_date на голубом фоне.
-        Остальные — пустой прозрачный лейбл для выравнивания.
-        """
-        # Генератор регулярной задачи — дата следующей генерации.
+        """Колонка спецификаций."""
         if task.is_generator():
             next_date = task.next_generation_date or "—"
+            bg = (80, 160, 220, 0.85)
             return LabelFactory.create_label(
-                self, text=next_date, bg_color=(80, 160, 220, 0.85),
-                text_color="#ffffff", alignment=Qt.AlignCenter,
+                self, text=next_date, bg_color=bg,
+                text_color=ColorCalculator.text_for(bg), alignment=Qt.AlignCenter,
                 min_size=(100, 0), padding="4px 8px", border_radius=4,
             )
 
-        # Дедлайн — дата дедлайна на красном фоне.
         if task.priority == TaskPriority.DEADLINE:
             dl = task.get_deadline_datetime()
             text = dl.strftime("%d.%m.%Y %H:%M") if dl else "—"
+            bg = self.DEADLINE_DATE_BG
             return LabelFactory.create_label(
-                self, text=text, bg_color=self.DEADLINE_DATE_BG,
-                text_color="#ffffff", alignment=Qt.AlignCenter,
+                self, text=text, bg_color=bg,
+                text_color=ColorCalculator.text_for(bg), alignment=Qt.AlignCenter,
                 min_size=(100, 0), padding="4px 8px", border_radius=4,
             )
+
         if task.is_event():
+            bg = (60, 160, 80, 0.85)
             return LabelFactory.create_label(
                 self, text=task.event_date or "—",
-                bg_color=(60, 160, 80, 0.85),
-                text_color="#ffffff",
+                bg_color=bg,
+                text_color=ColorCalculator.text_for(bg),
                 alignment=Qt.AlignCenter,
                 min_size=(100, 0),
                 padding="4px 8px",
                 border_radius=4,
             )
-        # Остальные — пустой лейбл для выравнивания колонок.
+
         return LabelFactory.create_label(
             self, text="", bg_color=(0, 0, 0, 0),
             alignment=Qt.AlignCenter, min_size=(100, 0),
         )
 
-    # ---------- Очистка / закрытие ----------
+    # ============================================================
+    # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
+    # ============================================================
 
     def cleanup(self):
         """Очистка состояния при закрытии. Наследник может переопределить."""
         pass
 
     def closeEvent(self, event):
-        """Останавливает таймер и завершает работу окна.
-
-        REPLACE: добавлен debug-лог при закрытии.
-        """
+        """Останавливает таймер и завершает работу окна."""
         if self.logger is not None:
             self.logger.debug(
                 f"{type(self).__name__}: closeEvent получен"

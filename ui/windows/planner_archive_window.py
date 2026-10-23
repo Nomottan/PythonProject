@@ -6,6 +6,7 @@ UI-каркас без данных. Наследник _BasePlannerListWindow.
 
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from PySide6.QtCore import Qt
+
 from ui.factories.button_factory import ButtonFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.base.planner_base_window import _BasePlannerListWindow
@@ -14,6 +15,8 @@ from ui.windows.planner_task_dialogs import (
     DeadlineEditDialog, PlannerRecurrenceEditDialog,
 )
 from utils.filter_utils import FieldDef
+from ui.styles import ColorCalculator, WindowStyle
+
 
 class PlannerArchiveWindow(_BasePlannerListWindow):
     """Окно архива задач планировщика.
@@ -28,21 +31,29 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         обесцвеченного фона и отсутствия нижних кнопок.
     """
 
+    # ============================================================
+    # КОНСТАНТЫ
+    # ============================================================
+
     LOGGER_SOURCE = "PlannerArchiveWindow.planner_archive_window"
     LOGGER_DOMAIN = "planner"
 
-    ARCHIVE_BG_COLOR = (63, 60, 57, 0.95)
+    # В архиве чек-лист можно только просматривать
+    CHECKLIST_EDITABLE = False
 
-    # Колонки архива: действия (↺, ✕), название, приоритет, статус, дата.
+    # Колонки архива: действия (↺, ✕), название, чек-лист, приоритет, тема, статус, дата.
     TASK_TYPE_COLUMNS = {
-        "default": ["actions", "title", "priority", "status", "date", "specifications"],
+        "default": ["actions", "title", "checklist", "priority", "theme", "status", "date", "specifications"],
     }
-
     # Расширяем базовые билдеры колонкой действий.
     COLUMN_BUILDERS = {
         **_BasePlannerListWindow.COLUMN_BUILDERS,
         "actions": "_build_actions",
     }
+
+    # ============================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # ============================================================
 
     def __init__(self, parent=None, archive_service=None,
                  log_manager_v2=None):
@@ -51,6 +62,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         Вход:
             parent — родитель (PlannerWindow).
             archive_service — PlannerArchiveService. Обязателен.
+            log_manager_v2 — LogManagerV2 или None.
 
         Роль: сохраняет сервис, строит каркас через базовый класс,
               загружает задачи.
@@ -59,31 +71,43 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         if archive_service is None:
             raise ValueError("archive_service обязателен")
         self.service = archive_service
-        super().__init__(
-            parent, "Архив", bg_color=self.ARCHIVE_BG_COLOR,
-            log_manager_v2=log_manager_v2,
+
+        # Цвет от родителя (PlannerWindow), делаем его чуть темнее/серее
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (63, 60, 57, 0.95))
+        bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r - 30,
+            g_fn=lambda g: g - 15,
+            b_fn=lambda b: b - 125,
+            alpha=0.95,
         )
-        #очистка от старых экземпляров
+
+        # ---------- СОСТОЯНИЕ И БАЗОВЫЙ КАРКАС ----------
+        super().__init__(
+            parent, "Архив", bg_color=bg_color,
+            log_manager_v2=log_manager_v2,
+            main_config=getattr(parent, "main_config", None),
+        )
+
+        # ---------- ДАННЫЕ ----------
+        # Очистка от старых экземпляров
         self.service.delete_old_instances(days=30)
         # Первая загрузка задач архива.
         self._reload_tasks()
 
-    # ---------- Источник данных ----------
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: ИСТОЧНИКИ И БИЛДЕРЫ
+    # ============================================================
 
     def _get_tasks(self):
+        """Возвращает задачи архива."""
         return self.service.get_archive_tasks()
 
     def _get_filter_field_defs(self) -> list:
         """Возвращает список FieldDef для панели фильтров архива.
 
         Четыре категории — «Тип задачи», «Дата создания»,
-        «Тип завершения», «Дата завершения». values_provider=None
-        у всех — панель соберёт значения из источника через extractor.
-        Порядок категорий в UI — порядок элементов списка.
-
-        Значения из completed_date/created_date при отсутствии
-        заменяются на «Не указана», чтобы категория не показывала
-        пустой чекбокс.
+        «Тип завершения», «Дата завершения».
         """
         return [
             FieldDef(
@@ -107,8 +131,6 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
                 extractor=lambda t: t.completed_date or "Не указана",
             ),
         ]
-
-    # ---------- Билдер actions ----------
 
     def _build_actions(self, task: PlannerTask) -> QWidget:
         """Кнопки: ↺ (восстановить), ✕ (удалить навсегда).
@@ -135,7 +157,9 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         layout.addWidget(delete_btn)
         return container
 
-    # ---------- Обработчики ----------
+    # ============================================================
+    # ОБРАБОТЧИКИ КНОПОК
+    # ============================================================
 
     def _on_restore_task(self, task: PlannerTask) -> None:
         """Восстанавливает задачу из архива.
@@ -143,8 +167,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
         CANCELLED — возвращается в активные с тем же task_id.
         COMPLETED — создаётся новая задача в активных, оригинал
                     остаётся в архиве. Перед восстановлением проверяет,
-                    была ли задача уже восстановлена (в активных есть
-                    задача со spawner_task = task.task_id).
+                    была ли задача уже восстановлена.
         Для дедлайн-задач показывает DeadlineEditDialog.
         """
         # 1. Проверка повторного восстановления COMPLETED.
@@ -194,19 +217,16 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
             self.service.delete_forever(task.task_id)
             self._reload_tasks()
 
+    # ============================================================
+    # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
+    # ============================================================
+
     def closeEvent(self, event):
         """При закрытии архива — обновляем список задач в PlannerWindow.
 
         Родитель (PlannerWindow) не знает, что мы меняли активные задачи
         через restore_task. После закрытия архива просим родителя
         перерисовать список.
-
-        Вход: event — событие закрытия.
-        Выход: нет.
-        Роль: связь архив → планировщик без глобальных сигналов.
-              Проверка hasattr защищает от ситуации, когда родитель
-              не PlannerWindow (например, в будущем архив откроют
-              из другого окна).
         """
         parent = self.parent()
         if parent is not None and hasattr(parent, "_reload_tasks"):

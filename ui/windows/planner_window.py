@@ -10,13 +10,14 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from ui.factories.factories import WindowFactory, ButtonFactory, LabelFactory
+from ui.factories.factories import WindowFactory, ButtonFactory
 from ui.base.planner_base_window import _BasePlannerListWindow
 from ui.windows.planner_themes_dialog import PlannerThemesDialog
 from ui.windows.planner_task_dialogs import NewTaskDialog
 from utils.log_tools.decorators import log_button_action
 from utils.filter_utils import FieldDef
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
+from ui.styles import ColorCalculator, WindowStyle
 
 
 class PlannerWindow(_BasePlannerListWindow):
@@ -26,19 +27,26 @@ class PlannerWindow(_BasePlannerListWindow):
           открывает окно архива.
     """
 
-    TASK_TYPE_COLUMNS = {
-        "default": ["actions", "title", "checklist", "priority", "status", "date", "specifications"],
-    }
-
-    # Билдеры колонкой действий.
-    COLUMN_BUILDERS = {
-        **_BasePlannerListWindow.COLUMN_BUILDERS,
-        "actions": "_build_actions",
-        "checklist": "_build_checklist",
-    }
+    # ============================================================
+    # КОНСТАНТЫ
+    # ============================================================
 
     LOGGER_SOURCE = "PlannerWindow.planner_window"
     LOGGER_DOMAIN = "planner"
+
+    TASK_TYPE_COLUMNS = {
+        "default": ["actions", "title", "checklist", "priority", "theme", "status", "date", "specifications"],
+    }
+
+    # Билдеры колонок (расширяем базовые)
+    COLUMN_BUILDERS = {
+        **_BasePlannerListWindow.COLUMN_BUILDERS,
+        "actions": "_build_actions",
+    }
+
+    # ============================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # ============================================================
 
     def __init__(self, parent=None, planner_service=None,
                  archive_service=None, log_manager_v2=None):
@@ -51,137 +59,58 @@ class PlannerWindow(_BasePlannerListWindow):
         """
         if planner_service is None:
             raise ValueError("planner_service обязателен")
+
+        # Цвет от родителя
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (50, 50, 50))
+        bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r + 10,
+            g_fn=lambda g: g + 5,
+            b_fn=lambda b: b - 5,
+            alpha=0.95,
+        )
+
         self.service = planner_service
         self.archive_service = archive_service
         self._archive_window = None
 
         super().__init__(
-            parent, "Планировщик", bg_color=(70, 60, 50, 0.95),
+            parent, "Планировщик", bg_color=bg_color,
             log_manager_v2=log_manager_v2,
+            main_config=getattr(parent, "main_config", None),
         )
 
-        # Нижняя панель: «Новая задача» + «Архив» + растяжка.
-        bottom_layout = QHBoxLayout()
+        # ---------- ЭЛЕМЕНТЫ UI ----------
         self.new_task_btn = ButtonFactory.create_button(
             self, "Новая задача", bg_color=(90, 80, 70), padding="8px 16px",
         )
-        self.new_task_btn.clicked.connect(self._on_new_task)
-        bottom_layout.addWidget(self.new_task_btn)
-        bottom_layout.addStretch()
-
         self.btn_more = ButtonFactory.create_button(
             self, "Дополнительно", bg_color=(40, 40, 40), padding="8px 16px",
         )
-        self.btn_more.clicked.connect(self._on_open_themes_dialog)
-        bottom_layout.addWidget(self.btn_more)
-
         self.archive_btn = ButtonFactory.create_button(
             self, "Архив", bg_color=(40, 40, 40), padding="8px 16px",
         )
-        self.archive_btn.clicked.connect(self._on_open_archive)
+
+        # ---------- МАКЕТ ----------
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addWidget(self.new_task_btn)
+        bottom_layout.addStretch()
+        bottom_layout.addWidget(self.btn_more)
         bottom_layout.addWidget(self.archive_btn)
-
-
         self._main_layout.addLayout(bottom_layout)
+
+        # ---------- ПОДКЛЮЧЕНИЕ СИГНАЛОВ ----------
+        self.new_task_btn.clicked.connect(self._on_new_task)
+        self.btn_more.clicked.connect(self._on_open_themes_dialog)
+        self.archive_btn.clicked.connect(self._on_open_archive)
 
         # Первая загрузка задач.
         self._reload_tasks()
 
-    # ---------- Источник данных ----------
+    # ============================================================
+    # ОБРАБОТЧИКИ КНОПОК
+    # ============================================================
 
-    def _get_tasks(self):
-        """Возвращает активные задачи без экземпляров регулярных.
-
-        Экземпляры показываются только в мини-планировщике; в основном
-        списке их не должно быть.
-        """
-        return [t for t in self.service.get_tasks() if not t.is_recurring_instance()]
-
-    def _get_filter_field_defs(self):
-        """Категории фильтра для PlannerWindow.
-
-        Тип задачи и дата создания. Экземпляры регулярных задач уже
-        отброшены в _get_tasks, в фильтр они не попадают.
-        """
-        return [
-            FieldDef(
-                name="priority",
-                label="Тип задачи",
-                extractor=lambda t: t.priority.display_name,
-            ),
-            FieldDef(
-                name="created_date",
-                label="Дата создания",
-                extractor=lambda t: t.created_date or "Не указана",
-            ),
-        ]
-
-    # ---------- Билдер actions ----------
-
-    def _build_actions(self, task: PlannerTask) -> QWidget:
-        """Кнопки действий: для генератора ⏸/▶, иначе ✓.
-
-        Вход: task — PlannerTask.
-        Выход: QWidget с кнопками.
-        Роль: для регулярного генератора вместо ✓ — пауза/возобновление.
-        """
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        if task.is_generator():
-            # ⏸ для ACTIVE и WAITING (генератор работает),
-            # ▶ только для PAUSED (пользователь может возобновить).
-            symbol = "▶" if task.status == TaskStatus.PAUSED else "⏸"
-            pause_btn = ButtonFactory.create_button(
-                container, symbol, bg_color=(150, 130, 70, 0.85),
-                fixed_size=(26, 26), padding="0px", font_size=14,
-            )
-            pause_btn.clicked.connect(
-                lambda checked=False, t=task: self._on_recurring_pause(t)
-            )
-            layout.addWidget(pause_btn)
-        else:
-            layout.addWidget(ButtonFactory.create_complete_button(
-                container, lambda checked=False, t=task: self._on_task_done(t),
-            ))
-
-        layout.addWidget(ButtonFactory.create_edit_button(
-            container, lambda checked=False, t=task: self._on_edit_task(t),
-        ))
-        layout.addWidget(ButtonFactory.create_delete_button(
-            container, lambda checked=False, t=task: self._on_task_delete(t),
-        ))
-        return container
-
-    def _build_checklist(self, task: PlannerTask):
-        """Плашка чек-листа — «Чек-лист» или «Без чек-листа».
-
-        Роль: кнопка при наличии флага, лейбл при отсутствии.
-        """
-        if not task.checklist_required:
-            return LabelFactory.create_label(
-                self,
-                "Без чек-листа",
-                bg_color=self.NEUTRAL_COLOR,
-                font_weight="bold",
-                min_size=(100, 0),
-            )
-        btn = ButtonFactory.create_button(
-            self,
-            "Чек-лист",
-            bg_color=self._accent_bg,
-            padding="4px 8px",
-            border_radius=4,
-            min_size=(100, 0),
-        )
-        btn.clicked.connect(
-            lambda checked=False, t=task: self._on_open_checklist(t)
-        )
-        return btn
-
-    # ---------- Обработчики ----------
     @log_button_action("btn_more", "Ошибка при открытии окна тем: {e}")
     def _on_open_themes_dialog(self):
         """Открывает окно настройки тем задач."""
@@ -224,15 +153,7 @@ class PlannerWindow(_BasePlannerListWindow):
             self._reload_tasks()
 
     def _on_open_archive(self):
-        """Открывает окно архива модально относительно PlannerWindow.
-
-        Архив перекрывает планировщик полностью — cover_parent=True,
-        плюс сдвиг на 10 пикселей влево и вверх, чтобы точно закрыть
-        рамку PlannerWindow.
-
-        Ссылку на архив сохраняем — чтобы в resizeEvent тянуть её
-        за PlannerWindow.
-        """
+        """Открывает окно архива модально относительно PlannerWindow."""
         from ui.windows.planner_archive_window import PlannerArchiveWindow
         self._archive_window = PlannerArchiveWindow(
             self,
@@ -243,50 +164,18 @@ class PlannerWindow(_BasePlannerListWindow):
         WindowFactory.show_child_window(self, self._archive_window, cover_parent=True)
         self._sync_archive_geometry()
 
-    def _sync_archive_geometry(self):
-        """Синхронизирует геометрию архива с PlannerWindow.
-
-        Роль: архив перекрывает PlannerWindow со сдвигом −10 по X и Y.
-              Вызывается при открытии и при каждом resize PlannerWindow.
-        """
-        if self._archive_window is None or not self._archive_window.isVisible():
-            return
-        geo = self.frameGeometry()
-        self._archive_window.setGeometry(
-            geo.x() - 10, geo.y() - 10, geo.width(), geo.height()
-        )
-
     def _on_task_done(self, task: PlannerTask) -> None:
-        """Кнопка ✓ — задача завершается и уходит в архив.
-
-        status = COMPLETED, completed_date = сегодня.
-        """
+        """Кнопка ✓ — задача завершается и уходит в архив."""
         self.service.archive_task(task.task_id, TaskStatus.COMPLETED)
         self._reload_tasks()
 
     def _on_task_delete(self, task: PlannerTask) -> None:
-        """Кнопка ✕ — задача отменяется и уходит в архив.
-
-        status = CANCELLED, completed_date = сегодня.
-        """
+        """Кнопка ✕ — задача отменяется и уходит в архив."""
         self.service.archive_task(task.task_id, TaskStatus.CANCELLED)
         self._reload_tasks()
 
     def _on_recurring_pause(self, task: PlannerTask) -> None:
-        """Переключает паузу/возобновление регулярного генератора.
-
-        Вход: task — PlannerTask-генератор.
-
-        Роль:
-            - Из ACTIVE или WAITING → PAUSED (пользователь остановил).
-            - Из PAUSED → WAITING (возобновление). При этом
-              PlannerService.update_status сам пересчитает
-              next_generation_date с «догоном» пропущенных дат.
-
-        В ACTIVE генератор вернётся автоматически, когда
-        PlannerRecurrenceService при следующем тике увидит у него
-        живой экземпляр. Явно этого делать не нужно.
-        """
+        """Переключает паузу/возобновление регулярного генератора."""
         if task.status == TaskStatus.PAUSED:
             new_status = TaskStatus.WAITING
         else:
@@ -307,7 +196,7 @@ class PlannerWindow(_BasePlannerListWindow):
                 priority=result["priority"],
                 deadline_datetime=result["deadline_datetime"],
                 recurrence_data=result["recurrence_data"],
-                event_date=result["event_date"],   # NEW
+                event_date=result["event_date"],
             )
             if task.checklist_required != result["checklist_required"]:
                 self.service.set_checklist_required(
@@ -315,39 +204,76 @@ class PlannerWindow(_BasePlannerListWindow):
                 )
             self._reload_tasks()
 
-    def _on_open_checklist(self, task: PlannerTask) -> None:
-        """Открывает модальный диалог чек-листа.
+    # ============================================================
+    # ПРИВАТНЫЕ МЕТОДЫ: БИЛДЕРЫ И ИСТОЧНИКИ
+    # ============================================================
 
-        Роль: по ОК сохраняет содержимое через update_checklist.
-              По Отмена / закрытию — ничего.
-        """
-        from ui.windows.planner_checklist_dialogs import ChecklistDialog
+    def _get_tasks(self):
+        """Возвращает активные задачи без экземпляров регулярных."""
+        return [t for t in self.service.get_tasks() if not t.is_recurring_instance()]
 
-        dialog = ChecklistDialog(
-            self,
-            task=task,
-            bg_color=self.bg_color,
-            log_manager_v2=self.log_manager_v2,
+    def _get_filter_field_defs(self):
+        """Категории фильтра для PlannerWindow."""
+        return [
+            FieldDef(
+                name="priority",
+                label="Тип задачи",
+                extractor=lambda t: t.priority.display_name,
+            ),
+            FieldDef(
+                name="created_date",
+                label="Дата создания",
+                extractor=lambda t: t.created_date or "Не указана",
+            ),
+        ]
+
+    def _build_actions(self, task: PlannerTask) -> QWidget:
+        """Кнопки действий: для генератора ⏸/▶, иначе ✓."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        if task.is_generator():
+            symbol = "▶" if task.status == TaskStatus.PAUSED else "⏸"
+            pause_btn = ButtonFactory.create_button(
+                container, symbol, bg_color=(150, 130, 70, 0.85),
+                fixed_size=(26, 26), padding="0px", font_size=14,
+            )
+            pause_btn.clicked.connect(
+                lambda checked=False, t=task: self._on_recurring_pause(t)
+            )
+            layout.addWidget(pause_btn)
+        else:
+            layout.addWidget(ButtonFactory.create_complete_button(
+                container, lambda checked=False, t=task: self._on_task_done(t),
+            ))
+
+        layout.addWidget(ButtonFactory.create_edit_button(
+            container, lambda checked=False, t=task: self._on_edit_task(t),
+        ))
+        layout.addWidget(ButtonFactory.create_delete_button(
+            container, lambda checked=False, t=task: self._on_task_delete(t),
+        ))
+        return container
+
+    # ============================================================
+    # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
+    # ============================================================
+
+    def _sync_archive_geometry(self):
+        """Синхронизирует геометрию архива с PlannerWindow."""
+        if self._archive_window is None or not self._archive_window.isVisible():
+            return
+        geo = self.frameGeometry()
+        self._archive_window.setGeometry(
+            geo.x() - 10, geo.y() - 10, geo.width(), geo.height()
         )
-        dialog.setWindowModality(Qt.WindowModal)
-        if dialog.exec() == QDialog.Accepted:
-            result = dialog.get_result()
-            if result is not None:
-                self.service.update_checklist(task.task_id, result)
-                self._reload_tasks()
 
     def resizeEvent(self, event):
-        """При изменении размера PlannerWindow — тянем за собой архив.
-
-        Роль: MainWindow.resizeEvent меняет размер PlannerWindow,
-              но не знает про открытое окно архива (оно — child
-              PlannerWindow, а не MainWindow). Синхронизируем
-              геометрию архива вручную.
-        """
+        """При изменении размера PlannerWindow — тянем за собой архив."""
         super().resizeEvent(event)
         self._sync_archive_geometry()
-
-    # ---------- Закрытие ----------
 
     def closeEvent(self, event):
         """Чистит active_child у MainWindow, затем — базовая логика."""

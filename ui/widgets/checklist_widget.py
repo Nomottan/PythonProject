@@ -95,26 +95,21 @@ class ChecklistWidget(QWidget):
         )
         scroll, content_widget, self._rows_layout = (
             ListWidgetFactory.create_scroll_container(
-                self, spacing=2, bg_color=self.bg_color, rounded=False,
+                self, spacing=2, bg_color=self._element_bg, rounded=False,
             )
         )
         self._content_widget = content_widget
         solid_bg = self._element_bg
         content_widget.setAttribute(Qt.WA_StyledBackground, True)
         content_widget.bg_color = solid_bg
+
+        # Красим только внутренний контейнер.
+        # Стили QScrollArea и скроллбара заданы фабрикой ListWidgetFactory.
         content_widget.setStyleSheet(
             f"background-color: {ColorCalculator.to_str(solid_bg)};"
             f" border-radius: 6px;"
         )
-        scroll.viewport().setStyleSheet(
-            f"background-color: {ColorCalculator.to_str(solid_bg)};"
-            f" border-radius: 6px;"
-        )
-        scroll.setStyleSheet(
-            f"QScrollArea {{ background-color: "
-            f"{ColorCalculator.to_str(solid_bg)}; "
-            f"border: none; border-radius: 6px; }}"
-        )
+
         scroll.setMaximumHeight(250)
         scroll.setMinimumHeight(80)
         layout.addWidget(scroll)
@@ -123,9 +118,10 @@ class ChecklistWidget(QWidget):
             self, "+ Добавить", self._element_bg, padding="6px 12px",
         )
         self._add_btn.clicked.connect(self._on_add)
+
+        self._add_btn.setVisible(self._mode == "edit")
         layout.addWidget(self._add_btn, alignment=Qt.AlignHCenter)
         self._rebuild()
-
     # ---------- Публичный API ----------
 
     def get_items(self) -> list:
@@ -223,37 +219,29 @@ class ChecklistWidget(QWidget):
             down_btn.setEnabled(False)
         arrows_layout.addWidget(down_btn)
 
-
-
         # --- Чекбокс ---
-        # clicked(bool) — эмитится только по клику пользователя,
-        # не при setChecked. Защищает от рекурсии в _rebuild.
         cb = InputWidgetFactory.create_checkbox(
             row, text="", checked=item.checked,
             bg_color=self._element_bg,
         )
-        cb.clicked.connect(
-            lambda checked, i=item: self._on_toggle(i, checked)
-        )
+        if self._mode == "view":
+            # В архиве чекбокс только для вида — игнорируем клики
+            cb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        else:
+            cb.clicked.connect(
+                lambda checked, i=item: self._on_toggle(i, checked)
+            )
         row_layout.addWidget(cb)
 
-        # --- Short-лейбл ---
-        if self._mode == "view":
-            lbl = LabelFactory.create_label(
-                row, item.short,
-                bg_color=(0, 0, 0, 0),
-                alignment=Qt.AlignLeft | Qt.AlignVCenter,
-                word_wrap=True,
-                clickable=True,
-                on_click=lambda i=item: self._on_show_detail(i),
-            )
-        else:
-            lbl = LabelFactory.create_label(
-                row, item.short,
-                bg_color=(0, 0, 0, 0),
-                alignment=Qt.AlignLeft | Qt.AlignVCenter,
-                word_wrap=True,
-            )
+        # --- Short-лейбл (всегда кликабельный) ---
+        lbl = LabelFactory.create_label(
+            row, item.short,
+            bg_color=(0, 0, 0, 0),
+            alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            word_wrap=True,
+            clickable=True,
+            on_click=lambda i=item: self._on_show_detail(i),
+        )
         row_layout.addWidget(lbl, 1)
 
         # --- ✏ — только в edit ---
@@ -263,6 +251,8 @@ class ChecklistWidget(QWidget):
                 callback=lambda checked=False, i=item: self._on_edit(i),
             )
             row_layout.addWidget(edit_btn)
+
+        arrows.setVisible(self._mode == "edit")
         row_layout.addWidget(arrows)
         row_layout.addStretch()
         return row
@@ -366,14 +356,11 @@ class ChecklistWidget(QWidget):
             self.changed.emit(self.get_items(), "edit")
 
     def _on_show_detail(self, item: ChecklistItem) -> None:
-        """Только в view и только при непустом detail."""
-        if self._mode != "view":
-            return
-        if not item.detail.strip():
-            return
+        """Показывает детали при клике на short (в любом режиме)."""
+        text = item.detail.strip() or "Подробное описание отсутствует."
         NotificationDialog.notify(
-            self,
-            item.detail,
+            self.window(),
+            text,
             title_text=item.short,
             bg_color=self.bg_color,
         )

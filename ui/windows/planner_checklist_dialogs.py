@@ -201,7 +201,7 @@ class ChecklistDialog(BaseEditDialog):
     LOGGER_SOURCE = "ChecklistDialog.planner_checklist_dialogs"
     LOGGER_DOMAIN = "planner"
 
-    def __init__(self, parent, task, bg_color=None, log_manager_v2=None):
+    def __init__(self, parent, task, bg_color=None, log_manager_v2=None, mode="edit"):
         """Конструктор.
 
         Вход:
@@ -211,6 +211,7 @@ class ChecklistDialog(BaseEditDialog):
             log_manager_v2 — LogManagerV2 или None.
         """
 
+        self._mode = mode
         self._task = task
         from ui.styles import WindowStyle, ColorCalculator
         parent_bg = WindowStyle.resolve_parent_bg(
@@ -246,12 +247,14 @@ class ChecklistDialog(BaseEditDialog):
         self._widget = ChecklistWidget(
             self,
             items=list(self._task.checklist),
-            mode="edit",
+            mode=self._mode,
             bg_color=self.bg_color,
             task_id=self._task.task_id,
         )
         layout.addWidget(self._widget)
 
     def _collect_result(self):
-        """Список ChecklistItem из виджета."""
+        """Собирает результат диалога (список ChecklistItem)."""
+        if self._mode == "view":
+            return None
         return self._widget.get_items()

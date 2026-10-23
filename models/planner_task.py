@@ -224,7 +224,8 @@ class PlannerTask:
                  next_generation_date: Optional[str] = None,
                  event_date: Optional[str] = None,
                  checklist_required: bool = False,
-                 checklist: Optional[list] = None):
+                 checklist: Optional[list] = None,
+                 theme: str = "black"):
         """Конструктор.
 
         Вход:
@@ -236,6 +237,7 @@ class PlannerTask:
             created_date — по умолчанию "".
             completed_date — по умолчанию None.
             spawner_task — task_id архивной задачи-родителя. По умолчанию None.
+            theme: str — ключ темы задачи (по умолчанию "black").
 
         Роль: сохраняет поля без валидации. Ответственность за корректность
               переданных значений — на стороне сервиса.
@@ -260,12 +262,13 @@ class PlannerTask:
         self.event_date = event_date
         self.checklist_required = checklist_required
         self.checklist = checklist if checklist is not None else []
+        self.theme = theme
 
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
 
         Выход: dict с полями task_id, title, description, priority (число),
-               status (строка), created_date, completed_date.
+               status (строка), created_date, completed_date, theme.
 
         Роль: Enum-значения разворачиваются в .value; даты — строки как есть.
         """
@@ -290,6 +293,7 @@ class PlannerTask:
             "event_date": self.event_date,
             "checklist_required": self.checklist_required,
             "checklist": [item.to_dict() for item in self.checklist],
+            "theme": self.theme,
         }
 
     @classmethod
@@ -324,7 +328,11 @@ class PlannerTask:
             task_type = TaskType(data.get("task_type", "regular"))
         except (ValueError, KeyError):
             task_type = TaskType.REGULAR
-
+        theme_raw = data.get("theme", "black")
+        try:
+            theme_value = ThemeKey(theme_raw).value
+        except (ValueError, TypeError):
+            theme_value = "black"
             # task_id и title обязательны — KeyError уйдёт наверх.
         return cls(
             task_id=data["task_id"],
@@ -346,6 +354,7 @@ class PlannerTask:
             next_generation_date=data.get("next_generation_date"),
             event_date=data.get("event_date"),
             checklist_required=data.get("checklist_required", False),
+            theme=theme_value,
             checklist=[
                 item
                 for item in (
