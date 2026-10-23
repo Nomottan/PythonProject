@@ -125,7 +125,7 @@ class PlannerWindow(_BasePlannerListWindow):
 
     def _on_new_task(self):
         """Открывает диалог, создаёт задачу, перерисовывает список."""
-        dialog = NewTaskDialog(self, self.service)
+        dialog = NewTaskDialog(self, self.service, main_config=self.main_config)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
             result = dialog.get_result()
@@ -149,6 +149,7 @@ class PlannerWindow(_BasePlannerListWindow):
                 event_date=result["event_date"],
                 checklist_required=result["checklist_required"],
                 checklist=[],
+                theme=result["theme"],
             )
             self._reload_tasks()
 
@@ -185,7 +186,7 @@ class PlannerWindow(_BasePlannerListWindow):
 
     def _on_edit_task(self, task: PlannerTask) -> None:
         """Открывает диалог редактирования задачи и сохраняет результат."""
-        dialog = NewTaskDialog(self, self.service, task=task)
+        dialog = NewTaskDialog(self, self.service, task=task, main_config=self.main_config)
         dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
             result = dialog.get_result()
@@ -197,6 +198,7 @@ class PlannerWindow(_BasePlannerListWindow):
                 deadline_datetime=result["deadline_datetime"],
                 recurrence_data=result["recurrence_data"],
                 event_date=result["event_date"],
+                theme=result["theme"],
             )
             if task.checklist_required != result["checklist_required"]:
                 self.service.set_checklist_required(

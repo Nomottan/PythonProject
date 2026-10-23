@@ -6,7 +6,7 @@
 сохранение diff в MainConfig по ключу "planner_themes".
 """
 
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, Signal
 from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from ui.base.base_edit_dialog import BaseEditDialog
@@ -16,7 +16,7 @@ from ui.factories.factories import (
 )
 from ui.styles import ColorCalculator, WindowStyle
 from models.planner_task import ThemeKey
-
+from ui.base.base_planner_dialogs import BaseThemePickerDialog
 
 class PlannerThemesDialog(BaseEditDialog):
     """Диалог настройки тем задач."""
@@ -222,3 +222,55 @@ class PlannerThemesDialog(BaseEditDialog):
                 f"Сохранение: diff={len(diff)} переименований"
             )
         return None
+
+
+class PlannerThemePickerDialog(BaseThemePickerDialog):
+    """Диалог выбора темы из списка 8 фиксированных цветов."""
+
+    LOGGER_SOURCE = "PlannerThemePickerDialog.planner_themes_dialog"
+    LOGGER_DOMAIN = "planner"
+
+    theme_key_selected = Signal(str)
+
+    def __init__(self, parent, current_theme: ThemeKey, main_config,
+                 log_manager_v2=None):
+        """Конструктор.
+
+        Вход:
+            parent — родитель.
+            current_theme — текущая выбранная тема (для подсветки).
+            main_config — MainConfig для получения имён.
+            log_manager_v2 — логгер.
+        """
+        raw = main_config.get("planner_themes", {}) if main_config else {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        # Заполняем список кортежей (текст, цвет, выбран_ли)
+        items = [
+            (ThemeKey.resolve_effective_name(key, raw), key.color, key == current_theme)
+            for key in ThemeKey
+        ]
+
+        # Маппинг для обратного поиска
+        self._name_to_key = {
+            ThemeKey.resolve_effective_name(key, raw): key
+            for key in ThemeKey
+        }
+
+        super().__init__(
+            parent, items, title="Выбор темы", log_manager_v2=log_manager_v2,
+        )
+
+        self.theme_selected.connect(self._on_theme_selected)
+
+        if self.logger:
+            self.logger.debug(
+                f"PlannerThemePickerDialog: открыт для {current_theme.value}"
+            )
+
+    def _on_theme_selected(self, text: str) -> None:
+        """Обрабатывает клик по теме и эмитит ключ."""
+        key = self._name_to_key.get(text)
+        if key is not None:
+            self.theme_key_selected.emit(key.value)

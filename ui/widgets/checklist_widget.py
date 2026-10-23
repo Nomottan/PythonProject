@@ -119,8 +119,9 @@ class ChecklistWidget(QWidget):
         )
         self._add_btn.clicked.connect(self._on_add)
 
-        self._add_btn.setVisible(self._mode == "edit")
+        self._add_btn.setVisible(self._mode in ("edit", "work"))
         layout.addWidget(self._add_btn, alignment=Qt.AlignHCenter)
+
         self._rebuild()
     # ---------- Публичный API ----------
 
@@ -225,7 +226,7 @@ class ChecklistWidget(QWidget):
             bg_color=self._element_bg,
         )
         if self._mode == "view":
-            # В архиве чекбокс только для вида — игнорируем клики
+            # В режиме view чекбокс только для вида — игнорируем клики
             cb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         else:
             cb.clicked.connect(
@@ -233,26 +234,24 @@ class ChecklistWidget(QWidget):
             )
         row_layout.addWidget(cb)
 
-        # --- Short-лейбл (всегда кликабельный) ---
+        # --- Short-лейбл (в edit клик открывает редактор, иначе — просмотр) ---
+        if self._mode == "edit":
+            on_click = lambda i=item: self._on_edit(i)
+        else:
+            on_click = lambda i=item: self._on_show_detail(i)
+
         lbl = LabelFactory.create_label(
             row, item.short,
             bg_color=(0, 0, 0, 0),
             alignment=Qt.AlignLeft | Qt.AlignVCenter,
             word_wrap=True,
             clickable=True,
-            on_click=lambda i=item: self._on_show_detail(i),
+            on_click=on_click,
         )
         row_layout.addWidget(lbl, 1)
 
-        # --- ✏ — только в edit ---
-        if self._mode == "edit":
-            edit_btn = ButtonFactory.create_edit_button(
-                row,
-                callback=lambda checked=False, i=item: self._on_edit(i),
-            )
-            row_layout.addWidget(edit_btn)
-
-        arrows.setVisible(self._mode == "edit")
+        # Стрелки видны в edit и view, скрыты в work
+        arrows.setVisible(self._mode in ("edit", "work"))
         row_layout.addWidget(arrows)
         row_layout.addStretch()
         return row

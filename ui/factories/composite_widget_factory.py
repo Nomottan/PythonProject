@@ -102,7 +102,7 @@ class CompositeWidgetFactory(BaseWidgetFactory):
     @staticmethod
     def create_recurrence_fields(parent, initial_data=None,
                                  field_bg=None, field_border=None,
-                                 button_border=None):
+                                 button_border=None, label_bg=None):
         """Создаёт виджет полей правила повторения.
 
         Вход:
@@ -110,6 +110,7 @@ class CompositeWidgetFactory(BaseWidgetFactory):
             initial_data — dict для предзаполнения.
             field_bg, field_border — цвета полей. None — дефолтные.
             button_border — рамка кнопки «Выбрать числа».
+            label_bg — цвет фона лейблов (None — прозрачный).
 
         Выход: PlannerRecurrenceFieldsWidget.
 
@@ -126,6 +127,7 @@ class CompositeWidgetFactory(BaseWidgetFactory):
             field_bg=field_bg,
             field_border=field_border,
             button_border=button_border,
+            label_bg=label_bg,
         )
 
     @staticmethod

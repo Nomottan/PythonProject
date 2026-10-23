@@ -281,7 +281,9 @@ class LayoutFactory:
         layout.setAlignment(alignment)
 
         for label, field in rows:
-            if isinstance(label, str):
+            if label is None:
+                layout.addRow(field)
+            elif isinstance(label, str):
                 label_widget = QLabel(label)
                 layout.addRow(label_widget, field)
             else:

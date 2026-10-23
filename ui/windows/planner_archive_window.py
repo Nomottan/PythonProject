@@ -38,8 +38,8 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
     LOGGER_SOURCE = "PlannerArchiveWindow.planner_archive_window"
     LOGGER_DOMAIN = "planner"
 
-    # В архиве чек-лист можно только просматривать
-    CHECKLIST_EDITABLE = False
+    # В архиве чек-лист и темы можно только просматривать
+    EDITABLE = False
 
     # Колонки архива: действия (↺, ✕), название, чек-лист, приоритет, тема, статус, дата.
     TASK_TYPE_COLUMNS = {
@@ -170,8 +170,8 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
                     была ли задача уже восстановлена.
         Для дедлайн-задач показывает DeadlineEditDialog.
         """
-        # 1. Проверка повторного восстановления COMPLETED.
-        if task.status == TaskStatus.COMPLETED:
+        # 1. Проверка повторного восстановления (COMPLETED или CANCELLED).
+        if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
             spawned = self.service.get_spawned_tasks(task.task_id)
             if spawned:
                 reply = MessageDialog.question(

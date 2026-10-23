@@ -216,7 +216,7 @@ class PlannerTaskMainCommentary(QDialog):
             self._checklist_widget = ChecklistWidget(
                 self,
                 items=list(task.checklist),
-                mode="view",
+                mode="work",
                 bg_color=bg_color,
                 task_id=task.task_id,
             )

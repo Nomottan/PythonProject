@@ -85,7 +85,7 @@ class _BasePlannerListWindow(QMainWindow):
         "date": "_build_date",
         "specifications": "_build_specifications",
     }
-    CHECKLIST_EDITABLE = True
+    EDITABLE = True
 
     # ============================================================
     # ИНИЦИАЛИЗАЦИЯ
@@ -110,6 +110,7 @@ class _BasePlannerListWindow(QMainWindow):
         self.service_window = self
         self.filter_panel = None
         self._empty_label = None
+        self._theme_picker = None
 
         # Логгер V2
         self.log_manager_v2 = log_manager_v2
@@ -329,7 +330,7 @@ class _BasePlannerListWindow(QMainWindow):
         """Открывает модальный диалог чек-листа."""
         from ui.windows.planner_checklist_dialogs import ChecklistDialog
 
-        mode = "edit" if self.CHECKLIST_EDITABLE else "view"
+        mode = "edit" if self.EDITABLE else "view"
         dialog = ChecklistDialog(
             self,
             task=task,
@@ -338,7 +339,7 @@ class _BasePlannerListWindow(QMainWindow):
             mode=mode,
         )
         dialog.setWindowModality(Qt.WindowModal)
-        if dialog.exec() == QDialog.Accepted and self.CHECKLIST_EDITABLE:
+        if dialog.exec() == QDialog.Accepted and self.EDITABLE:
             result = dialog.get_result()
             if result is not None:
                 self.service.update_checklist(task.task_id, result)
@@ -359,6 +360,17 @@ class _BasePlannerListWindow(QMainWindow):
             raw_themes = {}
 
         name = ThemeKey.resolve_effective_name(theme_key, raw_themes)
+
+        if self.EDITABLE:
+            btn = ButtonFactory.create_button(
+                self, text=name, bg_color=theme_key.color,
+                fixed_size=(120, 30), padding="4px 8px", border_radius=4,
+            )
+            btn.clicked.connect(
+                lambda checked=False, t=task: self._on_theme_clicked(t)
+            )
+            return btn
+
         lbl = LabelFactory.create_label(
             self, text=name, bg_color=theme_key.color, font_weight="bold",
         )
@@ -373,6 +385,40 @@ class _BasePlannerListWindow(QMainWindow):
             self, text=priority, bg_color=color,
             font_weight="bold", min_size=(100, 0),
         )
+
+    def _on_theme_clicked(self, task) -> None:
+        """Открывает пикер темы при клике на плашку."""
+        if self._theme_picker is not None:
+            try:
+                self._theme_picker.close()
+            except RuntimeError:
+                pass
+
+        from ui.windows.planner_themes_dialog import PlannerThemePickerDialog
+        try:
+            current_theme = ThemeKey(task.theme)
+        except (ValueError, TypeError):
+            current_theme = ThemeKey.BLACK
+
+        self._theme_picker = PlannerThemePickerDialog(
+            self, current_theme, self.main_config, self.log_manager_v2,
+        )
+        self._theme_picker.destroyed.connect(
+            lambda: setattr(self, "_theme_picker", None)
+        )
+        self._theme_picker.theme_key_selected.connect(
+            lambda val: self._save_theme(task.task_id, val)
+        )
+        self._theme_picker.show()
+
+    def _save_theme(self, task_id, theme_val) -> None:
+        """Сохраняет новую тему и перерисовывает список."""
+        if self.logger:
+            self.logger.debug(
+                f"Планировщик: смена темы task_id={task_id}, theme={theme_val!r}"
+            )
+        self.service.set_theme(task_id, theme_val)
+        self._reload_tasks()
 
     def _build_status(self, task):
         """Статус задачи — цветной лейбл."""

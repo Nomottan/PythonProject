@@ -15,6 +15,7 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory,
 )
 from ui.factories.composite_widget_factory import CompositeWidgetFactory
+from ui.styles import ColorCalculator
 
 class PlannerRecurrenceFieldsWidget(QWidget):
     """Поля правила повторения: «Каждые N дней» / «Дни недели» / «Числа».
@@ -32,13 +33,12 @@ class PlannerRecurrenceFieldsWidget(QWidget):
 
     # Дефолтные цвета полей (для NewTaskDialog).
     DEFAULT_FIELD_BG = (85, 60, 42, 0.9)
-    DEFAULT_FIELD_BORDER = "1px solid #6b4a33"
-    DEFAULT_BUTTON_BORDER = "1px solid #a08060"
 
     def __init__(self, parent=None, initial_data: Optional[dict] = None,
                  field_bg: Optional[tuple] = None,
                  field_border: Optional[str] = None,
-                 button_border: Optional[str] = None):
+                 button_border: Optional[str] = None,
+                 label_bg: Optional[tuple] = None):
         """Конструктор.
 
         Вход:
@@ -58,8 +58,9 @@ class PlannerRecurrenceFieldsWidget(QWidget):
 
         # Сохраняем цвета до _build_ui.
         self._field_bg = field_bg or self.DEFAULT_FIELD_BG
-        self._field_border = field_border or self.DEFAULT_FIELD_BORDER
-        self._button_border = button_border or self.DEFAULT_BUTTON_BORDER
+        self._field_border = field_border or f"1px solid {ColorCalculator.to_str((107, 74, 51))}"
+        self._button_border = button_border or f"1px solid {ColorCalculator.to_str((160, 128, 96))}"
+        self._label_bg = label_bg if label_bg is not None else (0, 0, 0, 0)
 
         self._build_ui()
         if initial_data:
@@ -157,7 +158,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
             # Сначала label с днём — потом чекбокс без текста.
             day_lbl = LabelFactory.create_label(
                 cell, day_name,
-                bg_color=(0, 0, 0, 0), text_color=None,
+                bg_color=self._label_bg, text_color=None,
                 font_size=11, padding="0px",
             )
             cell_l.addWidget(day_lbl)
@@ -197,7 +198,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
 
         self._monthdays_label = LabelFactory.create_label(
             self._monthdays_widget, "",
-            bg_color=(0, 0, 0, 0), text_color=None, font_size=11,
+            bg_color=self._label_bg, text_color=None, font_size=11,
         )
         md_l.addWidget(self._monthdays_label)
         md_l.addStretch()
@@ -212,7 +213,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
     def _label(self, text: str):
         """Быстрый хелпер для лейблов полей."""
         return LabelFactory.create_label(
-            self, text, bg_color=(0, 0, 0, 0),
+            self, text, bg_color=self._label_bg,
             text_color=None, font_size=11,
         )
 

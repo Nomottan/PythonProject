@@ -58,7 +58,8 @@ class PlannerService(QObject):
                     recurrence_data: Optional[dict] = None,
                     event_date: Optional[str] = None,
                     checklist_required: bool = False,
-                    checklist: Optional[list] = None) -> PlannerTask:
+                    checklist: Optional[list] = None,
+                    theme: str = "black") -> PlannerTask:
         """Создаёт задачу, генерирует task_id, сохраняет.
 
         Вход:
@@ -116,6 +117,7 @@ class PlannerService(QObject):
             event_date=event_date_val,
             checklist_required=checklist_required,
             checklist=list(checklist) if checklist else [],
+            theme=theme,
         )
         self._storage.add(task)
         self.tasks_changed.emit()
@@ -170,6 +172,26 @@ class PlannerService(QObject):
         self._storage.save()
         self.tasks_changed.emit()
         return True
+
+    def set_theme(self, task_id: int, theme_val: str) -> bool:
+        """Устанавливает тему задачи.
+
+        Вход:
+            task_id — идентификатор задачи.
+            theme_val — строковый ключ темы (например, "blue").
+
+        Выход: True — обновлено; False — не найдена.
+
+        Роль: вызывается из PlannerWindow при выборе в пикере.
+              Сохраняет и эмитит сигнал для перерисовки.
+        """
+        for task in self._storage.get_all():
+            if task.task_id == task_id:
+                task.theme = theme_val
+                self._storage.save()
+                self.tasks_changed.emit()
+                return True
+        return False
 
     def archive_task(self, task_id: int, final_status: TaskStatus) -> bool:
         """Архивирует задачу: удаляет из активных, добавляет в архив.
@@ -324,7 +346,8 @@ class PlannerService(QObject):
                     priority: Optional[TaskPriority] = None,
                     deadline_datetime: Optional[str] = None,
                     recurrence_data: Optional[dict] = None,
-                    event_date: Optional[str] = None) -> bool:
+                    event_date: Optional[str] = None,
+                    theme: Optional[str] = None) -> bool:
         """Точечно обновляет поля задачи, не трогая status/completed_date."""
         if not title or not title.strip():
             raise ValueError("Название задачи не может быть пустым")
@@ -382,9 +405,14 @@ class PlannerService(QObject):
             elif event_date:
                 target.event_date = event_date
 
+
         elif deadline_datetime:
+
             # Приоритет не меняется, но дату обновили явно.
             target.deadline_datetime = deadline_datetime
+
+        if theme is not None:
+            target.theme = theme
 
         self._storage.save()
         return True

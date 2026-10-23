@@ -225,6 +225,8 @@ class ChecklistDialog(BaseEditDialog):
             alpha=0.95,
         )
 
+        is_view = (self._mode == "view")
+
         super().__init__(
             parent=parent,
             title=f"Чек-лист: {task.title}",
@@ -232,9 +234,9 @@ class ChecklistDialog(BaseEditDialog):
 
             width=225, height=250,
             close_button=False,
-            ok_cancel=True,
+            ok_cancel=not is_view,
             draggable=True,
-            close_on_click_outside=False,
+            close_on_click_outside=is_view,
             modal=True,
             center=True,
             log_manager_v2=log_manager_v2,

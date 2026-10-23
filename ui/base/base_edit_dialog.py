@@ -13,7 +13,8 @@
     BrandDetailWindow, AveragePriceInputDialog.
 """
 
-from PySide6.QtWidgets import QDialog
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QDialog
 
 from ui.base.dialog_setup_mixin import DialogSetupMixin
 
@@ -70,6 +71,7 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
         """
         super().__init__(parent)
         self._result = None
+        self._locked_pos = None
 
         self.log_manager_v2 = log_manager_v2
         self.logger = None
@@ -154,3 +156,25 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
               переопределяют.
         """
         return True
+
+    def showEvent(self, event):
+        """Запоминает изначальную позицию при показе окна."""
+        super().showEvent(event)
+        if self._locked_pos is None:
+            self._locked_pos = self.pos()
+
+    def moveEvent(self, event):
+        """Блокирует системное смещение окна (например, при клике на QComboBox).
+
+        Если пользователь тащит окно мышкой — разрешаем движение.
+        Если кнопка мыши не зажата (системный сдвиг) — возвращаем на место.
+        """
+        if self._locked_pos is not None and self.pos() != self._locked_pos:
+            if QApplication.mouseButtons() == Qt.NoButton:
+                # Системный сдвиг (глюк при открытии списка) — откатываем
+                self.move(self._locked_pos)
+                return
+            else:
+                # Пользователь двигает окно сам — запоминаем новую позицию
+                self._locked_pos = self.pos()
+        super().moveEvent(event)

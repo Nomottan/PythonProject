@@ -99,8 +99,15 @@ class PlannerArchiveService:
             task_id — идентификатор в архиве.
             deadline_datetime — новая дата дедлайна (для дедлайн-задач
                                 из DeadlineEditDialog). Может быть None.
+            recurrence_data — новое правило повторения. Может быть None.
 
         Выход: PlannerTask или None.
+
+        Роль:
+            Всегда создаёт копию в активных. Оригинал остаётся в архиве.
+            Для CANCELLED и fallback — копия с новым task_id,
+            spawner_task=task_id, status=ACTIVE, completed_date=None,
+            theme=target.theme, checklist со снятыми галками.
         """
         # Ищем задачу в архиве.
         target = None
@@ -111,68 +118,48 @@ class PlannerArchiveService:
         if target is None:
             return None
 
-        if target.status == TaskStatus.CANCELLED:
-            target.status = TaskStatus.ACTIVE
-            target.completed_date = None
-            if deadline_datetime:
-                target.deadline_datetime = deadline_datetime
-            # NEW: обновляем правило повторения, если пришло.
-            if recurrence_data:
-                self._apply_recurrence(target, recurrence_data)
-            self._archive_storage.remove(task_id)
-            self._active_storage.add(target)
-            self._emit_tasks_changed()
-            return target
+        # Создаём копию для активных задач (для всех статусов)
+        new_id = TaskIdGenerator.generate(self._active_storage)
+        new_task = PlannerTask(
+            task_id=new_id,
+            title=target.title,
+            description=target.description,
+            priority=target.priority,
+            status=TaskStatus.ACTIVE,
+            created_date=date.today().strftime("%d.%m.%Y"),
+            completed_date=None,
+            spawner_task=task_id,
+            deadline_datetime=deadline_datetime or target.deadline_datetime,
+            created_datetime=datetime.now().strftime("%d.%m.%Y %H:%M"),
+            task_type=target.task_type,
+            recurrence_type=target.recurrence_type,
+            recurrence_value=target.recurrence_value,
+            recurrence_weekdays=target.recurrence_weekdays,
+            recurrence_monthdays=target.recurrence_monthdays,
+            recurrence_use_last_day=target.recurrence_use_last_day,
+            next_generation_date=date.today().strftime("%d.%m.%Y"),
+            event_date=target.event_date,
+            theme=target.theme,
+            checklist_required=target.checklist_required,
+            checklist=[
+                ChecklistItem(
+                    checked=False,
+                    short=item.short,
+                    detail=item.detail,
+                    order=item.order,
+                )
+                for item in target.checklist
+            ],
+        )
 
-        if target.status == TaskStatus.COMPLETED:
-            new_id = TaskIdGenerator.generate(self._active_storage)
-            new_task = PlannerTask(
-                task_id=new_id,
-                title=target.title,
-                description=target.description,
-                priority=target.priority,
-                status=TaskStatus.ACTIVE,
-                created_date=date.today().strftime("%d.%m.%Y"),
-                completed_date=None,
-                spawner_task=task_id,
-                deadline_datetime=deadline_datetime or target.deadline_datetime,
-                created_datetime=datetime.now().strftime("%d.%m.%Y %H:%M"),
-                task_type=target.task_type,
-                recurrence_type=target.recurrence_type,
-                recurrence_value=target.recurrence_value,
-                recurrence_weekdays=target.recurrence_weekdays,
-                recurrence_monthdays=target.recurrence_monthdays,
-                recurrence_use_last_day=target.recurrence_use_last_day,
-                next_generation_date=date.today().strftime("%d.%m.%Y"),
-                checklist_required=target.checklist_required,
-                checklist=[
-                    ChecklistItem(
-                        checked=False,
-                        short=item.short,
-                        detail=item.detail,
-                        order=item.order,
-                    )
-                    for item in target.checklist
-                ],
-            )
-            # Если пришло новое правило — применяем.
-            if recurrence_data:
-                self._apply_recurrence(new_task, recurrence_data)
-            self._active_storage.add(new_task)
-            self._emit_tasks_changed()
-            return new_task
-
-            # Fallback: ACTIVE-задача в архиве.
-        target.status = TaskStatus.ACTIVE
-        target.completed_date = None
-        if deadline_datetime:
-            target.deadline_datetime = deadline_datetime
+        # Если пришло новое правило повторения — применяем.
         if recurrence_data:
-            self._apply_recurrence(target, recurrence_data)
-        self._archive_storage.remove(task_id)
-        self._active_storage.add(target)
+            self._apply_recurrence(new_task, recurrence_data)
+
+        # Добавляем в активные, НЕ удаляя из архива.
+        self._active_storage.add(new_task)
         self._emit_tasks_changed()
-        return target
+        return new_task
 
     def _apply_recurrence(self, task: PlannerTask, recurrence_data: dict) -> None:
         """Применяет правило повторения к задаче.

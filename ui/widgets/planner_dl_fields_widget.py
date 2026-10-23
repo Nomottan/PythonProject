@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 
 from ui.factories.input_factory import InputWidgetFactory
 from ui.factories.element_factory import LabelFactory
-
+from ui.styles.colors import ColorCalculator
 
 class DeadlineFieldsWidget(QWidget):
     """Поля ввода дедлайна: инклюзивный блок + блок срока.
@@ -38,7 +38,8 @@ class DeadlineFieldsWidget(QWidget):
     def __init__(self, parent=None, initial: Optional[str] = None,
                  mode: str = "inclusive",
                  field_bg=(85, 60, 42, 0.9),
-                 field_border="1px solid #6b4a33"):
+                 field_border=None,
+                 label_bg=None):
         """Конструктор.
 
         Вход:
@@ -57,7 +58,8 @@ class DeadlineFieldsWidget(QWidget):
         self._initial = initial
         self._mode = mode
         self._field_bg = field_bg
-        self._field_border = field_border
+        self._field_border = field_border or f"1px solid {ColorCalculator.to_str((107, 74, 51))}"
+        self._label_bg = label_bg
         self._build_ui()
         if initial:
             self._load_initial(initial)
@@ -73,8 +75,8 @@ class DeadlineFieldsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        lbl_kw = {"bg_color": (0, 0, 0, 0), "text_color": None,
-                  "font_size": 11}
+        bg = self._label_bg if self._label_bg is not None else (0, 0, 0, 0)
+        lbl_kw = {"bg_color": bg, "text_color": None, "font_size": 11}
 
         # --- Инклюзивный блок: дата + часы + минуты ---
         self._inclusive = QWidget()
@@ -135,8 +137,8 @@ class DeadlineFieldsWidget(QWidget):
 
         self._duration_unit = InputWidgetFactory.create_combo_box(
             self._duration,
-            items=["Часы", "Дни", "Месяцы"],
-            current_index=1,
+            items=["Минуты", "Часы", "Дни", "Месяцы"],
+            current_index=2,
             bg_color=self._field_bg,
             border=self._field_border,
         )
@@ -204,7 +206,9 @@ class DeadlineFieldsWidget(QWidget):
 
         val = self._duration_value.value()
         unit = self._duration_unit.currentText()
-        if unit == "Часы":
+        if unit == "Минуты":
+            delta = timedelta(minutes=val)
+        elif unit == "Часы":
             delta = timedelta(hours=val)
         elif unit == "Дни":
             delta = timedelta(days=val)

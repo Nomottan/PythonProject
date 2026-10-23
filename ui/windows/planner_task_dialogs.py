@@ -1,8 +1,6 @@
 """
 Три диалога задачи: создание/редактирование обычной задачи,
 восстановление дедлайна, восстановление регулярной задачи.
-
-Все наследуют BaseTaskDialog.
 + специлизированное окно для выбора чисел месяца для регулярных задач от BaseEditDialog.
 """
 
@@ -11,69 +9,63 @@ from typing import Optional
 
 from PySide6.QtWidgets import QWidget, QHBoxLayout
 from PySide6.QtCore import Qt
+
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, LayoutFactory,
     DeadlineFieldsWidget,
 )
 from ui.base.base_edit_dialog import BaseEditDialog
-from ui.base.base_task_dialog import BaseTaskDialog
+from ui.base.base_planner_dialogs import BaseTaskDialog
 from ui.factories.composite_widget_factory import CompositeWidgetFactory
 from ui.windows.message_dialog import MessageDialog, NotificationDialog
 from ui.widgets.planner_day_picker_widget import PlannerDayPickerWidget
-from models.planner_task import TaskPriority, PlannerTask
+from models.planner_task import TaskPriority, PlannerTask, ThemeKey
+from ui.styles import ColorCalculator, WindowStyle
+
 
 class NewTaskDialog(BaseTaskDialog):
-    """Диалог создания/редактирования задачи.
+    """Диалог создания/редактирования задачи."""
 
-    Назначение:
-        Поля: название, приоритет, описание, тип дедлайна,
-        поля дедлайна, правило повторения, дата события.
-
-    Роль в программе:
-        Открывается из PlannerWindow по кнопкам «Новая задача»
-        и «Редактировать». Наследник BaseTaskDialog.
-    """
-
-    def __init__(self, parent=None, planner_service=None, task=None):
-        """Конструктор.
-
-        Вход:
-            parent — родитель (PlannerWindow).
-            planner_service — сервис для получения приоритетов.
-            task — PlannerTask для редактирования (None при создании).
-        """
+    def __init__(self, parent=None, planner_service=None, task=None, main_config=None):
         self.service = planner_service
-        # creator=True — режим создания, False — редактирования.
         self.creator = task is None
-        self.bg_color = (111, 78, 55, 0.95)
+        self._main_config = main_config
+
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (111, 78, 55))
+        if self.creator:
+            self.bg_color = ColorCalculator.derive(
+                parent_bg,
+                r_fn=lambda r: r + 10,
+                g_fn=lambda g: g + 10,
+                b_fn=lambda b: b - 20,
+                alpha=0.95,
+            )
+        else:
+            self.bg_color = ColorCalculator.derive(
+                parent_bg,
+                r_fn=lambda r: r - 20,
+                g_fn=lambda g: g + 10,
+                b_fn=lambda b: b + 10,
+                alpha=0.95,
+            )
 
         super().__init__(
             parent=parent,
             task=task,
             title="Новая задача",
             bg_color=self.bg_color,
-            close_button=False,
-            ok_cancel=True,
-            draggable=True,
-            close_on_click_outside=False,
-            modal=True,
-            center=True,
             width=400,
             height=350,
         )
 
     def _build_content(self, layout) -> None:
-        """Строит форму задачи.
-
-        Вход: layout — QVBoxLayout из BaseTaskDialog.
-        """
-        bg_color = (85, 60, 42, 0.9)
-        # --- Скрытое поле описания (read-only, пока нет названия). ---
+        """Строит форму задачи."""
+        # --- Скрытое поле описания ---
         self.full_desc_edit = InputWidgetFactory.create_text_edit(
             self,
             placeholder="Подробное описание...",
-            bg_color=bg_color,
-            border="1px solid #6b4a33",
+            bg_color=self._elements_bg,
+            border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
         )
         self.full_desc_edit.setReadOnly(True)
         layout.addWidget(self.full_desc_edit)
@@ -81,9 +73,9 @@ class NewTaskDialog(BaseTaskDialog):
         # --- Поле названия ---
         self.task_edit = InputWidgetFactory.create_line_edit(
             self,
-            bg_color=bg_color,
+            bg_color=self._elements_bg,
             text_color=None,
-            border="1px solid #6b4a33",
+            border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
             border_radius=3,
             padding="3px",
         )
@@ -92,7 +84,7 @@ class NewTaskDialog(BaseTaskDialog):
         self.checklist_cb = InputWidgetFactory.create_checkbox(
             self, text="",
             checked=(not self.creator and self._task.checklist_required),
-            bg_color=bg_color,
+            bg_color=self._elements_bg,
         )
         self.checklist_cb.clicked.connect(self._on_checklist_cb_clicked)
 
@@ -104,10 +96,9 @@ class NewTaskDialog(BaseTaskDialog):
         self.priority_combo = InputWidgetFactory.create_combo_box(
             self,
             items=priorities,
-            bg_color=bg_color,
-            border="1px solid #6b4a33",
+            bg_color=self._elements_bg,
+            border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
         )
-        # NEW: явно выбираем «Средний» по имени, а не по индексу.
         medium_name = TaskPriority.MEDIUM.display_name
         medium_idx = self.priority_combo.findText(medium_name)
         if medium_idx >= 0:
@@ -118,8 +109,8 @@ class NewTaskDialog(BaseTaskDialog):
             self,
             items=["До даты включительно", "Срок"],
             current_index=0,
-            bg_color=bg_color,
-            border="1px solid #6b4a33",
+            bg_color=self._elements_bg,
+            border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
         )
         self.deadline_type_combo.setVisible(False)
 
@@ -136,7 +127,7 @@ class NewTaskDialog(BaseTaskDialog):
                 "use_last_day": self._task.recurrence_use_last_day,
             }
         self._recurrence_fields = CompositeWidgetFactory.create_recurrence_fields(
-            self, initial,
+            self, initial, field_bg=self._elements_bg, label_bg=self._labels_bg,
         )
         self._recurrence_fields.setVisible(False)
         self._recurrence_fields.rule_combo.setVisible(False)
@@ -153,70 +144,75 @@ class NewTaskDialog(BaseTaskDialog):
         self.task_edit.textChanged.connect(self._on_title_changed)
 
         # --- Поля дедлайна ---
-        self._deadline_fields = DeadlineFieldsWidget(self)
+        initial_deadline = self._task.deadline_datetime if not self.creator else None
+        self._deadline_fields = DeadlineFieldsWidget(
+            self, field_bg=self._elements_bg, label_bg=self._labels_bg,
+            initial=initial_deadline
+        )
         self._deadline_fields.setVisible(False)
+
+        # --- Тема ---
+        self.theme_combo = InputWidgetFactory.create_combo_box(
+            self, items=[], bg_color=self._elements_bg,
+        )
+        raw_themes = self._main_config.get("planner_themes", {}) if self._main_config else {}
+        if not isinstance(raw_themes, dict):
+            raw_themes = {}
+        for key in ThemeKey:
+            self.theme_combo.addItem(ThemeKey.resolve_effective_name(key, raw_themes), key.value)
+
+        current_theme = self._task.theme if not self.creator else "black"
+        idx = self.theme_combo.findData(current_theme)
+        if idx >= 0:
+            self.theme_combo.setCurrentIndex(idx)
 
         # --- Форма ---
         label_kwargs = {
-            "bg_color": (145, 105, 75, 0.0),
-            "text_color": "#dabdab",
+            "bg_color": self._labels_bg,
+            "text_color": ColorCalculator.text_for(self._labels_bg),
             "padding": "4px 8px",
             "border_radius": 3,
             "alignment": Qt.AlignLeft | Qt.AlignVCenter,
             "fixed_size": (120, 24),
         }
         task_label = LabelFactory.create_label(self, "Задача:", **label_kwargs)
+        checklist_label = LabelFactory.create_label(self, "Чек-лист:", **label_kwargs)
+        theme_label = LabelFactory.create_label(self, "Тема:", **label_kwargs)
         priority_label = LabelFactory.create_label(self, "Приоритет:", **label_kwargs)
-        checklist_label = LabelFactory.create_label(
-            self, "Чек-лист:", **label_kwargs,
+
+        # Дата события (теперь часть формы)
+        self.event_label = LabelFactory.create_label(self, "Дата события:", **label_kwargs)
+        self._event_date_edit = InputWidgetFactory.create_line_edit(
+            self,
+            bg_color=self._elements_bg,
+            text_color=None,
+            border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
+            border_radius=3,
+            padding="3px",
         )
+        self._event_date_edit.setInputMask("99.99.9999")
+        self.event_label.setVisible(False)
+        self._event_date_edit.setVisible(False)
 
         form = LayoutFactory.create_form(
             self,
             rows=[
                 (task_label, self.task_edit),
                 (checklist_label, self.checklist_cb),
+                (theme_label, self.theme_combo),
                 (priority_label, priority_row),
+                (self.event_label, self._event_date_edit),
+                (None, self._deadline_fields),
+                (None, self._recurrence_fields),
             ],
             spacing=10,
             margins=(10, 10, 10, 10),
         )
         layout.addWidget(form)
-        layout.addWidget(self._deadline_fields)
-        layout.addWidget(self._recurrence_fields)
-
-        # --- Поля даты события ---
-        self._event_date_row = QWidget()
-        event_row_layout = QHBoxLayout(self._event_date_row)
-        event_row_layout.setContentsMargins(0, 0, 0, 0)
-        event_row_layout.setSpacing(6)
-
-        event_label = LabelFactory.create_label(
-            self._event_date_row, "Дата события:",
-            bg_color=(145, 105, 75, 0.0), text_color="#dabdab",
-            padding="4px 8px", border_radius=3,
-            alignment=Qt.AlignLeft | Qt.AlignVCenter,
-            fixed_size=(120, 24),
-        )
-        self._event_date_edit = InputWidgetFactory.create_line_edit(
-            self._event_date_row,
-            bg_color= bg_color,
-            text_color=None,
-            border="1px solid #6b4a33",
-            border_radius=3,
-            padding="3px",
-        )
-        self._event_date_edit.setInputMask("99.99.9999")
-        event_row_layout.addWidget(event_label)
-        event_row_layout.addWidget(self._event_date_edit, 1)
-        self._event_date_row.setVisible(False)
-        layout.addWidget(self._event_date_row)
 
         # --- Триггеры ---
         self.priority_combo.currentTextChanged.connect(self._on_priority_changed)
-        self.deadline_type_combo.currentTextChanged.connect(
-            self._on_deadline_type_changed
-        )
+        self.deadline_type_combo.currentTextChanged.connect(self._on_deadline_type_changed)
 
         # --- Предзаполнение при редактировании ---
         if not self.creator:
@@ -227,25 +223,11 @@ class NewTaskDialog(BaseTaskDialog):
                     self.priority_combo.setCurrentIndex(i)
                     break
             self._on_priority_changed(self.priority_combo.currentText())
-            if (self._task.priority == TaskPriority.DEADLINE
-                    and self._task.deadline_datetime):
-                self._deadline_fields._load_initial(self._task.deadline_datetime)
             if (self._task.priority == TaskPriority.EVENT
                     and self._task.event_date):
                 self._event_date_edit.setText(self._task.event_date)
 
-    # ---------- Валидация ----------
-
     def _validate(self) -> bool:
-        """Проверяет название и дату события.
-
-        Выход: True — можно закрывать; False — остаться.
-
-        Особенность: при пустом названии спрашивает «продолжить?».
-            «Да»  (Accepted) — остаёмся в диалоге, правим название.
-            «Нет» (Rejected) — reject() закрывает и предупреждение,
-                               и NewTaskDialog.
-        """
         if not self.task_edit.text().strip():
             result = MessageDialog.warning(
                 self,
@@ -269,14 +251,8 @@ class NewTaskDialog(BaseTaskDialog):
                 )
                 return False
         return True
-    # ---------- Сбор результата ----------
 
     def _collect_result(self):
-        """Собирает данные задачи в dict.
-
-        Выход: dict с ключами title, description, priority,
-               deadline_datetime, recurrence_data, event_date.
-        """
         priority = self.service.get_priority_by_display_name(
             self.priority_combo.currentText()
         )
@@ -285,23 +261,20 @@ class NewTaskDialog(BaseTaskDialog):
             "description": self.full_desc_edit.toPlainText().strip(),
             "priority": priority,
             "deadline_datetime": self._deadline_fields.get_deadline_data(
-                self.deadline_type_combo.currentText()
+                "inclusive" if self.deadline_type_combo.currentText() == "До даты включительно" else "duration"
             ) if priority == TaskPriority.DEADLINE else None,
             "recurrence_data": self._recurrence_fields.get_recurrence_data()
             if priority == TaskPriority.RECURRING else None,
             "event_date": self._event_date_edit.text().strip()
             if priority == TaskPriority.EVENT else None,
             "checklist_required": self.checklist_cb.isChecked(),
+            "theme": self.theme_combo.currentData(),
         }
 
-    # ---------- Внутренние слоты ----------
-
     def _on_title_changed(self, text: str) -> None:
-        """Разрешает редактирование описания при непустом названии."""
         self.full_desc_edit.setReadOnly(not bool(text.strip()))
 
     def _on_deadline_type_changed(self, text: str) -> None:
-        """Переключает режим полей дедлайна."""
         mode = "inclusive" if text == "До даты включительно" else "duration"
         self._deadline_fields.set_mode(mode)
 
@@ -313,19 +286,16 @@ class NewTaskDialog(BaseTaskDialog):
 
         self.deadline_type_combo.setVisible(is_deadline)
         self._deadline_fields.setVisible(is_deadline)
+
         self._recurrence_fields.rule_combo.setVisible(is_recurring)
         self._recurrence_fields.setVisible(is_recurring)
-        self._event_date_row.setVisible(is_event)
+
+        self.event_label.setVisible(is_event)
+        self._event_date_edit.setVisible(is_event)
         if not is_event:
             self._event_date_edit.clear()
 
     def _on_checklist_cb_clicked(self, checked: bool) -> None:
-        """Блокирует снятие флага при непустом чек-листе.
-
-        Роль: при редактировании задачи с непустым чек-листом
-              пользователь не может снять флаг — галка возвращается
-              в True и показывается уведомление.
-        """
         if self.creator:
             return
         if (not checked
@@ -338,78 +308,59 @@ class NewTaskDialog(BaseTaskDialog):
             )
             self.checklist_cb.setChecked(True)
 
+
 class DeadlineEditDialog(BaseTaskDialog):
-    """Диалог редактирования дедлайна при восстановлении из архива.
-
-    Назначение:
-        Read-only заголовок + combo типа дедлайна + DeadlineFieldsWidget.
-
-    Роль в программе:
-        Открывается из PlannerArchiveWindow. Наследник BaseTaskDialog.
-    """
+    """Диалог редактирования дедлайна при восстановлении из архива."""
 
     def __init__(self, parent=None, task=None):
-        """Конструктор.
-
-        Вход:
-            parent — родитель (PlannerArchiveWindow).
-            task — PlannerTask для восстановления.
-        """
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (70, 80, 90))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r + 20,
+            g_fn=lambda g: g - 10,
+            b_fn=lambda b: b - 10,
+            alpha=0.95,
+        )
         super().__init__(
             parent=parent,
             task=task,
             title="Восстановление дедлайна",
-            bg_color=(70, 80, 90, 0.95),
-            close_button=False,
-            ok_cancel=True,
-            draggable=True,
-            close_on_click_outside=False,
-            modal=True,
-            center=True,
+            bg_color=self.bg_color,
             width=420,
             height=280,
         )
 
     def _build_content(self, layout) -> None:
-        """Заголовок + combo типа + поля дедлайна."""
-        # Read-only заголовок задачи.
-        layout.addWidget(LabelFactory.create_label(
-            self, f"Задача: {self._task.title}",
-            bg_color=(0, 0, 0, 0), text_color="#ffffff",
-            alignment=Qt.AlignCenter, word_wrap=True,
-            font_size=13, font_weight="bold",
-        ))
+        layout.addWidget(self._build_title_label())
 
-        # Строка «Тип»: label + combo.
         type_row = QWidget()
         type_row_layout = QHBoxLayout(type_row)
         type_row_layout.setContentsMargins(0, 0, 0, 0)
         type_row_layout.setSpacing(6)
         type_row_layout.addWidget(LabelFactory.create_label(
             type_row, "Тип:",
-            bg_color=(0, 0, 0, 0), text_color=None, font_size=11,
+            bg_color=self._labels_bg, text_color=ColorCalculator.text_for(self._labels_bg), font_size=11,
         ))
         self.deadline_type_combo = InputWidgetFactory.create_combo_box(
             type_row,
             items=["До даты включительно", "Срок"],
             current_index=0,
-            bg_color=(50, 60, 70, 0.95),
-            border="1px solid #3a4556",
+            bg_color=self._elements_bg,
+            border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
         )
         type_row_layout.addWidget(self.deadline_type_combo, 1)
         layout.addWidget(type_row)
 
-        # Поля дедлайна.
         self._deadline_fields = DeadlineFieldsWidget(
             self,
             initial=self._task.deadline_datetime,
             mode="inclusive",
-            field_bg=(50, 60, 70, 0.95),
-            field_border="1px solid #3a4556",
+            field_bg=self._elements_bg,
+            label_bg=self._labels_bg,
+            field_border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
         )
         layout.addWidget(self._deadline_fields)
 
-        # Триггер переключения режима.
         self.deadline_type_combo.currentTextChanged.connect(
             lambda text: self._deadline_fields.set_mode(
                 "inclusive" if text == "До даты включительно" else "duration"
@@ -417,7 +368,6 @@ class DeadlineEditDialog(BaseTaskDialog):
         )
 
     def _collect_result(self):
-        """Возвращает dict с deadline_datetime."""
         mode = (
             "inclusive"
             if self.deadline_type_combo.currentText() == "До даты включительно"
@@ -429,47 +379,29 @@ class DeadlineEditDialog(BaseTaskDialog):
 
 
 class PlannerRecurrenceEditDialog(BaseTaskDialog):
-    """Диалог редактирования правила повторения при восстановлении.
-
-    Назначение:
-        Read-only заголовок + PlannerRecurrenceFieldsWidget.
-
-    Роль в программе:
-        Открывается из PlannerArchiveWindow. Наследник BaseTaskDialog.
-    """
+    """Диалог редактирования правила повторения при восстановлении."""
 
     def __init__(self, parent=None, task=None):
-        """Конструктор.
-
-        Вход:
-            parent — родитель (PlannerArchiveWindow).
-            task — PlannerTask для восстановления.
-        """
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (70, 80, 90))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r - 10,
+            g_fn=lambda g: g - 10,
+            b_fn=lambda b: b + 20,
+            alpha=0.95,
+        )
         super().__init__(
             parent=parent,
             task=task,
             title="Восстановление регулярной задачи",
-            bg_color=(70, 80, 90, 0.95),
-            close_button=False,
-            ok_cancel=True,
-            draggable=True,
-            close_on_click_outside=False,
-            modal=True,
-            center=True,
+            bg_color=self.bg_color,
             width=420,
             height=300,
         )
 
     def _build_content(self, layout) -> None:
-        """Заголовок + поля правила повторения."""
-        layout.addWidget(LabelFactory.create_label(
-            self, f"Задача: {self._task.title}",
-            bg_color=(0, 0, 0, 0), text_color="#ffffff",
-            alignment=Qt.AlignCenter, font_size=13,
-            font_weight="bold", word_wrap=True,
-        ))
+        layout.addWidget(self._build_title_label())
 
-        # Предзаполнение правила.
         initial = None
         if self._task and self._task.recurrence_type:
             initial = {
@@ -481,47 +413,25 @@ class PlannerRecurrenceEditDialog(BaseTaskDialog):
             }
         self._recurrence_fields = CompositeWidgetFactory.create_recurrence_fields(
             self, initial,
-            field_bg=(50, 60, 70, 0.95),
-            field_border="1px solid #3a4556",
-            button_border="1px solid #6a7a8a",
+            field_bg=self._elements_bg,
+            field_border=f"1px solid {ColorCalculator.to_str(self._elements_bg)}",
+            label_bg=self._labels_bg,
         )
         layout.addWidget(self._recurrence_fields.rule_combo)
         layout.addWidget(self._recurrence_fields)
 
     def _collect_result(self):
-        """Возвращает dict с recurrence_data."""
         return {
             "recurrence_data": self._recurrence_fields.get_recurrence_data(),
         }
 
+
 class PlannerDayPickerDialog(BaseEditDialog):
-    """Диалог выбора чисел месяца.
-
-    Назначение:
-        Позволяет выбрать числа 1–31. Если выбраны 29/30/31 — при «ОК»
-        спрашивает, использовать ли последний день месяца, когда
-        выбранного числа нет.
-
-    Роль в программе:
-        Открывается из PlannerRecurrenceFieldsWidget. Содержимое —
-        PlannerDayPickerWidget; логика «последнего дня» — здесь.
-    """
+    """Диалог выбора чисел месяца."""
 
     def __init__(self, parent=None, selected=None):
-        """Конструктор.
-
-        Вход:
-            parent — родитель.
-            selected — список предвыбранных чисел.
-
-        Роль: сохраняет предвыбранные числа, настраивает каркас
-              через BaseEditDialog. Виджет создаётся в _build_content.
-        """
-        # Сохраняем до super(): нужно для _build_content.
         self._initial_selected = list(selected or [])
-        # Виджет создаётся в _build_content.
         self._widget = None
-        # Флаг «использовать последний день» — заполняется в _validate.
         self._use_last_day = False
 
         super().__init__(
@@ -538,30 +448,13 @@ class PlannerDayPickerDialog(BaseEditDialog):
             height=400,
         )
 
-    # ---------- Наполнение ----------
-
     def _build_content(self, layout) -> None:
-        """Добавляет PlannerDayPickerWidget в layout.
-
-        Вход: layout — QVBoxLayout из BaseEditDialog.
-        Роль: создаёт виджет с предвыбранными числами, кладёт в layout.
-        """
         self._widget = PlannerDayPickerWidget(
             self, selected=self._initial_selected,
         )
         layout.addWidget(self._widget)
 
-    # ---------- Валидация ----------
-
     def _validate(self) -> bool:
-        """Спрашивает про 29/30/31, если они выбраны.
-
-        Выход: всегда True — вопрос не блокирует закрытие.
-        Роль: если в выбранных есть 29, 30 или 31 — спрашивает
-              пользователя, использовать ли последний день месяца
-              в тех месяцах, где такого числа нет. Результат
-              сохраняется в self._use_last_day.
-        """
         selected = self._widget.get_selected()
         if any(d in (29, 30, 31) for d in selected):
             reply = MessageDialog.question(
@@ -574,12 +467,8 @@ class PlannerDayPickerDialog(BaseEditDialog):
             self._use_last_day = (reply == "yes")
         return True
 
-    # ---------- Публичный API ----------
-
     def get_selected(self) -> list:
-        """Возвращает отсортированный список выбранных чисел."""
         return self._widget.get_selected()
 
     def get_use_last_day(self) -> bool:
-        """Возвращает флаг «использовать последний день»."""
         return self._use_last_day
