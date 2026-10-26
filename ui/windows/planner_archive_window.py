@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from PySide6.QtCore import Qt
 
 from ui.factories.button_factory import ButtonFactory
+from ui.factories.element_factory import LabelFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.base.planner_base_window import _BasePlannerListWindow
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
@@ -106,7 +107,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
     def _get_filter_field_defs(self) -> list:
         """Возвращает список FieldDef для панели фильтров архива.
 
-        Четыре категории — «Тип задачи», «Дата создания»,
+        Пять категорий — «Тип задачи», «Тема», «Дата создания»,
         «Тип завершения», «Дата завершения».
         """
         return [
@@ -114,6 +115,11 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
                 name="priority",
                 label="Тип задачи",
                 extractor=lambda t: t.priority.display_name,
+            ),
+            FieldDef(
+                name="theme",
+                label="Тема",
+                extractor=self._resolve_theme_name,
             ),
             FieldDef(
                 name="created_date",
@@ -149,6 +155,12 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
                 lambda checked=False, t=task: self._on_restore_task(t),
             )
             layout.addWidget(restore_btn)
+        else:
+            # Прозрачная заглушка размером с кнопку (26x26) для ровной сетки
+            placeholder = LabelFactory.create_label(
+                container, "", bg_color=(0, 0, 0, 0), fixed_size=(26, 26)
+            )
+            layout.addWidget(placeholder)
 
         delete_btn = ButtonFactory.create_delete_button(
             container,

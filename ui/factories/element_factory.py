@@ -89,7 +89,8 @@ class LabelFactory:
     @staticmethod
     def create_label(parent, text="", bg_color=(64, 48, 66),
                      text_color=None, padding="4px 8px", border_radius=5,
-                     fixed_size=None, alignment=Qt.AlignCenter,
+                     fixed_size=None, fixed_width=None, fixed_height=None,
+                     alignment=Qt.AlignCenter,
                      font_family=None, font_size=None, object_name=None,
                      cursor_shape=None, border="none", font_weight=None,
                      extra_style="", word_wrap=False, tooltip=None,
@@ -105,6 +106,8 @@ class LabelFactory:
             padding — внутренние отступы.
             border_radius — радиус скругления.
             fixed_size — (w, h) или None.
+            fixed_width — фиксированная ширина (или None).
+            fixed_height — фиксированная высота (или None).
             alignment — Qt.AlignmentFlag.
             font_family, font_size, font_weight — шрифт.
             object_name — objectName.
@@ -151,6 +154,10 @@ class LabelFactory:
             lbl.setMaximumSize(*max_size)
         if fixed_size:
             lbl.setFixedSize(*fixed_size)
+        if fixed_width is not None:
+            lbl.setFixedWidth(fixed_width)
+        if fixed_height is not None:
+            lbl.setFixedHeight(fixed_height)
 
         lbl.setAlignment(alignment)
         lbl.setWordWrap(word_wrap)

@@ -29,8 +29,9 @@ class AveragePriceResolver:
     Роль:
         Инкапсулирует if/elif-лестницу определения средней.
         Возвращает PriceDecision — либо конкретную цену, либо
-        сигнал «нужен диалог». Порядок источников фиксирован
-        и повторяет текущее поведение FinalizePricesService.
+        сигнал «нужен диалог». Порядок источников фиксирован:
+        цены из отчёта → сохранённая цена текущего продавца →
+        случайная средняя с другого → диалог.
     """
 
     @staticmethod
@@ -84,9 +85,12 @@ class PriceUtils:
     """Утилиты расчёта и генерации цен.
 
     Роль:
-        calculate_average — средняя с учётом сохранённой цены.
-        generate_varied_price — случайная цена в коридоре ±10%
-        от базовой, округлённая до кратного 9.
+        Каждый static-метод — отдельный этап. Порядок вызовов задаёт
+        вызывающий код: этапы 1 (по отчёту), 2 (по кластерам GTIN),
+        3 (по средней) выполняются последовательно. Метод
+        apply_price_from_map — отдельная точка для установки цены
+        по точному совпадению КИЗа в строке (values) без открытия sheet.
+        Класс не хранит состояние.
 
     Атрибуты класса:
         SAVED_PRICE_WEIGHT — вес сохранённой цены при расчёте средней.
@@ -205,40 +209,6 @@ class PriceFiller:
     PRICE_COL = 3
     GTIN_COL = 8
     HEADER_KIZ = "КИЗ"
-
-    @staticmethod
-    def fill_from_report(sheet, price_map: dict) -> int:
-        """Этап 1: цены из отчёта по точному совпадению КИЗа.
-
-        Вход:
-            sheet — открытый лист openpyxl.
-            price_map — dict {kiz: price} из отчёта МП.
-
-        Выход:
-            Количество установленных цен.
-
-        Роль:
-            Проходит по строкам листа. Пропускает строки без КИЗа
-            и строку заголовка (значение == HEADER_KIZ). Если КИЗ
-            строки есть в price_map — записывает цену в PRICE_COL.
-            Если КИЗа нет — оставляет ячейку как есть (там может
-            быть криптохвост от BestMark, его нельзя затирать).
-        """
-        count = 0
-        for row_idx in range(2, sheet.max_row + 1):
-            kiz_cell = sheet.cell(row=row_idx, column=PriceFiller.KIZ_COL)
-            kiz = (
-                str(kiz_cell.value).strip()
-                if kiz_cell.value is not None else ""
-            )
-            if not kiz or kiz == PriceFiller.HEADER_KIZ:
-                continue
-            if kiz in price_map:
-                sheet.cell(
-                    row=row_idx, column=PriceFiller.PRICE_COL
-                ).value = price_map[kiz]
-                count += 1
-        return count
 
     @staticmethod
     def fill_by_gtin_clusters(sheet, price_map: dict,

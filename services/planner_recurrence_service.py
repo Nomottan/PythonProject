@@ -152,6 +152,7 @@ class PlannerRecurrenceService:
             spawner_task=generator.task_id,
             task_type=TaskType.INSTANCE,
             checklist_required=generator.checklist_required,
+            theme=generator.theme,
             checklist=[
                 ChecklistItem(
                     checked=False,

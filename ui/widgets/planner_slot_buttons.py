@@ -23,7 +23,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QProgressBar,
 )
-
+from models.planner_task import ThemeKey
 from ui.styles.colors import ColorCalculator
 
 
@@ -55,21 +55,17 @@ class _BaseTaskButton(QWidget):
     TEXT_COLOR = "#e0e0e0"
     DEFAULT_STRIPE = (80, 160, 220, 1.0)
 
-    def __init__(self, parent=None, stripe_color=None):
+    def __init__(self, parent=None, stripe_color=None, theme_key=None, main_bg=(50, 50, 50)):
         """Конструктор.
 
         Вход:
             parent — родительский виджет.
             stripe_color — цвет полосы слева. None → берётся
                            self.DEFAULT_STRIPE.
-
-        Роль: настраивает флаги, собирает базовый layout,
-              вызывает _extend_layout для наследников, инициализирует
-              состояние мыши.
+            theme_key — объект ThemeKey текущей задачи (или None).
+            main_bg — цвет фона главного окна (кортеж).
         """
         super().__init__(parent)
-        # WA_StyledBackground нужен, чтобы QSS background-color
-        # работал на чистом QWidget.
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
 
@@ -94,6 +90,38 @@ class _BaseTaskButton(QWidget):
 
         self._hovered = False
         self._pressed = False
+        self.set_theme(theme_key, main_bg)
+
+    def set_theme(self, theme_key, main_bg) -> None:
+        """Пересчитывает фон виджета под заданную тему и применяет.
+
+        Безопасен для повторных вызовов: пересчёт дешёвый,
+        оптимизация по равенству theme_key не делается.
+        """
+        self._theme_key = theme_key
+        self._main_bg = main_bg
+
+        if theme_key is not None:
+            avg = sum(main_bg[:3]) // 3
+            theme_color = theme_key.color
+            if avg <= 127:
+                delta = [(c - 40) // 2 for c in theme_color]
+            else:
+                delta = [(c - 80) // 2 for c in theme_color]
+            bg_vals = [avg + d for d in delta]
+            self.BG = (bg_vals[0], bg_vals[1], bg_vals[2], 0.95)
+        else:
+            self.BG = (78, 78, 83, 0.95)
+
+        hover_str = ColorCalculator.hover(self.BG)
+        pressed_str = ColorCalculator.pressed(self.BG)
+
+        hover_rgba = ColorCalculator.to_rgba(hover_str)
+        pressed_rgba = ColorCalculator.to_rgba(pressed_str)
+
+        self.BG_HOVER = hover_rgba if hover_rgba is not None else self.BG
+        self.BG_PRESSED = pressed_rgba if pressed_rgba is not None else self.BG
+
         self._apply_bg(self.BG)
 
     # ---------- Точки расширения для наследников ----------

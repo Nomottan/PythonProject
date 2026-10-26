@@ -223,6 +223,11 @@ class PlannerWindow(_BasePlannerListWindow):
                 extractor=lambda t: t.priority.display_name,
             ),
             FieldDef(
+                name="theme",
+                label="Тема",
+                extractor=self._resolve_theme_name,
+            ),
+            FieldDef(
                 name="created_date",
                 label="Дата создания",
                 extractor=lambda t: t.created_date or "Не указана",
@@ -278,7 +283,17 @@ class PlannerWindow(_BasePlannerListWindow):
         self._sync_archive_geometry()
 
     def closeEvent(self, event):
-        """Чистит active_child у MainWindow, затем — базовая логика."""
+        """Чистит active_child у MainWindow, обновляет мини-планировщик, затем — базовая логика."""
         if self.parent() and hasattr(self.parent(), "active_child"):
             self.parent().active_child = None
+
+        # Принудительное обновление мини-планировщика при закрытии окна
+        parent = self.parent()
+        if parent is not None:
+            controller = getattr(parent, "planner_quick_controller", None)
+            if controller is not None:
+                refresh = getattr(controller, "refresh", None)
+                if callable(refresh):
+                    refresh()
+
         super().closeEvent(event)

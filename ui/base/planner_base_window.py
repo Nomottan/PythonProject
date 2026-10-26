@@ -345,6 +345,24 @@ class _BasePlannerListWindow(QMainWindow):
                 self.service.update_checklist(task.task_id, result)
         self._reload_tasks()
 
+    def _resolve_theme_name(self, task) -> str:
+        """Возвращает эффективное имя темы задачи.
+
+        Fallback на ThemeKey.BLACK при невалидном task.theme. Если
+        main_config is None или planner_themes не dict — возвращает
+        дефолтное имя.
+        """
+        try:
+            key = ThemeKey(task.theme)
+        except (ValueError, TypeError):
+            key = ThemeKey.BLACK
+
+        raw = self.main_config.get("planner_themes", {}) if self.main_config is not None else {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        return ThemeKey.resolve_effective_name(key, raw)
+
     def _build_theme(self, task):
         """Строит плашку темы задачи."""
         try:
@@ -352,14 +370,7 @@ class _BasePlannerListWindow(QMainWindow):
         except (ValueError, TypeError):
             theme_key = ThemeKey.BLACK
 
-        raw_themes = (
-            self.main_config.get("planner_themes", {})
-            if self.main_config is not None else {}
-        )
-        if not isinstance(raw_themes, dict):
-            raw_themes = {}
-
-        name = ThemeKey.resolve_effective_name(theme_key, raw_themes)
+        name = self._resolve_theme_name(task)
 
         if self.EDITABLE:
             btn = ButtonFactory.create_button(

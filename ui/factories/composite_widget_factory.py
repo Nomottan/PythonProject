@@ -38,54 +38,61 @@ class CompositeWidgetFactory(BaseWidgetFactory):
     # ---------- Слоты мини-планировщика ----------
 
     @staticmethod
-    def create_striped_slot(parent, stripe_color=(80, 160, 220, 1.0)):
+    def create_striped_slot(parent, stripe_color=(80, 160, 220, 1.0), theme_key=None, main_bg=(50, 50, 50)):
         """Создаёт слот экземпляра регулярной задачи.
 
         Вход:
             parent — родитель.
             stripe_color — цвет полосы. По умолчанию голубой
                            (INSTANCE).
+            theme_key — объект ThemeKey (или None).
+            main_bg — цвет фона главного окна.
 
         Выход: InstanceTaskButton.
-
-        Роль: используется для экземпляров регулярных задач.
-              События теперь создаются через create_event_slot —
-              у них свой класс EventTaskButton с жёлтой полосой.
+        ...
         """
         from ui.widgets.planner_slot_buttons import InstanceTaskButton
-        return InstanceTaskButton(parent, stripe_color=stripe_color)
+        return InstanceTaskButton(parent, stripe_color=stripe_color, theme_key=theme_key, main_bg=main_bg)
 
     @staticmethod
-    def create_progress_slot(parent):
+    def create_progress_slot(parent, theme_key=None, main_bg=(50, 50, 50)):
         """Создаёт слот с прогрессбаром.
 
-        Вход: parent — родитель.
+        Вход:
+            parent — родитель.
+            theme_key — объект ThemeKey (или None).
+            main_bg — цвет фона главного окна.
         Выход: DeadlineTaskButton.
         Роль: используется для дедлайн-задач.
         """
         from ui.widgets.planner_slot_buttons import DeadlineTaskButton
-        return DeadlineTaskButton(parent)
+        return DeadlineTaskButton(parent, theme_key=theme_key, main_bg=main_bg)
 
     @staticmethod
-    def create_event_slot(parent):
+    def create_event_slot(parent, theme_key=None, main_bg=(50, 50, 50)):
         """Создаёт слот события.
 
-        Вход: parent — родитель.
+        Вход:
+            parent — родитель.
+            theme_key — объект ThemeKey (или None).
+            main_bg — цвет фона главного окна.
         Выход: EventTaskButton.
         Роль: используется для задач с task_type == EVENT.
               Жёлтая полоса — чтобы событие визуально выделялось.
         """
         from ui.widgets.planner_slot_buttons import EventTaskButton
-        return EventTaskButton(parent)
+        return EventTaskButton(parent, theme_key=theme_key, main_bg=main_bg)
 
     @staticmethod
-    def create_simple_slot(parent, stripe_color=(80, 160, 220, 1.0)):
+    def create_simple_slot(parent, stripe_color=(80, 160, 220, 1.0), theme_key=None, main_bg=(50, 50, 50)):
         """Создаёт слот обычной задачи.
 
         Вход:
             parent — родитель.
             stripe_color — цвет полосы слева. Обычно — цвет
                            приоритета (LOW/MEDIUM/HIGH).
+            theme_key — объект ThemeKey (или None).
+            main_bg — цвет фона главного окна.
 
         Выход: SimpleTaskButton.
 
@@ -95,7 +102,7 @@ class CompositeWidgetFactory(BaseWidgetFactory):
               единая база с остальными слотами.
         """
         from ui.widgets.planner_slot_buttons import SimpleTaskButton
-        return SimpleTaskButton(parent, stripe_color=stripe_color)
+        return SimpleTaskButton(parent, stripe_color=stripe_color, theme_key=theme_key, main_bg=main_bg)
 
     # ---------- Составные виджеты planner ----------
 

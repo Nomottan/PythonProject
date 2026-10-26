@@ -161,6 +161,7 @@ class PlannerRecurrenceFieldsWidget(QWidget):
                 bg_color=self._label_bg, text_color=None,
                 font_size=11, padding="0px",
             )
+            day_lbl.setFixedHeight(24)
             cell_l.addWidget(day_lbl)
             cb = InputWidgetFactory.create_checkbox(
                 cell, "", checked=False,
@@ -212,10 +213,12 @@ class PlannerRecurrenceFieldsWidget(QWidget):
 
     def _label(self, text: str):
         """Быстрый хелпер для лейблов полей."""
-        return LabelFactory.create_label(
+        lbl = LabelFactory.create_label(
             self, text, bg_color=self._label_bg,
             text_color=None, font_size=11,
         )
+        lbl.setFixedHeight(24)
+        return lbl
 
     # ---------- Триггеры ----------
 

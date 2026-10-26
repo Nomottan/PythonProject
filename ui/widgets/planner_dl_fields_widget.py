@@ -76,7 +76,7 @@ class DeadlineFieldsWidget(QWidget):
         layout.setSpacing(6)
 
         bg = self._label_bg if self._label_bg is not None else (0, 0, 0, 0)
-        lbl_kw = {"bg_color": bg, "text_color": None, "font_size": 11}
+        lbl_kw = {"bg_color": bg, "text_color": None, "font_size": 11, "fixed_height": 24}
 
         # --- Инклюзивный блок: дата + часы + минуты ---
         self._inclusive = QWidget()

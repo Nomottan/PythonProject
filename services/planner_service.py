@@ -348,7 +348,11 @@ class PlannerService(QObject):
                     recurrence_data: Optional[dict] = None,
                     event_date: Optional[str] = None,
                     theme: Optional[str] = None) -> bool:
-        """Точечно обновляет поля задачи, не трогая status/completed_date."""
+        """Точечно обновляет поля задачи, не трогая status/completed_date.
+
+        Эмитит tasks_changed в конце — чтобы подписчики (мини-планировщик)
+        увидели изменения.
+        """
         if not title or not title.strip():
             raise ValueError("Название задачи не может быть пустым")
 
@@ -406,8 +410,8 @@ class PlannerService(QObject):
                 target.event_date = event_date
 
 
-        elif deadline_datetime:
 
+        elif deadline_datetime:
             # Приоритет не меняется, но дату обновили явно.
             target.deadline_datetime = deadline_datetime
 
@@ -415,6 +419,7 @@ class PlannerService(QObject):
             target.theme = theme
 
         self._storage.save()
+        self.tasks_changed.emit()
         return True
 
     def get_priorities(self) -> list[str]:
