@@ -45,7 +45,8 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
                  draggable=False, close_on_click_outside=False,
                  modal=True, center=True, on_close=None,
                  log_manager_v2=None,
-                 service_window_override=None):
+                 service_window_override=None,
+                 force_window=False):
         """Конструктор.
 
         Вход:
@@ -64,6 +65,9 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
             service_window_override — явное сервисное окно для
                 центрирования. Если None — наследуется у parent
                 через фабрику.
+            force_window — если True, окно становится независимым
+                на уровне ОС (Qt.Window), но сохраняет модальность.
+                Используется, если окно обрезается родителем.
 
         Роль: сохраняет self.bg_color для наследников, создаёт
               логгер, вызывает setup_dialog_frame и передаёт
@@ -72,6 +76,11 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
         super().__init__(parent)
         self._result = None
         self._locked_pos = None
+
+        # Делаем окно независимым на уровне ОС, если нужно.
+        # Это предотвращает обрезку окна родителем (например, резолвером).
+        if force_window:
+            self.setWindowFlag(Qt.Window, True)
 
         self.log_manager_v2 = log_manager_v2
         self.logger = None
@@ -157,6 +166,8 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
         """
         return True
 
+    # ---------- Взаимодействие с окном ----------
+
     def showEvent(self, event):
         """Запоминает изначальную позицию при показе окна."""
         super().showEvent(event)
@@ -168,6 +179,7 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
 
         Если пользователь тащит окно мышкой — разрешаем движение.
         Если кнопка мыши не зажата (системный сдвиг) — возвращаем на место.
+        При перетаскивании ограничиваем позицию рамками service_window.
         """
         if self._locked_pos is not None and self.pos() != self._locked_pos:
             if QApplication.mouseButtons() == Qt.NoButton:
@@ -177,4 +189,44 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
             else:
                 # Пользователь двигает окно сам — запоминаем новую позицию
                 self._locked_pos = self.pos()
+                self._clamp_to_bound_window()
         super().moveEvent(event)
+
+    def _clamp_to_bound_window(self) -> None:
+        """Не позволяет окну выйти за пределы сервисного окна.
+
+        Роль: если задан service_window (или parent), ограничивает
+              перемещение окна его геометрией. Это нужно для окон,
+              которые выходят за рамки родителя (Qt.Window),
+              но должны оставаться в пределах главного окна.
+        """
+        bound_window = getattr(self, 'service_window', None)
+        if not bound_window:
+            bound_window = self.parent()
+        if not bound_window:
+            return
+
+        # Поправка для безрамочных окон Qt (системное смещение координат)
+        OFFSET = -10
+
+        # Получаем глобальные координаты рамок
+        geo = bound_window.frameGeometry()
+        rect = self.frameGeometry()
+
+        # Если окно вдруг больше границ — не двигаем (чтобы не было дерганий)
+        if rect.width() > geo.width() or rect.height() > geo.height():
+            return
+
+        # Вычисляем границы с учетом смещения
+        min_x = geo.left() - OFFSET
+        max_x = geo.right() - rect.width() - OFFSET
+        min_y = geo.top() - OFFSET
+        max_y = geo.bottom() - rect.height() - OFFSET
+
+        # Ограничиваем позицию (сравниваем реальные координаты rect)
+        new_x = max(min_x, min(rect.left(), max_x))
+        new_y = max(min_y, min(rect.top(), max_y))
+
+        if new_x != rect.left() or new_y != rect.top():
+            self.move(new_x + OFFSET, new_y + OFFSET)
+            self._locked_pos = self.pos()

@@ -14,11 +14,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, InputWidgetFactory, BaseWidgetFactory,
+    ButtonFactory, LabelFactory, InputWidgetFactory,
 )
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
 from ui.windows.message_dialog import MessageDialog
-from ui.styles import WindowStyle, ColorCalculator
+from ui.styles import WindowStyle, ColorCalculator, WidgetStyle
 
 class PlannerTaskMainCommentary(QDialog):
     """Диалог детального просмотра задачи.
@@ -84,15 +84,13 @@ class PlannerTaskMainCommentary(QDialog):
         central = QWidget()
         central.setObjectName("commentary_dialog_root")
         self._central_widget = central
-        bg_c = BaseWidgetFactory.color_to_str(bg_color)
-        border_c = BaseWidgetFactory.color_to_str(border_color)
-        central.setStyleSheet(f"""
-            QWidget#commentary_dialog_root {{
-                background-color: {bg_c};
-                border: 2px solid {border_c};
-                border-radius: 10px;
-            }}
-        """)
+
+        WidgetStyle.apply_panel(
+            central,
+            bg_color=bg_color,
+            border=f"2px solid {ColorCalculator.to_str(border_color)}",
+            border_radius=10,
+        )
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 20, 20, 20)

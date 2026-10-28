@@ -295,7 +295,7 @@ class SellersBrandsService:
                 )
             return False
 
-        sellers = self.get_sellers_objects()
+        sellers = self.get_sellers_with_brands()
 
         target = None
         for s in sellers:

@@ -873,6 +873,33 @@ class WidgetStyle:
     # ---------- Окно ----------
 
     @staticmethod
+    def apply_panel(widget, bg_color, border_radius=6, border="none", extra_style="") -> None:
+        """Единая точка стилизации QWidget-панелей (контейнеры, фоны, рамки).
+
+        Используется для виджетов без специфической фабрики.
+        Требует непустой objectName — иначе ValueError, чтобы не получить
+        широкий селектор с каскадом на вложенные виджеты.
+        """
+        if not widget.objectName():
+            raise ValueError(
+                f"apply_panel: у {type(widget).__name__} не задан objectName. "
+                f"Без objectName селектор станет широким и покрасит вложенные виджеты."
+            )
+
+        selector = SelectorBuilder.build("QWidget", widget.objectName())
+
+        style = QssBuilder.base_rule(
+            selector,
+            bg_color=bg_color,
+            border=border,
+            border_radius=border_radius,
+        )
+        if extra_style:
+            style += extra_style
+
+        widget.setStyleSheet(style)
+
+    @staticmethod
     def apply_window_central(central, bg_color) -> None:
         """QSS для центрального виджета окна.
 

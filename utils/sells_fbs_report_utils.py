@@ -260,13 +260,21 @@ class BaseMpReportReader:
         Наследник может переопределить.
         """
         report_path = Path(report_path)
-        seller = TextUtils.find_seller_by_file_name(
+        found = TextUtils.find_seller_by_file_name(
             report_path.stem.lower(), sellers,
         )
-        if seller is None:
+        if not found:
             logger.report("  Не удалось определить продавца – пропущен")
-        else:
-            logger.report(f"  Продавец определён: {seller.name}")
+            return None
+        if len(found) > 1:
+            logger.report(
+                f"  Найдено несколько продавцов ({len(found)}), "
+                f"требуется уточнение – пропущен"
+            )
+            return None
+
+        seller = found[0]
+        logger.report(f"  Продавец определён: {seller.name}")
         return seller
 
     @classmethod
@@ -515,12 +523,14 @@ class WarehouseReportReader(BaseMpReportReader):
         """
         report_path = Path(report_path)
 
-        seller = TextUtils.find_seller_by_file_name(
+        found = TextUtils.find_seller_by_file_name(
             report_path.stem.lower(), sellers,
         )
-        if seller is not None:
-            logger.report(f"  Продавец определён: {seller.name}")
-            return seller
+        if len(found) == 1:
+            logger.report(f"  Продавец определён: {found[0].name}")
+            return found[0]
+        if len(found) > 1:
+            logger.report(f"  Найдено несколько продавцов ({len(found)}) – требуется уточнение")
 
         # Fallback: разбор имени файла.
         stem = report_path.stem

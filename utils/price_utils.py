@@ -211,6 +211,40 @@ class PriceFiller:
     HEADER_KIZ = "КИЗ"
 
     @staticmethod
+    def apply_price_from_map(values: list, price_map: dict) -> bool:
+        """Устанавливает цену по точному совпадению КИЗа без открытия sheet.
+
+        Вход:
+            values    — список значений строки openpyxl.
+            price_map — dict {kiz: price} из отчёта МП.
+
+        Выход:
+            bool — True, если цена была установлена (мутирует values in-place).
+
+        Роль:
+            Выполняет проверки на наличие КИЗа в строке, его валидность и
+            наличие в price_map. В случае успеха расширяет строку до
+            нужной длины (при необходимости) и записывает цену.
+        """
+        if len(values) < PriceFiller.KIZ_COL:
+            return False
+
+        raw_kiz = values[PriceFiller.KIZ_COL - 1]
+        kiz = str(raw_kiz).strip() if raw_kiz is not None else ""
+
+        if not kiz or kiz == PriceFiller.HEADER_KIZ:
+            return False
+
+        if kiz not in price_map:
+            return False
+
+        if len(values) < PriceFiller.PRICE_COL:
+            values.extend([None] * (PriceFiller.PRICE_COL - len(values)))
+
+        values[PriceFiller.PRICE_COL - 1] = price_map[kiz]
+        return True
+
+    @staticmethod
     def fill_by_gtin_clusters(sheet, price_map: dict,
                               rng: Optional[random.Random] = None,
                               *, logger=None) -> FillStats:

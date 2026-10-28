@@ -74,7 +74,9 @@ class PlannerService(QObject):
             raise ValueError("Название задачи не может быть пустым")
         if task_type == TaskType.EVENT and not event_date:
             raise ValueError("Для события обязательна дата события")
-        task_id = TaskIdGenerator.generate(self._storage)
+
+        tasks = self._storage.get_all() + (self._archive_storage.get_all() if self._archive_storage else [])
+        task_id = TaskIdGenerator.generate(tasks)
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
         if task_type == TaskType.RECURRING and recurrence_data:
             rec_type = recurrence_data.get("type")
@@ -88,12 +90,14 @@ class PlannerService(QObject):
         if priority == TaskPriority.DEADLINE and not deadline_datetime:
             fallback_dt = datetime.now() + timedelta(days=1)
             deadline_datetime = fallback_dt.strftime("%d.%m.%Y %H:%M")
-        if task_type == TaskType.EVENT:
-            status = TaskStatus.WAITING
-            event_date_val = event_date
-        else:
-            status = TaskStatus.ACTIVE
-            event_date_val = None
+
+        match task_type:
+            case TaskType.EVENT:
+                status = TaskStatus.WAITING
+                event_date_val = event_date
+            case _:
+                status = TaskStatus.ACTIVE
+                event_date_val = None
         next_date = date.today().strftime("%d.%m.%Y") if task_type == TaskType.RECURRING else None
 
         task = PlannerTask(
@@ -224,9 +228,9 @@ class PlannerService(QObject):
         # Сначала архив, потом удаление из активных.
         if self._archive_storage is not None:
             self._archive_storage.add(target)
-        self._storage.remove(task_id)
+        self._storage.remove_by_object(target)
 
-        # NEW: если архивировали экземпляр — переводим его генератора
+        # Если архивировали экземпляр — переводим его генератора
         # в WAITING. Делаем это строго после удаления экземпляра из
         # storage, иначе генератор «увидел» бы ещё живой экземпляр.
         # Если генератор в PAUSED — не трогаем: пользователь явно

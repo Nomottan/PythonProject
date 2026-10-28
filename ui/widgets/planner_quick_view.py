@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal
 
 from ui.factories.factories import ButtonFactory
 from ui.factories.composite_widget_factory import CompositeWidgetFactory
-from ui.styles import ColorCalculator
+from ui.styles import ColorCalculator, WidgetStyle
 from models.planner_task import TaskPriority, ThemeKey
 
 
@@ -44,12 +44,9 @@ class PlannerQuickView(QWidget):
 
         # Фон контейнера — темнее главного окна.
         self.setObjectName("planner_quick_view_root")
-        self.setStyleSheet("""
-            QWidget#planner_quick_view_root {
-                background-color: rgba(40, 40, 45, 0.7);
-                border-radius: 6px;
-            }
-        """)
+        WidgetStyle.apply_panel(
+            self, bg_color=(40, 40, 45, 0.7), border_radius=6
+        )
         self.setMaximumWidth(400)
 
         self._layout = QVBoxLayout(self)

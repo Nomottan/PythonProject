@@ -264,105 +264,178 @@ class PlannerTask:
         self.checklist = checklist if checklist is not None else []
         self.theme = theme
 
+    @staticmethod
+    def _default_priority_for(task_type: TaskType) -> TaskPriority:
+        """Единственный источник инварианта "дефолтный priority для типа".
+
+        При добавлении члена TaskType — обновляется этот метод; иначе ValueError.
+        """
+        match task_type:
+            case TaskType.REGULAR:
+                return TaskPriority.MEDIUM
+            case TaskType.DEADLINE:
+                return TaskPriority.DEADLINE
+            case TaskType.RECURRING | TaskType.INSTANCE:
+                return TaskPriority.RECURRING
+            case TaskType.EVENT:
+                return TaskPriority.EVENT
+            case _:
+                raise ValueError(
+                    f"_default_priority_for: неизвестный TaskType: {task_type!r}. "
+                    f"Добавь его в метод."
+                )
+
+    @staticmethod
+    def _put(out: dict, key: str, value, skip) -> None:
+        """Единый паттерн ленивой сериализации: пишет out[key] = value,
+        если value != skip. skip — значение, при котором поле не пишется
+        (fallback, который from_dict вернёт при отсутствии ключа).
+        """
+        if value != skip:
+            out[key] = value
+
     def to_dict(self) -> dict:
         """Сериализация в примитивы для JSON.
 
-        Выход: dict с полями task_id, title, description, priority (число),
-               status (строка), created_date, completed_date, theme.
-
-        Роль: Enum-значения разворачиваются в .value; даты — строки как есть.
+        Ленивая: поля с дефолтными значениями не пишутся (см. _put,
+        _default_priority_for). Обязательные — task_id, title, created_date.
+        Порядок ключей — фиксированный (обязательные → тип/тема → optional).
         """
-        return {
-            "task_id": self.task_id,
-            "title": self.title,
-            "description": self.description,
-            "priority": self.priority.value,
-            "status": self.status.value,
-            "created_date": self.created_date,
-            "completed_date": self.completed_date,
-            "spawner_task": self.spawner_task,
-            "deadline_datetime": self.deadline_datetime,
-            "created_datetime": self.created_datetime,
-            "task_type": self.task_type.value,
-            "recurrence_type": self.recurrence_type,
-            "recurrence_value": self.recurrence_value,
-            "recurrence_weekdays": self.recurrence_weekdays,
-            "recurrence_monthdays": self.recurrence_monthdays,
-            "recurrence_use_last_day": self.recurrence_use_last_day,
-            "next_generation_date": self.next_generation_date,
-            "event_date": self.event_date,
-            "checklist_required": self.checklist_required,
-            "checklist": [item.to_dict() for item in self.checklist],
-            "theme": self.theme,
-        }
+        out = {}
+
+        # Обязательные (пишутся напрямую)
+        out["task_id"] = self.task_id
+        out["title"] = self.title
+        out["created_date"] = self.created_date
+
+        # Скипаемые (через _put)
+        self._put(out, "description", self.description, "")
+        self._put(out, "priority", self.priority.value, self._default_priority_for(self.task_type).value)
+        self._put(out, "status", self.status.value, TaskStatus.ACTIVE.value)
+        self._put(out, "task_type", self.task_type.value, TaskType.REGULAR.value)
+        self._put(out, "theme", self.theme, "black")
+        self._put(out, "completed_date", self.completed_date, None)
+        self._put(out, "spawner_task", self.spawner_task, None)
+        self._put(out, "deadline_datetime", self.deadline_datetime, None)
+        self._put(out, "created_datetime", self.created_datetime, None)
+        self._put(out, "recurrence_type", self.recurrence_type, None)
+        self._put(out, "recurrence_value", self.recurrence_value, None)
+        self._put(out, "recurrence_weekdays", self.recurrence_weekdays, None)
+        self._put(out, "recurrence_monthdays", self.recurrence_monthdays, None)
+        self._put(out, "recurrence_use_last_day", self.recurrence_use_last_day, False)
+        self._put(out, "next_generation_date", self.next_generation_date, None)
+        self._put(out, "event_date", self.event_date, None)
+        self._put(out, "checklist_required", self.checklist_required, False)
+        self._put(out, "checklist", [item.to_dict() for item in self.checklist], [])
+
+        return out
 
     @classmethod
     def from_dict(cls, data: dict) -> "PlannerTask":
-        """Восстановление объекта из dict.
+        """Восстановление из dict.
 
-        Вход: data — словарь, например результат json.load.
-        Выход: объект PlannerTask.
-
-        Обработка ошибок:
-            - Неизвестный priority → fallback на TaskPriority.LOW.
-            - Неизвестный status → fallback на TaskStatus.CANCELLED.
-            - Отсутствует task_id или title → KeyError (уйдёт наверх).
-
-        Роль: обратное преобразование к to_dict. Мягкое поведение при
-              неизвестных Enum-значениях — чтобы не терять задачу целиком
-              из-за одной опечатки в JSON.
+        "Ключ отсутствует" → дефолт по смыслу (_default_priority_for для priority,
+        ACTIVE для status, "black" для theme, REGULAR для task_type).
+        "Значение битое" → мягкий fallback (LOW, CANCELLED, REGULAR, "black").
+        List-поля recurrence_weekdays / recurrence_monthdays защищены
+        isinstance(list); bool-поля — bool(...).
         """
-        # REPLACE: priority — при неизвестном значении подставляем LOW.
-        try:
-            priority = TaskPriority(data["priority"])
-        except (ValueError, KeyError):
-            priority = TaskPriority.LOW
+        # Обязательные (KeyError уходит наверх)
+        task_id = data["task_id"]
+        title = data["title"]
 
-        try:
-            status = TaskStatus(data["status"])
-        except (ValueError, KeyError):
-            status = TaskStatus.CANCELLED
-
-            # NEW: task_type — при неизвестном значении подставляем REGULAR.
-        try:
-            task_type = TaskType(data.get("task_type", "regular"))
-        except (ValueError, KeyError):
+        # task_type (строго перед priority)
+        if "task_type" not in data:
             task_type = TaskType.REGULAR
-        theme_raw = data.get("theme", "black")
-        try:
-            theme_value = ThemeKey(theme_raw).value
-        except (ValueError, TypeError):
+        else:
+            try:
+                task_type = TaskType(data["task_type"])
+            except (ValueError, TypeError):
+                task_type = TaskType.REGULAR
+
+        # priority
+        if "priority" not in data:
+            priority = cls._default_priority_for(task_type)
+        else:
+            try:
+                priority = TaskPriority(data["priority"])
+            except (ValueError, TypeError):
+                priority = TaskPriority.LOW
+
+        # status
+        if "status" not in data:
+            status = TaskStatus.ACTIVE
+        else:
+            try:
+                status = TaskStatus(data["status"])
+            except (ValueError, TypeError):
+                status = TaskStatus.CANCELLED
+
+        # theme
+        if "theme" not in data:
             theme_value = "black"
-            # task_id и title обязательны — KeyError уйдёт наверх.
+        else:
+            try:
+                theme_value = ThemeKey(data["theme"]).value
+            except (ValueError, TypeError):
+                theme_value = "black"
+
+        # Строки
+        description = data.get("description", "")
+        created_date = data.get("created_date", "")
+
+        # None-поля
+        completed_date = data.get("completed_date")
+        spawner_task = data.get("spawner_task")
+        deadline_datetime = data.get("deadline_datetime")
+        created_datetime = data.get("created_datetime")
+        next_generation_date = data.get("next_generation_date")
+        event_date = data.get("event_date")
+        recurrence_type = data.get("recurrence_type")
+        recurrence_value = data.get("recurrence_value")
+
+        # Списки
+        rw = data.get("recurrence_weekdays")
+        if not isinstance(rw, list):
+            rw = None
+
+        rm = data.get("recurrence_monthdays")
+        if not isinstance(rm, list):
+            rm = None
+
+        # Байты (bool)
+        ruld = bool(data.get("recurrence_use_last_day", False))
+        ch_req = bool(data.get("checklist_required", False))
+
+        # Чек-лист (walrus + фильтр None)
+        checklist_data = data.get("checklist") or []
+        checklist = [
+            item for raw in checklist_data
+            if (item := ChecklistItem.from_dict(raw)) is not None
+        ]
+
         return cls(
-            task_id=data["task_id"],
-            title=data["title"],
-            description=data.get("description", ""),
+            task_id=task_id,
+            title=title,
+            description=description,
             priority=priority,
             status=status,
-            created_date=data.get("created_date", ""),
-            completed_date=data.get("completed_date"),
-            spawner_task=data.get("spawner_task"),
-            deadline_datetime=data.get("deadline_datetime"),
-            created_datetime=data.get("created_datetime"),
+            created_date=created_date,
+            completed_date=completed_date,
+            spawner_task=spawner_task,
+            deadline_datetime=deadline_datetime,
+            created_datetime=created_datetime,
             task_type=task_type,
-            recurrence_type=data.get("recurrence_type"),
-            recurrence_value=data.get("recurrence_value"),
-            recurrence_weekdays=data.get("recurrence_weekdays"),
-            recurrence_monthdays=data.get("recurrence_monthdays"),
-            recurrence_use_last_day=data.get("recurrence_use_last_day", False),
-            next_generation_date=data.get("next_generation_date"),
-            event_date=data.get("event_date"),
-            checklist_required=data.get("checklist_required", False),
+            recurrence_type=recurrence_type,
+            recurrence_value=recurrence_value,
+            recurrence_weekdays=rw,
+            recurrence_monthdays=rm,
+            recurrence_use_last_day=ruld,
+            next_generation_date=next_generation_date,
+            event_date=event_date,
+            checklist_required=ch_req,
+            checklist=checklist,
             theme=theme_value,
-            checklist=[
-                item
-                for item in (
-                    ChecklistItem.from_dict(raw)
-                    for raw in data.get("checklist", []) or []
-                )
-                if item is not None
-            ],
         )
 
     def get_deadline_datetime(self) -> Optional[datetime]:

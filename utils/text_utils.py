@@ -45,6 +45,18 @@ class TextUtils:
         return (s or "").strip().lower()
 
     @staticmethod
+    def normalize_for_brand_matching(s: str) -> str:
+        """Агрессивная нормализация строки для нечеткого поиска брендов.
+
+        Приводит к нижнему регистру, удаляет ВСЕ знаки пунктуации,
+        пробелы и подчеркивания. Оставляет только буквы и цифры.
+        """
+        if not s:
+            return ""
+        res = re.sub(r'[^\w]|_', '', s.lower())
+        return res
+
+    @staticmethod
     def sanitize_filename(name: str) -> str:
         if not name:
             return "неизвестная_компания"
@@ -118,8 +130,8 @@ class TextUtils:
         return None
 
     @staticmethod
-    def find_seller_by_file_name(file_name_lower: str, sellers) -> "Seller | None":
-        """Находит продавца по имени файла.
+    def find_seller_by_file_name(file_name_lower: str, sellers) -> list:
+        """Находит продавцов по имени файла с двухуровневой проверкой.
 
         Вход:
             file_name_lower — имя файла в нижнем регистре (без пути,
@@ -127,20 +139,34 @@ class TextUtils:
             sellers — список Seller.
 
         Выход:
-            Первый Seller, у которого хотя бы один ключ из seller.keys
-            содержится в file_name_lower как подстрока, либо None,
-            если совпадений нет.
+            list[Seller].
+            Если пусто — никого не нашли.
+            Если 1 — однозначное совпадение.
+            Если > 1 — конфликт (пользователь должен выбрать).
 
         Роль:
-            Определение продавца по имени отчёта МП. Имена файлов
-            нестабильны, поэтому ищем не по равенству, а по вхождению
-            любого ключа продавца. Возвращаем первого — порядок
-            в sellers задаёт приоритет.
+            Сначала ищет полное совпадение (имя файла == ключ продавца).
+            Если таких нет — ищет по вхождению ключа (ключ в имени файла).
+            Приоритет по порядку в списке sellers убран.
         """
+        # 1. Поиск точного совпадения (имя файла полностью равно ключу)
+        exact_matches = []
+        for seller in sellers:
+            if any(key.lower() == file_name_lower for key in seller.keys):
+                if seller not in exact_matches:
+                    exact_matches.append(seller)
+
+        if exact_matches:
+            return exact_matches
+
+        # 2. Поиск по вхождению (ключ является подстрокой имени файла)
+        substring_matches = []
         for seller in sellers:
             if any(key.lower() in file_name_lower for key in seller.keys):
-                return seller
-        return None
+                if seller not in substring_matches:
+                    substring_matches.append(seller)
+
+        return substring_matches
 
     @staticmethod
     def parse_sales_filename(filename: str, sellers) -> tuple | None:

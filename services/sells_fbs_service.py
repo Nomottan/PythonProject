@@ -1,13 +1,14 @@
 """
-Сервисы ЧЗ МП: подготовка, обработка файлов, финализация цен.
+Сервисы ЧЗ МП: подготовка, обработка файлов, проверка.
 
-Содержит три сервиса пайплайна:
-    PreparationService     — опознание, копирование, разбор склада,
-                             чтение отчётов МП, разрешение конфликтов.
-    FinalProcessingService — фильтрация предитоговых файлов и
-                             формирование файлов продаж одним проходом,
-                             разрешение дублей КИЗов.
-    FinalizePricesService  — установка цен и финализация ИТОГ-файлов.
+Содержит три сервиса:
+    PreparationService      — подготовка: опознание, копирование,
+                             разбор склада, чтение отчётов,
+                             разрешение конфликтов, финализация.
+    FinalProcessingService  — обработка предитоговых файлов, продажи,
+                             дубли, установка цен, ИТОГ-файлы.
+    DataVerificationService — необязательная проверка: сверка КИЗов
+                             из отчётов с файлами BestMark / ИТОГ.
 
 Роль в программе:
     Вызываются из SellsFBSWindow по кнопкам пайплайна. Каждый сервис
@@ -44,11 +45,17 @@ class PreparationService:
     чтение отчётов, разрешение конфликтов, финализация.
 
     Роль:
-        Семь фаз: опознание входных файлов,
-        копирование с новыми именами, разбивка склада, чтение
-        всех отчётов в одном batch-контексте KizStorage,
-        разрешение конфликтов КИЗов между продавцами, финализация
-        (цены, .txt, сводки), очистка устаревших записей.
+        Фазы:
+            TaskContext и логгер,
+            опознание входных файлов,
+            копирование склада,
+            сбор неизвестных имён,
+            копирование отчётов МП,
+            разбивка склада,
+            чтение отчётов в одном batch-контексте KizStorage,
+            разрешение конфликтов КИЗов,
+            финализация (цены, .txt, сводки),
+            очистка устаревших записей.
 
     Публичный API:
         prepare(target_dir, files=None, sellers=None).
@@ -91,6 +98,81 @@ class PreparationService:
         """
         return FileTypeDetector.detect_all(files, logger)
 
+    def _resolve_seller_info(self, src_path, ctx, sellers, decision,
+                             file_type, logger):
+        """Определяет параметры продавца и обрабатывает решения.
+
+        Возвращает (seller_key, seller_name, safe_name, early_result).
+        Если early_result не None — это статус для раннего выхода
+        (garbage, unknown, error). Иначе — просто параметры.
+        """
+        found = TextUtils.find_seller_by_file_name(
+            src_path.stem.lower(), sellers,
+        )
+        if len(found) == 1:
+            seller = found[0]
+            logger.report(f"  Продавец: {seller.name}")
+            return (
+                seller.name, seller.name,
+                TextUtils.sanitize_filename(seller.name), None,
+            )
+
+        if decision is None:
+            safe_name = TextUtils.sanitize_filename(src_path.stem)
+            logger.warning(f"\n{src_path.name}: продавец не определён")
+            logger.report(" Продавец не определён")
+            return src_path.stem, None, safe_name, None
+        elif decision[0] == "seller":
+            target = decision[1]
+            logger.report(f"  Продавец (по решению): {target}")
+            return target, target, TextUtils.sanitize_filename(target), None
+        elif decision[0] == "garbage":
+            logger.report("  Мусор (по решению)")
+            return "", None, "", {"status": "garbage", "type": file_type}
+        elif decision[0] == "unknown":
+            safe_stem = TextUtils.sanitize_filename(src_path.stem)
+            new_name = FilenameUtils.format_with_extension(
+                f"Неопознанный отчёт {safe_stem} {{date}}",
+                ctx.date_str,
+            )
+            dst = ctx.reports_dir / new_name
+            result = FileHelper.copy_file_with_log(
+                src_path, dst, logger,
+                description="неопознанный отчёт", overwrite=False,
+            )
+            return "", None, "", {
+                "status": result["status"],
+                "type": "unknown",
+                "seller_name": None,
+                "dst_name": new_name,
+            }
+        else:
+            return "", None, "", {"status": "error", "type": file_type}
+
+    def _process_returns_decision(self, src_path, ctx, returns_txt_path,
+                                  sheet_name, col_index, logger) -> None:
+        """Читает КИЗы из указанного листа и дописывает в возвраты.txt."""
+        logger.report("  Возвраты (по решению)")
+        cells = []
+        wb = WorkbookOpener.open(
+            src_path, logger=None, read_only=True,
+        )
+        if wb is not None:
+            try:
+                if sheet_name in wb.sheetnames:
+                    sheet = wb[sheet_name]
+                    for row in sheet.iter_rows(values_only=True):
+                        if len(row) > col_index:
+                            cells.append(row[col_index])
+            finally:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+        ReturnsTxtWriter.append_cells(
+            cells, returns_txt_path, logger,
+        )
+
     # ============================================================
     # Приватные методы: опознание
     # ============================================================
@@ -101,73 +183,17 @@ class PreparationService:
                       seller_counters, returns_txt_path,
                       decision=None) -> dict:
         """Копирует WB-отчёт (учитывая decision)."""
-        seller = TextUtils.find_seller_by_file_name(
-            src_path.stem.lower(), sellers,
+        if decision is not None and decision[0] == "returns":
+            self._process_returns_decision(
+                src_path, ctx, returns_txt_path, "КИЗ", 2, logger
+            )
+            return {"status": "returns", "type": "wb"}
+
+        seller_key, seller_name, safe_name, early = self._resolve_seller_info(
+            src_path, ctx, sellers, decision, "wb", logger
         )
-        if seller is not None:
-            seller_key = seller.name
-            seller_name = seller.name
-            safe_name = TextUtils.sanitize_filename(seller.name)
-            logger.report(f"  Продавец: {seller.name}")
-        else:
-            seller_name = None
-            if decision is None:
-                seller_key = src_path.stem
-                safe_name = TextUtils.sanitize_filename(src_path.stem)
-                logger.warning(f"\n{src_path.name}: продавец не определён")
-                logger.report(" Продавец не определён")
-            elif decision[0] == "seller":
-                target = decision[1]
-                seller_key = target
-                seller_name = target
-                safe_name = TextUtils.sanitize_filename(target)
-                logger.report(f"  Продавец (по решению): {target}")
-            elif decision[0] == "garbage":
-                logger.report("  Мусор (по решению)")
-                return {"status": "garbage", "type": "wb"}
-            elif decision[0] == "unknown":
-                safe_stem = TextUtils.sanitize_filename(src_path.stem)
-                new_name = FilenameUtils.format_with_extension(
-                    f"Неопознанный отчёт {safe_stem} {{date}}",
-                    ctx.date_str,
-                )
-                dst = ctx.reports_dir / new_name
-                result = FileHelper.copy_file_with_log(
-                    src_path, dst, logger,
-                    description="неопознанный отчёт", overwrite=False,
-                )
-                return {
-                    "status": result["status"],
-                    "type": "unknown",
-                    "seller_name": None,
-                    "dst_name": new_name,
-                }
-            elif decision[0] == "returns":
-                logger.report("  Возвраты (по решению)")
-                cells = []
-                wb = WorkbookOpener.open(
-                    src_path, logger=None, read_only=True,
-                )
-                if wb is not None:
-                    try:
-                        if "КИЗ" in wb.sheetnames:
-                            sheet = wb["КИЗ"]
-                            for row in sheet.iter_rows(values_only=True):
-                                # Индекс 2 — столбец C. Совпадает с
-                                # WBReportReader._load_occurrences.
-                                if len(row) > 2:
-                                    cells.append(row[2])
-                    finally:
-                        try:
-                            wb.close()
-                        except Exception:
-                            pass
-                ReturnsTxtWriter.append_cells(
-                    cells, returns_txt_path, logger,
-                )
-                return {"status": "returns", "type": "wb"}
-            else:
-                return {"status": "error", "type": "wb"}
+        if early is not None:
+            return early
 
         counter_key = (seller_key, "wb")
         idx = seller_counters.get(counter_key, 0) + 1
@@ -194,6 +220,73 @@ class PreparationService:
             "dst_name": new_name,
         }
 
+    def _copy_ozon_file(self, src_path, ctx, logger, sellers,
+                        seller_counters, returns_txt_path,
+                        decision=None) -> dict:
+        """Копирует Ozon-отчёт (учитывая decision)."""
+        if decision is not None and decision[0] == "returns":
+            self._process_returns_decision(
+                src_path, ctx, returns_txt_path, "Отчет", 8, logger
+            )
+            return {"status": "returns", "type": "ozon"}
+
+        seller_key, seller_name, safe_name, early = self._resolve_seller_info(
+            src_path, ctx, sellers, decision, "ozon", logger
+        )
+        if early is not None:
+            return early
+
+        counter_key = (seller_key, "ozon")
+        idx = seller_counters.get(counter_key, 0) + 1
+        seller_counters[counter_key] = idx
+
+        template = f"Отчёт_OZON_{safe_name} {{date}}"
+        if idx == 1:
+            new_name = FilenameUtils.format_with_extension(
+                template, ctx.date_str,
+            )
+        else:
+            new_name = FilenameUtils.format_with_extension(
+                template, ctx.date_str, index=idx,
+            )
+        dst = ctx.reports_dir / new_name
+        result = FileHelper.copy_file_with_log(
+            src_path, dst, logger,
+            description="отчёт Ozon", overwrite=False,
+        )
+        return {
+            "status": result["status"],
+            "type": "ozon",
+            "seller_name": seller_name,
+            "dst_name": new_name,
+        }
+
+    def _copy_wh_file(self, src_path, ctx, logger,
+                      seller_counters) -> dict:
+        """Копирует складской отчёт под именем «Склад_{date}»."""
+        counter_key = ("_wh_", "wh")
+        idx = seller_counters.get(counter_key, 0) + 1
+        seller_counters[counter_key] = idx
+
+        template = "Склад_{date}"
+        if idx == 1:
+            new_name = FilenameUtils.format_with_extension(
+                template, ctx.date_str,
+            )
+        else:
+            new_name = FilenameUtils.format_with_extension(
+                template, ctx.date_str, index=idx,
+            )
+        dst = ctx.reports_dir / new_name
+        result = FileHelper.copy_file_with_log(
+            src_path, dst, logger,
+            description="склад", overwrite=False,
+        )
+        return {
+            "status": result["status"],
+            "type": "wh",
+            "dst_name": new_name,
+        }
     # ============================================================
     # Приватные методы: копирование
     # ============================================================
@@ -307,10 +400,10 @@ class PreparationService:
             if file_type not in ("wb", "ozon"):
                 continue
             src_path = Path(src)
-            seller = TextUtils.find_seller_by_file_name(
+            found = TextUtils.find_seller_by_file_name(
                 src_path.stem.lower(), sellers,
             )
-            if seller is None:
+            if len(found) != 1:
                 nk = TextUtils.normalize(src_path.stem)
                 unresolved.setdefault(nk, []).append(src_path.stem)
                 context_map.setdefault(nk, set()).add("mp")
@@ -534,155 +627,8 @@ class PreparationService:
         deleted = self.kiz_validator.clean_old_entries(months=1)
         logger.info(f"Очистка старых записей: удалено {deleted}.")
         logger.info("\n==================================================\n")
-    def _copy_ozon_file(self, src_path, ctx, logger, sellers,
-                        seller_counters, returns_txt_path,
-                        decision=None) -> dict:
-        """Копирует Ozon-отчёт (учитывая decision)."""
-        seller = TextUtils.find_seller_by_file_name(
-            src_path.stem.lower(), sellers,
-        )
-        if seller is not None:
-            seller_key = seller.name
-            seller_name = seller.name
-            safe_name = TextUtils.sanitize_filename(seller.name)
-            logger.report(f"  Продавец: {seller.name}")
-        else:
-            seller_name = None
-            if decision is None:
-                seller_key = src_path.stem
-                safe_name = TextUtils.sanitize_filename(src_path.stem)
-                logger.warning(f"\n{src_path.name}: продавец не определён")
-                logger.report(" Продавец не определён")
-            elif decision[0] == "seller":
-                target = decision[1]
-                seller_key = target
-                seller_name = target
-                safe_name = TextUtils.sanitize_filename(target)
-                logger.report(f"  Продавец (по решению): {target}")
-            elif decision[0] == "garbage":
-                logger.report("  Мусор (по решению)")
-                return {"status": "garbage", "type": "ozon"}
-            elif decision[0] == "unknown":
-                safe_stem = TextUtils.sanitize_filename(src_path.stem)
-                new_name = FilenameUtils.format_with_extension(
-                    f"Неопознанный отчёт {safe_stem} {{date}}",
-                    ctx.date_str,
-                )
-                dst = ctx.reports_dir / new_name
-                result = FileHelper.copy_file_with_log(
-                    src_path, dst, logger,
-                    description="неопознанный отчёт", overwrite=False,
-                )
-                return {
-                    "status": result["status"],
-                    "type": "unknown",
-                    "seller_name": None,
-                    "dst_name": new_name,
-                }
-            elif decision[0] == "returns":
-                logger.report("  Возвраты (по решению)")
-                cells = []
-                wb = WorkbookOpener.open(
-                    src_path, logger=None, read_only=True,
-                )
-                if wb is not None:
-                    try:
-                        if "Отчет" in wb.sheetnames:
-                            sheet = wb["Отчет"]
-                            for row in sheet.iter_rows(values_only=True):
-                                # Индекс 8 — из FALLBACK_COLUMNS["kiz"].
-                                if len(row) > 8:
-                                    cells.append(row[8])
-                    finally:
-                        try:
-                            wb.close()
-                        except Exception:
-                            pass
-                ReturnsTxtWriter.append_cells(
-                    cells, returns_txt_path, logger,
-                )
-                return {"status": "returns", "type": "ozon"}
-            else:
-                return {"status": "error", "type": "ozon"}
 
-        counter_key = (seller_key, "ozon")
-        idx = seller_counters.get(counter_key, 0) + 1
-        seller_counters[counter_key] = idx
 
-        template = f"Отчёт_OZON_{safe_name} {{date}}"
-        if idx == 1:
-            new_name = FilenameUtils.format_with_extension(
-                template, ctx.date_str,
-            )
-        else:
-            new_name = FilenameUtils.format_with_extension(
-                template, ctx.date_str, index=idx,
-            )
-        dst = ctx.reports_dir / new_name
-        result = FileHelper.copy_file_with_log(
-            src_path, dst, logger,
-            description="отчёт Ozon", overwrite=False,
-        )
-        return {
-            "status": result["status"],
-            "type": "ozon",
-            "seller_name": seller_name,
-            "dst_name": new_name,
-        }
-
-    def _copy_wh_file(self, src_path, ctx, logger,
-                      seller_counters) -> dict:
-        """Копирует складской отчёт под именем «Склад_{date}»."""
-        counter_key = ("_wh_", "wh")
-        idx = seller_counters.get(counter_key, 0) + 1
-        seller_counters[counter_key] = idx
-
-        template = "Склад_{date}"
-        if idx == 1:
-            new_name = FilenameUtils.format_with_extension(
-                template, ctx.date_str,
-            )
-        else:
-            new_name = FilenameUtils.format_with_extension(
-                template, ctx.date_str, index=idx,
-            )
-        dst = ctx.reports_dir / new_name
-        result = FileHelper.copy_file_with_log(
-            src_path, dst, logger,
-            description="склад", overwrite=False,
-        )
-        return {
-            "status": result["status"],
-            "type": "wh",
-            "dst_name": new_name,
-        }
-
-    def _copy_unknown_file(self, src_path, ctx, logger,
-                           seller_counters) -> dict:
-        """Копирует неопознанный файл как «Неопознанный отчёт {stem} {date}»."""
-        counter_key = (src_path.stem, "unknown")
-        idx = seller_counters.get(counter_key, 0) + 1
-        seller_counters[counter_key] = idx
-
-        template = f"Неопознанный отчёт {src_path.stem} {{date}}"
-        if idx == 1:
-            new_name = FilenameUtils.format_with_extension(
-                template, ctx.date_str,
-            )
-        else:
-            new_name = FilenameUtils.format_with_extension(
-                template, ctx.date_str, index=idx,
-            )
-        dst = ctx.reports_dir / new_name
-        result = FileHelper.copy_file_with_log(
-            src_path, dst, logger,
-            description="неопознанный отчёт", overwrite=False,
-        )
-        return {
-            "status": result["status"],
-            "type": "unknown",
-            "dst_name": new_name,
-        }
 
     # ============================================================
     # Приватные методы: разбивка склада
@@ -1947,18 +1893,9 @@ class FinalProcessingService:
             rows_for_write = []
             for _, values in filtered_rows:
                 new_values = list(values)
-                kiz = ""
-                if len(new_values) >= PriceFiller.KIZ_COL:
-                    raw_kiz = new_values[PriceFiller.KIZ_COL - 1]
-                    kiz = str(raw_kiz).strip() if raw_kiz is not None else ""
-                if kiz and kiz != PriceFiller.HEADER_KIZ and kiz in price_map:
-                    if len(new_values) < PriceFiller.PRICE_COL:
-                        new_values.extend(
-                            [None] * (PriceFiller.PRICE_COL - len(new_values))
-                        )
-                    new_values[PriceFiller.PRICE_COL - 1] = price_map[kiz]
+                if PriceFiller.apply_price_from_map(new_values, price_map):
                     per_seller_stage1[seller.name] = (
-                        per_seller_stage1.get(seller.name, 0) + 1
+                            per_seller_stage1.get(seller.name, 0) + 1
                     )
                     total_stage1 += 1
                 rows_for_write.append(new_values)
@@ -2041,6 +1978,8 @@ class FinalProcessingService:
         lines.append(f"  Файлов не найдено: {files_not_found}")
         lines.append(f"  Файлов не открылось: {files_not_opened}")
         lines.append(f"  Файлов пустых: {files_empty}")
+        lines.append(f"  Всего строк: {total_rows_sum}")
+        lines.append(f"  Сохранено строк: {total_kept_sum}")
         if sellers_without_files:
             lines.append(
                 f"  Продавцов без файлов: "
@@ -2295,7 +2234,6 @@ class FinalProcessingService:
         sellers_skipped_no_requester = 0
         sellers_skipped_cancelled = 0
         sellers_with_error = 0
-        sellers_without_files = []
         average_changes = {}
         per_seller_filled_rows = {}
         per_seller_stage3 = {}

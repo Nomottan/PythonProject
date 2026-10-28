@@ -78,7 +78,7 @@ class PlannerArchiveService:
             except ValueError:
                 continue
             if (today - ref_date).days > days:
-                self._archive_storage.remove(task.task_id)
+                self._archive_storage.remove_by_object(task)
                 removed += 1
         return removed
 

@@ -262,24 +262,15 @@ class KizUtils:
         Выход:
             (to_delete, stats, brands_unknown):
                 to_delete — set[str]: КИЗы с requires_saving is False.
-                stats — dict с ключами total, empty_brand, unknown_brand,
-                        recognized, unique_recognized, saved, deleted,
-                        top_deleted.
-                        unique_recognized — количество уникальных Brand
-                        (по brand.name), для которых brand найден.
+                stats — dict со статистикой.
                 brands_unknown — dict[str, list[str]]:
-                        {норм_ключ: [сырая_1, сырая_2, ...]} — только
-                        для неизвестных непустых брендов. Порядок
-                        ключей и сырых строк — по мере обнаружения,
-                        дедуп сырых — по точному совпадению.
+                        {очищенный_ключ: [сырая_1, сырая_2, ...]}.
 
         Роль:
-            Матчинг — точное совпадение нормализованных строк.
-            Пустой brand_key → empty_brand, КИЗ сохраняется.
-            Неизвестный brand_key → unknown_brand + сырая строка
-            в brands_unknown, КИЗ сохраняется. Известный бренд →
-            recognized + развилка saved/deleted. top_deleted —
-            топ-10 брендов по количеству удалённых КИЗов.
+            Использует агрессивную нормализацию (без пунктуации).
+            Поиск идет по принципу: ключ бренда должен полностью
+            входить в искомую строку. Если не опознан, сырые данные
+            передаются в brands_unknown для UI-резолвера.
         """
         to_delete: set = set()
         stats = {
@@ -296,25 +287,51 @@ class KizUtils:
         brands_unknown: dict = {}
         recognized_brands: set = set()
 
+        # Строим маппинг агрессивно нормализованных ключей
+        clean_mapping = {}
+        for brand in set(brand_key_to_brand.values()):
+            for key in brand.get_all_keys():
+                ck = TextUtils.normalize_for_brand_matching(key)
+                if ck and ck not in clean_mapping:
+                    clean_mapping[ck] = brand
+
+        # Сортируем ключи по убыванию длины, чтобы самое длинное
+        # совпадение (например, "nike air") имело приоритет над коротким ("nike")
+        sorted_clean_keys = sorted(clean_mapping.keys(), key=len, reverse=True)
+
         for kiz, (brand_key, raw_brand) in kiz_to_brand_data.items():
-            if not brand_key:
+            if not raw_brand:
                 stats["empty_brand"] += 1
-                if logger is not None:
-                    logger.debug(
-                        f"КИЗ {kiz} → brand_key '' → пустой бренд"
-                    )
                 continue
 
-            brand = brand_key_to_brand.get(brand_key)
+            # Агрессивно нормализуем искомую строку
+            clean_search = TextUtils.normalize_for_brand_matching(raw_brand)
+            if not clean_search:
+                stats["empty_brand"] += 1
+                continue
+
+            brand = None
+
+            # 1. Ищем точное совпадение по агрессивной нормализации
+            if clean_search in clean_mapping:
+                brand = clean_mapping[clean_search]
+            else:
+                # 2. Ищем вхождение ключа в искомую строку
+                for ck in sorted_clean_keys:
+                    if ck in clean_search:
+                        brand = clean_mapping[ck]
+                        break
+
             if brand is None:
                 stats["unknown_brand"] += 1
-                bucket = brands_unknown.setdefault(brand_key, [])
+                # Группируем по clean_search, чтобы "Nike" и "NIKE" не спамили
+                bucket = brands_unknown.setdefault(clean_search, [])
                 if raw_brand not in bucket:
                     bucket.append(raw_brand)
                 if logger is not None:
                     logger.debug(
-                        f"КИЗ {kiz} → brand_key '{brand_key}' → "
-                        f"Brand не найден (сырое: {raw_brand!r})"
+                        f"КИЗ {kiz} → бренд '{raw_brand}' (норм: '{clean_search}') → "
+                        f"Brand не найден"
                     )
                 continue
 
@@ -329,14 +346,14 @@ class KizUtils:
                 )
                 if logger is not None:
                     logger.debug(
-                        f"КИЗ {kiz} → brand_key '{brand_key}' → "
+                        f"КИЗ {kiz} → бренд '{raw_brand}' → "
                         f"Brand {brand.name} → удалён"
                     )
             else:
                 stats["saved"] += 1
                 if logger is not None:
                     logger.debug(
-                        f"КИЗ {kiz} → brand_key '{brand_key}' → "
+                        f"КИЗ {kiz} → бренд '{raw_brand}' → "
                         f"Brand {brand.name} → сохранён"
                     )
 

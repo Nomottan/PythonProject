@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from ui.factories.factories import ButtonFactory, LabelFactory
+from ui.styles import ColorCalculator, WidgetStyle
 
 
 class PlannerDayPickerWidget(QWidget):
@@ -118,28 +119,25 @@ class PlannerDayPickerWidget(QWidget):
         """
         for day, btn in self._day_buttons.items():
             if day in self._selected:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(80, 160, 220, 1.0);
-                        color: #ffffff;
-                        border: none;
-                        border-radius: 4px;
-                        font-size: 12px;
-                    }
-                """)
+                WidgetStyle.apply_button(
+                    btn,
+                    bg_color=(80, 160, 220, 1.0),
+                    text_color=ColorCalculator.to_str((255, 255, 255)),
+                    border="none",
+                    border_radius=4,
+                    font_size=12,
+                    padding="0px",
+                )
             else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(50, 60, 70, 0.95);
-                        color: #d4d4d4;
-                        border: 1px solid #3a4556;
-                        border-radius: 4px;
-                        font-size: 12px;
-                    }
-                    QPushButton:hover {
-                        background-color: rgba(70, 80, 90, 0.95);
-                    }
-                """)
+                WidgetStyle.apply_button(
+                    btn,
+                    bg_color=(50, 60, 70, 0.95),
+                    text_color=ColorCalculator.to_str((212, 212, 212)),
+                    border=f"1px solid {ColorCalculator.to_str((58, 69, 86))}",
+                    border_radius=4,
+                    font_size=12,
+                    padding="0px",
+                )
         text = (
             ", ".join(str(d) for d in sorted(self._selected))
             if self._selected else "—"

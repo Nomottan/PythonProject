@@ -60,20 +60,20 @@ class TaskIdGenerator:
     """
 
     @staticmethod
-    def generate(storage) -> int:
-        """Генерирует новый task_id на основе текущего хранилища.
+    def generate(tasks: list) -> int:
+        """Генерирует новый task_id на основе текущего списка задач.
 
-        Вход: storage — PlannerTaskStorage с методом get_all().
+        Вход: tasks — объединённый список задач (активные + архив).
         Выход: int — новый уникальный идентификатор.
 
         Роль: берём сегодняшнюю дату как префикс, считаем сколько
               задач с этим префиксом уже есть, добавляем 1.
-              Если в хранилище появятся задачи из будущего
-              (например, руками), они не помешают — мы считаем
-              только свои.
+              Принимает объединённый список задач (активные + архив) — оба storage,
+              чтобы новый ID не совпал с уже существующим в любом из файлов.
+              Раньше принимал один storage.
         """
         today_prefix = datetime.now().strftime("%Y%m%d")
-        existing = storage.get_all()
+        existing = tasks
 
         # Считаем максимальный счётчик среди задач с сегодняшним
         # префиксом. Формат: YYYYMMDDNNN → 8 цифр префикс, 3 суффикс.
@@ -118,12 +118,6 @@ class RecurrenceCalculator:
                             следующую дату после from_date.
 
         Выход: date или None (если правило не задано или пустое).
-
-        Роль: единая точка вычисления. Раньше жила в
-              PlannerRecurrenceService.compute_next_date; вынесена
-              в утилиту, чтобы PlannerService тоже мог её использовать
-              без циклического импорта (PlannerService не должен
-              зависеть от PlannerRecurrenceService).
         """
         # Не генератор — правило повторения не применимо.
         if not task.is_generator():
@@ -131,113 +125,47 @@ class RecurrenceCalculator:
 
         rec_type = task.recurrence_type
 
-        # «Каждые N дней»: from_date + N. include_today не имеет
-        # смысла: цикл всегда идёт вперёд.
-        if rec_type == "every_n_days":
-            n = task.recurrence_value or 1
-            return from_date + timedelta(days=n)
+        match rec_type:
+            case "every_n_days":
+                n = task.recurrence_value or 1
+                return from_date + timedelta(days=n)
 
-        # «Дни недели»: from_date.weekday() даёт 0=пн..6=вс.
-        if rec_type == "weekdays":
-            weekdays = task.recurrence_weekdays or []
-            if not weekdays:
-                return None
-            # Если include_today и сегодня подходит — вернуть сразу.
-            if include_today and from_date.weekday() in weekdays:
-                return from_date
-            # Иначе — следующая подходящая дата в пределах недели.
-            for offset in range(1, 8):
-                d = from_date + timedelta(days=offset)
-                if d.weekday() in weekdays:
-                    return d
-            return None
-
-        # «Определённые числа месяца»: перебираем дни в списке.
-        if rec_type == "monthdays":
-            monthdays = sorted(task.recurrence_monthdays or [])
-            if not monthdays:
-                return None
-            # Если include_today и сегодняшнее число подходит — вернуть сразу.
-            if include_today and from_date.day in monthdays:
-                return from_date
-            y, m = from_date.year, from_date.month
-            # Ограничение в 24 месяца — страховка от зацикливания
-            # на правилах с отсутствующими числами (например, 31
-            # в феврале без use_last_day).
-            for _ in range(24):
-                for day in monthdays:
-                    try:
-                        candidate = date(y, m, day)
-                    except ValueError:
-                        # Числа нет в этом месяце. Если стоит
-                        # use_last_day — берём последний день.
-                        if task.recurrence_use_last_day:
-                            last_day = calendar.monthrange(y, m)[1]
-                            candidate = date(y, m, last_day)
-                        else:
-                            continue
-                    # Строго после from_date (include_today уже обработан).
-                    if candidate > from_date:
-                        return candidate
-                m += 1
-                if m > 12:
-                    m = 1
-                    y += 1
-            return None
-
-        return None
-
-    @staticmethod
-    def catch_up_date(task, today: date) -> Optional[date]:
-        """Догоняет пропущенные даты до today включительно.
-
-        Вход:
-            task — PlannerTask-генератор, у которого может быть
-                   next_generation_date в прошлом.
-            today — текущая дата.
-
-        Выход: ближайшая дата >= today по правилу, либо None.
-
-        Роль: при выходе из паузы пересчитывает next_generation_date,
-              «пропуская» просроченные генерации. Пример: правило
-              «каждые 3 дня», пользователь стоял на паузе 10 дней.
-              Пропущенные 3 генерации не создаются — catch_up
-              вернёт первую дату >= today.
-
-        Логика:
-            - Если next_generation_date задано — шагаем по правилу,
-              пока дата не станет >= today.
-            - Ограничение в 1000 итераций — страховка от зацикливания
-              на некорректных правилах.
-            - Fallback: если за 1000 шагов не дошли (или правило сломано)
-              — считаем от today с include_today=True.
-        """
-        current = None
-        if task.next_generation_date:
-            try:
-                current = datetime.strptime(
-                    task.next_generation_date, "%d.%m.%Y"
-                ).date()
-            except ValueError:
-                current = None
-
-        # Нет валидной даты — считаем от сегодня включительно.
-        if current is None:
-            return RecurrenceCalculator.compute_next_date(
-                task, today, include_today=True
-            )
-
-        # Шагаем по правилу, пока не «догоним» today.
-        for _ in range(1000):
-            if current >= today:
-                return current
-            current = RecurrenceCalculator.compute_next_date(
-                task, current, include_today=False
-            )
-            if current is None:
+            case "weekdays":
+                weekdays = task.recurrence_weekdays or []
+                if not weekdays:
+                    return None
+                if include_today and from_date.weekday() in weekdays:
+                    return from_date
+                for offset in range(1, 8):
+                    d = from_date + timedelta(days=offset)
+                    if d.weekday() in weekdays:
+                        return d
                 return None
 
-        # Fallback — правило сломано или слишком длинная пауза.
-        return RecurrenceCalculator.compute_next_date(
-            task, today, include_today=True
-        )
+            case "monthdays":
+                monthdays = sorted(task.recurrence_monthdays or [])
+                if not monthdays:
+                    return None
+                if include_today and from_date.day in monthdays:
+                    return from_date
+                y, m = from_date.year, from_date.month
+                for _ in range(24):
+                    for day in monthdays:
+                        try:
+                            candidate = date(y, m, day)
+                        except ValueError:
+                            if task.recurrence_use_last_day:
+                                last_day = calendar.monthrange(y, m)[1]
+                                candidate = date(y, m, last_day)
+                            else:
+                                continue
+                        if candidate > from_date:
+                            return candidate
+                    m += 1
+                    if m > 12:
+                        m = 1
+                        y += 1
+                return None
+
+            case _:
+                return None

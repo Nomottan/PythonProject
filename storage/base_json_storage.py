@@ -291,13 +291,38 @@ class ListJsonStorage(BaseJsonStorage):
         Роль: пересобирает список без элемента с нужным id. Если
               длина не изменилась — логирует warning и возвращает
               False без сохранения.
+              При дубликатах ID логирует warning и удаляет все совпадения (Q1=B —
+              осознанное решение). Для точечного удаления одного объекта —
+              remove_by_object.
         """
+        matches = sum(1 for t in self._data if self._get_id(t) == item_id)
+        if matches > 1:
+            self._log_warning(
+                f"Удаление: найдено {matches} записей с id={item_id} "
+                f"в {self._file_path.name}. Удаляю все."
+            )
+
         original_len = len(self._data)
         self._data = [t for t in self._data if self._get_id(t) != item_id]
         if len(self._data) == original_len:
             self._log_warning(
                 f"Удаление: элемент с id={item_id} не найден "
                 f"в {self._file_path.name}"
+            )
+            return False
+        self.save()
+        return True
+
+    def remove_by_object(self, item) -> bool:
+        """Удаляет конкретный объект по идентичности (is). В отличие от remove(id),
+        при дубликатах ID удаляет только переданный объект.
+        """
+        before = len(self._data)
+        self._data = [t for t in self._data if t is not item]
+        if len(self._data) == before:
+            self._log_warning(
+                f"Удаление по объекту: объект с id={self._get_id(item)} не найден "
+                f"в {self._file_path.name}."
             )
             return False
         self.save()

@@ -355,6 +355,7 @@ class BrandEditDialog(BaseEditDialog):
             on_close=self._apply_changes,
             width=550, height=500,
             log_manager_v2=log_manager_v2,
+            force_window=True,
         )
 
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -555,6 +556,8 @@ class BrandEditDialog(BaseEditDialog):
         Роль: после add_seller / remove_seller модель Seller
               изменилась. Записываем через sellers_brands_service.
         """
+        if not self.sellers:
+            return
         if self.main_window:
             self.main_window.sellers_brands_service.set_sellers_objects(
                 self.sellers,
@@ -748,7 +751,7 @@ class SellerChecklistDialog(ChecklistDialog):
             if seller in self.brand.sellers:
                 self.brand.remove_seller(seller)
 
-        if self.main_window is not None:
+        if self.main_window is not None and self.all_sellers:
             try:
                 self.main_window.sellers_brands_service.set_sellers_objects(
                     self.all_sellers,

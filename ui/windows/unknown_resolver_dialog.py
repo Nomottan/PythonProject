@@ -280,6 +280,7 @@ class ObjectPickerDialog(BaseEditDialog):
             width=450,
             height=500,
             log_manager_v2=log_manager_v2,
+            force_window=True,  # Окно выходит за рамки резолвера, но ограничено сервисным окном
         )
 
     def reject(self) -> None:

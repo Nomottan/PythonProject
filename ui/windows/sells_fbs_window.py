@@ -482,7 +482,11 @@ class SellsFBSWindow(BaseServiceWindow):
         service = self.main_window.sellers_brands_service
         while True:
             new_brand = Brand(name=raws[0], keys=list(raws))
-            sellers = service.get_sellers_with_brands()
+            brands = service.get_brands_objects()
+            for b in brands:
+                b.sellers.clear()
+            brands_dict = {b.name: b for b in brands}
+            sellers = service.get_sellers_objects(brands_dict=brands_dict)
             dialog = BrandEditDialog(
                 parent=parent,
                 brand=new_brand,
