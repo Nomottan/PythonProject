@@ -32,69 +32,26 @@ class WindowFactory:
 
     Роль: единая точка настройки дочернего окна — рамка,
           прозрачный фон, кнопка закрытия «✕», заголовок,
-          геометрия относительно родителя.
+          каркас main_layout.
 
     Публичный API:
         setup_child_window — настраивает каркас окна.
-        show_child_window — показывает окно и, при наличии
-                            active_child у родителя, помечает его.
+
+    Флаги, модальность и геометрия дочерних окон — ответственность
+    WindowManager при register_window.
     """
 
     @staticmethod
     def setup_child_window(child, title, bg_color=(64, 48, 66, 0.8),
-                           close_callback=None, frameless=True,
-                           stay_on_top=True, translucent_background=True,
-                           close_button=True, close_button_color="#fd5e53",
+                           close_callback=None, close_button=True,
+                           close_button_color=(253, 94, 83, 1.0),
                            return_layout=True,
-                           parent=None,
-                           service_window_override=None):
-        """Настраивает дочернее окно.
+                           parent=None):
+        """Настраивает дочернее окно (каркас).
 
-        Вход:
-            child — QMainWindow или QDialog.
-            title — заголовок.
-            bg_color — цвет фона центрального виджета (кортеж).
-            close_callback — функция на клик по «✕».
-            frameless — без системной рамки.
-            stay_on_top — поверх родителя.
-            translucent_background — прозрачный фон.
-            close_button — добавлять ли кнопку закрытия.
-            close_button_color — цвет кнопки закрытия.
-            return_layout — вернуть ли main_layout.
-            parent — Qt-родитель; нужен только для наследования
-                     service_window.
-            service_window_override — явное сервисное окно для
-                     центрирования дочерних окон. Если None —
-                     берётся у parent.
-
-        Выход: QVBoxLayout или None.
-
-        Роль: строит каркас окна: флаги, центральный виджет с
-              фоном и border-radius, top_layout с заголовком и
-              кнопкой закрытия. Дополнительно устанавливает
-              child.service_window: если наследник уже задал его
-              сам — не трогаем; иначе service_window_override,
-              иначе parent.service_window.
-
-        Центрирование: service_window — источник геометрии для
-        дочерних диалогов, которые хотят центрироваться «в рамках
-        сервисного окна», а не относительно своего прямого
-        Qt-родителя.
-
-        REPLACE: QSS центрального виджета и кнопки закрытия
-        собираются через WidgetStyle.apply_window_central и
-        WidgetStyle.apply_close_button.
+        Флаги, модальность и геометрия теперь управляются WindowManager.
+        Здесь только создается центральный виджет и кнопка закрытия.
         """
-        flags = 0
-        if frameless:
-            flags |= Qt.FramelessWindowHint
-        if stay_on_top:
-            flags |= Qt.WindowStaysOnTopHint
-        child.setWindowFlags(flags)
-
-        if translucent_background:
-            child.setAttribute(Qt.WA_TranslucentBackground)
-
         child.setWindowTitle(title)
 
         central = QWidget()
@@ -125,48 +82,9 @@ class WindowFactory:
 
         main_layout.addLayout(top_layout)
 
-        if getattr(child, 'service_window', None) is None:
-            if service_window_override is not None:
-                child.service_window = service_window_override
-            else:
-                child.service_window = getattr(parent, 'service_window', None)
-
         if return_layout:
             return main_layout
         return None
-
-    @staticmethod
-    def show_child_window(parent, child, modal=True, cover_parent=False):
-        """Показывает дочернее окно с геометрией относительно родителя.
-
-        Вход:
-            parent — родительское окно.
-            child — дочернее окно.
-            modal — оставлен для совместимости, не используется.
-            cover_parent — если True, окно полностью перекрывает
-                           родителя.
-
-        Выход: нет.
-
-        Роль: единая точка показа. Устанавливает parent.active_child
-              = child (для LoggerV2 UI-каналов), выставляет
-              геометрию и активирует окно.
-        """
-        parent_rect = parent.frameGeometry()
-
-        if cover_parent:
-            child.setGeometry(parent_rect)
-        else:
-            child.setGeometry(10, 10,
-                              parent_rect.width() - 20,
-                              parent_rect.height() - 50)
-
-        if hasattr(parent, "active_child"):
-            parent.active_child = child
-
-        child.show()
-        child.activateWindow()
-
 
 class ExtendedWindowFactory(WindowFactory):
     """Расширенная фабрика настройки окон.
@@ -188,46 +106,55 @@ class ExtendedWindowFactory(WindowFactory):
                      ok_cancel=False, ok_callback=None,
                      cancel_callback=None,
                      draggable=False, close_on_click_outside=False,
-                     modal=False, frameless=True, transparent=True,
-                     stay_on_top=True, center=True, on_close=None,
+                     on_close=None,
                      return_layout=None, return_content_layout=True,
-                     default_width=400, default_height=350,
-                     service_window_override=None):
-        """Настраивает каркас окна с расширенными возможностями.
+                     default_width=400, default_height=350):
+        """Настраивает каркас окна с расширенными возможностями (UI-часть).
 
-        Вход — см. поля класса. Все параметры опциональны.
-            service_window_override — явное сервисное окно для
-                центрирования. Если None — берётся у parent.
+        Вход:
+            window — QDialog или QMainWindow, которое настраиваем.
+            parent — Qt-родитель (для совместимости).
+            title — заголовок окна.
+            bg_color — цвет фона центрального виджета (кортеж).
+            close_button — добавлять ли кнопку закрытия «✕».
+            add_button — добавлять ли кнопку «+» (опционально).
+            add_button_text — текст кнопки добавления.
+            add_callback — callback для кнопки добавления.
+            action_button — текст большой кнопки действия (опционально).
+            action_callback — callback для большой кнопки.
+            action_button_alignment — выравнивание кнопки действия
+                                      ("stretch", "center", "left", "right").
+            ok_cancel — добавлять ли кнопки ОК/Отмена.
+            ok_callback — callback для ОК (по умолчанию accept/close).
+            cancel_callback — callback для Отмены (по умолчанию reject/close).
+            draggable — разрешить перетаскивание за центральный виджет.
+            close_on_click_outside — закрывать при клике вне окна.
+            on_close — callback, вызываемый перед физическим закрытием.
+            return_layout — если True и return_content_layout=False,
+                            вернёт главный layout.
+            return_content_layout — если True, вернёт layout для контента.
+            default_width, default_height — стартовые размеры окна.
 
-        Выход: content_layout, main_layout или None в зависимости
-               от флагов return_*.
+        Выход:
+            content_layout — QVBoxLayout для пользовательского контента (по умолчанию).
+            main_layout — QVBoxLayout всего окна (если return_layout=True).
+            None — если оба флага возврата False.
 
-        Роль: создаёт центральный виджет, top_layout с заголовком,
-              close_button (опц.), add_button (опц.), content_widget
-              для пользовательского содержимого, action_button и
-              ok/cancel (опц.), подключает draggable / click_outside /
-              on_close. Устанавливает window.service_window до
-              центрирования — _center_window уже читает его.
-
-        REPLACE: QSS центрального виджета собирается через
-        WidgetStyle.apply_window_central.
+        Роль:
+            Формирует визуальную структуру: центральный виджет, верхнюю панель
+            с заголовком и крестиком, контейнер для контента, кнопки действий
+            и ОК/Отмена. Подключает dragging и click-outside.
+            ВАЖНО: Не управляет флагами окна (frameless, stay_on_top),
+            не задает модальность (setWindowModality) и не центрирует окно.
+            Этими задачами теперь занимается исключительно WindowManager
+            при регистрации окна.
         """
-        # 1. Флаги окна.
-        flags = 0
-        if frameless:
-            flags |= Qt.FramelessWindowHint
-        if stay_on_top:
-            flags |= Qt.WindowStaysOnTopHint
-        window.setWindowFlags(flags)
-
-        if transparent:
-            window.setAttribute(Qt.WA_TranslucentBackground)
-
         window.setWindowTitle(title)
 
-        # 2. Центральный виджет.
+        # 1. Центральный виджет.
         central = QWidget()
         WidgetStyle.apply_window_central(central, bg_color)
+
         if isinstance(window, QMainWindow):
             window.setCentralWidget(central)
         else:
@@ -240,7 +167,7 @@ class ExtendedWindowFactory(WindowFactory):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
-        # 4. Верхняя панель.
+        # 2. Верхняя панель.
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(5)
@@ -266,14 +193,14 @@ class ExtendedWindowFactory(WindowFactory):
 
         main_layout.addLayout(top_layout)
 
-        # 5. Контейнер для пользовательского контента.
+        # 3. Контейнер для пользовательского контента.
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(5)
         main_layout.addWidget(content_widget)
 
-        # 6. Кнопка действия (action_button).
+        # 4. Кнопка действия (action_button).
         if action_button:
             action_btn = ButtonFactory.create_button(
                 window, action_button, (70, 120, 90, 0.8),
@@ -304,7 +231,7 @@ class ExtendedWindowFactory(WindowFactory):
                     btn_layout.addStretch()
                 main_layout.addLayout(btn_layout)
 
-        # 7. Кнопки OK/Отмена.
+        # 5. Кнопки OK/Отмена.
         if ok_cancel:
             btn_layout = QHBoxLayout()
             btn_layout.addStretch()
@@ -333,29 +260,22 @@ class ExtendedWindowFactory(WindowFactory):
             btn_layout.addWidget(cancel_btn)
             main_layout.addLayout(btn_layout)
 
-        # 8. Перетаскивание.
+        # 6. Перетаскивание.
         if draggable:
             ExtendedWindowFactory._setup_dragging(window, central)
 
-        # 9. Закрытие при клике вне окна.
+        # 7. Закрытие при клике вне окна.
         if close_on_click_outside:
             ExtendedWindowFactory._setup_click_outside_close(window)
 
-        # 10. Установка service_window ДО центрирования.
-        if getattr(window, 'service_window', None) is None:
-            if service_window_override is not None:
-                window.service_window = service_window_override
-            else:
-                window.service_window = getattr(parent, 'service_window', None)
-
-        # 11. Размер и центрирование.
+        # 8. Размер. Геометрию выставляет WindowManager при
+        # register_window; здесь только Qt-дефолтный минимум —
+        # маленький, чтобы окно не клампилось к default_width
+        # и не вылезало за MainWindow.
         window.resize(default_width, default_height)
-        window.setMinimumSize(default_width, default_height)
+        window.setMinimumSize(200, 150)
 
-        if center:
-            ExtendedWindowFactory._center_window(window, parent)
-
-        # 12. Callback при закрытии.
+        # 9. Callback при закрытии.
         if on_close:
             original_close = window.closeEvent
 
@@ -376,38 +296,6 @@ class ExtendedWindowFactory(WindowFactory):
         return None
 
     # ---------- Вспомогательные методы ----------
-
-    @staticmethod
-    def _center_window(window, parent):
-        """Центрирует окно относительно service_window или экрана.
-
-        Вход:
-            window — центрируемое окно.
-            parent — Qt-родитель; используется как fallback
-                     источника геометрии.
-
-        Выход: нет.
-
-        Роль:
-            Источник геометрии — window.service_window, если
-            задан, иначе parent. Если оба None — центрирование
-            от экрана (primaryScreen().availableGeometry()).
-            Если QApplication/screen недоступны — окно не
-            двигается. Это позволяет диалогам открываться без
-            Qt-родителя (например, программно созданным) —
-            без падения.
-        """
-        from PySide6.QtWidgets import QMainWindow
-        top = None
-        p = parent
-        while p is not None:
-            if isinstance(p, QMainWindow):
-                top = p
-                break
-            p = p.parent()
-        if top is None:
-            top = getattr(window, 'service_window', None) or parent
-        WindowStyle.center_in_app_window(window, anchor=top)
 
     @staticmethod
     def _setup_dragging(window, widget):

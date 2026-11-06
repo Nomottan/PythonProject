@@ -17,8 +17,7 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory,
     ListWidgetFactory, LayoutFactory,
 )
-from ui.styles import WidgetStyle
-from ui.factories.window_factories import ExtendedWindowFactory
+from ui.styles import WindowStyle, ColorCalculator
 from ui.windows.message_dialog import MessageDialog
 from ui.base.base_edit_dialog import BaseEditDialog
 
@@ -385,77 +384,30 @@ class BrandDetailWindow(BaseEditDialog):
                     main_window.open_brands_window()
             return
 
-        # Простой inline-диалог выбора бренда — оставляем через
-        # ExtendedWindowFactory, это не форма редактирования.
         parent_for_dialog = self.parent_window.parent_window
-        dialog = QDialog(parent_for_dialog)
-        dialog.setWindowTitle("Выбор бренда")
-        dialog.setModal(True)
-        dialog.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
-        dialog.setAttribute(Qt.WA_TranslucentBackground)
-
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=dialog,
-            parent=parent_for_dialog,
-            title="Выбор бренда",
-            bg_color=(90, 90, 120, 0.95),
-            close_button=True,
-            draggable=True,
-            close_on_click_outside=False,
-            modal=True,
-            center=True,
-            return_content_layout=True,
-            default_width=300,
-            default_height=150,
+        dialog = BrandPickerDialog(
+            parent_for_dialog, brand_names, self.brand_name,
+            log_manager_v2=None,
         )
+        if dialog.exec() == QDialog.Accepted:
+            new_brand = dialog.get_selected()
+            if new_brand:
+                self._move_mapping(article, new_brand)
 
-        content_layout.addWidget(LabelFactory.create_label(
-            dialog, "Выберите бренд для перемещения:",
-            bg_color=(0, 0, 0, 0), text_color=None,
-        ))
+    def _move_mapping(self, article: str, new_brand_name: str) -> None:
+        """Перемещает сопоставление в другой бренд.
 
-        combo = InputWidgetFactory.create_combo_box(
-            dialog, items=brand_names, current_index=0,
-        )
-        WidgetStyle.apply_combo_box(
-            combo,
-            bg_color=(60, 50, 70, 0.9),
-            text_color=None,
-            border="1px solid #5a4a5c",
-            border_radius=3,
-            padding="3px",
-        )
-        content_layout.addWidget(combo)
+        Вход:
+            article — артикул сопоставления.
+            new_brand_name — имя бренда-получателя.
 
-        btn_layout = QHBoxLayout()
-        btn_ok = ButtonFactory.create_button(
-            dialog, "Переместить", (70, 120, 90, 0.8), fixed_size=(120, 30),
-        )
-        btn_cancel = ButtonFactory.create_button(
-            dialog, "Отмена", (150, 80, 80, 0.8), fixed_size=(120, 30),
-        )
-        btn_ok.clicked.connect(
-            lambda: self._move_mapping(article, combo.currentText(), dialog)
-        )
-        btn_cancel.clicked.connect(dialog.reject)
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
-        content_layout.addLayout(btn_layout)
-
-        dialog.exec()
-
-    def _move_mapping(self, article: str, new_brand_name: str,
-                      dialog: QDialog) -> None:
-        """Перемещает сопоставление в другой бренд."""
+        Роль:
+            Проверка «новый бренд == текущий» — в BrandPickerDialog
+            (возврат None). Здесь только сама операция перемещения.
+        """
         try:
-            if new_brand_name == self.brand_name:
-                dialog.reject()
-                return
-
             entry = self.brand_data.pop(article, None)
             if entry is None:
-                dialog.reject()
                 return
 
             parent_mappings = self.parent_window.mappings
@@ -469,7 +421,136 @@ class BrandDetailWindow(BaseEditDialog):
 
             self._populate_list()
             self.parent_window._populate_list()
-            dialog.accept()
         except Exception as e:
-            print(f"Ошибка в _move_mapping: {e}")
-            dialog.reject()
+            if self.logger:
+                self.logger.critical(
+                    f"Ошибка в _move_mapping: {e}",
+                    can_influence=False,
+                )
+
+class BrandPickerDialog(BaseEditDialog):
+    """Диалог выбора бренда для перемещения сопоставления.
+
+    Назначение:
+        Показывает combo со списком брендов и кнопки
+        «Переместить»/«Отмена». Возвращает имя выбранного бренда,
+        если оно отличается от текущего; иначе None.
+
+    Роль в программе:
+        Открывается из BrandDetailWindow._edit_brand_for_mapping.
+        Заменяет inline-QDialog — каркас, регистрация в WindowManager
+        и модальность теперь из BaseEditDialog.
+
+    Атрибуты класса:
+        LOGGER_SOURCE, LOGGER_DOMAIN — идентификация для LoggerV2.
+    """
+
+    LOGGER_SOURCE = "BrandPickerDialog.mappings_window"
+    LOGGER_DOMAIN = "compare"
+
+    def __init__(self, parent, brand_names: list,
+                 current_brand_name: str, log_manager_v2=None):
+        """Конструктор.
+
+        Вход:
+            parent — родитель (BrandMappingsWindow → BrandDetailWindow → ...).
+            brand_names — list[str] всех брендов.
+            current_brand_name — имя бренда, из которого перемещаем.
+            log_manager_v2 — LogManagerV2 или None.
+
+        Роль: сохраняет данные, считает bg_color от родителя,
+              вызывает super().__init__.
+        """
+        self._brand_names = list(brand_names)
+        self._current = current_brand_name
+        self._selected = None
+
+        parent_bg = WindowStyle.resolve_parent_bg(
+            parent, (90, 90, 120, 0.95),
+        )
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: r,
+            g_fn=lambda g: g,
+            b_fn=lambda b: b,
+            alpha=0.95,
+        )
+
+        super().__init__(
+            parent=parent,
+            title="Выбор бренда",
+            bg_color=self.bg_color,
+            close_button=True,
+            ok_cancel=False,
+            draggable=True,
+            close_on_click_outside=False,
+            modal=True,
+            width=300,
+            height=150,
+            log_manager_v2=log_manager_v2,
+        )
+
+    # ---------- Наполнение ----------
+
+    def _build_content(self, layout) -> None:
+        """Строит label, combo и кнопки Переместить/Отмена.
+
+        Вход: layout — QVBoxLayout из BaseEditDialog.
+        """
+        layout.addWidget(LabelFactory.create_label(
+            self, "Выберите бренд для перемещения:",
+            bg_color=(0, 0, 0, 0), text_color=None,
+        ))
+
+        # Текущий бренд — выбран в combo по умолчанию (чтобы
+        # случайное нажатие «Переместить» не увело артикул в
+        # первый бренд списка).
+        initial_index = 0
+        if self._current in self._brand_names:
+            initial_index = self._brand_names.index(self._current)
+
+        self._combo = InputWidgetFactory.create_combo_box(
+            self, items=self._brand_names,
+            current_index=initial_index,
+        )
+        layout.addWidget(self._combo)
+
+        btn_layout = QHBoxLayout()
+        btn_ok = ButtonFactory.create_button(
+            self, "Переместить", (70, 120, 90, 0.8),
+            fixed_size=(120, 30),
+        )
+        btn_cancel = ButtonFactory.create_button(
+            self, "Отмена", (150, 80, 80, 0.8),
+            fixed_size=(120, 30),
+        )
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+
+    # ---------- Результат ----------
+
+    def _collect_result(self):
+        """Возвращает выбранный бренд, если он отличается от текущего.
+
+        Выход: str — имя нового бренда; None — если выбран текущий.
+
+        Роль: BaseEditDialog.accept() → _collect_result → _result.
+              Проверка «новый == текущий» здесь — в _move_mapping
+              эта ветка уже не нужна.
+        """
+        selected = self._combo.currentText()
+        if selected == self._current:
+            return None
+        return selected
+
+    def get_selected(self):
+        """Возвращает имя выбранного бренда или None.
+
+        Выход: str | None.
+        Роль: используется вызывающим кодом после exec().
+        """
+        return self.get_result()

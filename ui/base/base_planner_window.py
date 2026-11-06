@@ -92,7 +92,7 @@ class _BasePlannerListWindow(QMainWindow):
     # ============================================================
 
     def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8),
-                 log_manager_v2=None, main_config=None):
+                 log_manager_v2=None, main_config=None, modal=False):
         """Конструктор.
 
         Вход:
@@ -101,6 +101,8 @@ class _BasePlannerListWindow(QMainWindow):
             bg_color — цвет фона. Передаётся в WindowFactory и в скролл.
             log_manager_v2 — LogManagerV2 или None.
             main_config — MainConfig или None.
+            modal — модальность для WindowManager. По умолчанию
+                    False. PlannerArchiveWindow передаёт True.
         """
         super().__init__(parent)
 
@@ -167,6 +169,13 @@ class _BasePlannerListWindow(QMainWindow):
         self._timer.setInterval(self.RELOAD_INTERVAL_MS)
         self._timer.timeout.connect(self._reload_tasks)
         self._timer.start()
+
+        # Регистрация в WindowManager: окно занимает область
+        # Qt-родителя с отступами (10, 10, 0, 0).
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=True, modal=modal,
+            )
 
     # ============================================================
     # ПРИВАТНЫЕ МЕТОДЫ: ИСТОЧНИКИ И ОТРИСОВКА
@@ -338,7 +347,6 @@ class _BasePlannerListWindow(QMainWindow):
             log_manager_v2=self.log_manager_v2,
             mode=mode,
         )
-        dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted and self.EDITABLE:
             result = dialog.get_result()
             if result is not None:

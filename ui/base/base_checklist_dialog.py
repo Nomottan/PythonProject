@@ -52,8 +52,7 @@ class ChecklistDialog(BaseEditDialog):
     def __init__(self, parent=None, title="", bg_color=(64, 48, 66, 0.8),
                  close_button=True, draggable=True,
                  close_on_click_outside=True, modal=True,
-                 width=400, height=450, log_manager_v2=None,
-                 service_window_override=None) -> None:
+                 width=400, height=450, log_manager_v2=None) -> None:
         """Конструктор.
 
         Вход:
@@ -66,15 +65,10 @@ class ChecklistDialog(BaseEditDialog):
             modal — модальность.
             width, height — размеры.
             log_manager_v2 — LogManagerV2 или None.
-            service_window_override — явное сервисное окно для
-                центрирования. Основной сценарий: чек-лист
-                «Child Б внутри Child A» (SellerChecklistDialog
-                внутри BrandEditDialog) должен центрироваться
-                от сервисного окна, а не от маленького диалога.
 
         Роль: сохраняет self._title и self._checkbox_items до
-              super().__init__, прокидывает service_window_override
-              в BaseEditDialog.
+              super().__init__. Геометрию и модальность ставит
+              WindowManager через BaseEditDialog.
         """
         self._title = title
         self._checkbox_items: list = []
@@ -91,7 +85,6 @@ class ChecklistDialog(BaseEditDialog):
             modal=modal,
             center=True,
             log_manager_v2=log_manager_v2,
-            service_window_override=service_window_override,
         )
 
     # ---------- Абстрактные методы ----------

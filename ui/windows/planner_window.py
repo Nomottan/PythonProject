@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from ui.factories.factories import WindowFactory, ButtonFactory
-from ui.base.planner_base_window import _BasePlannerListWindow
+from ui.factories.factories import ButtonFactory
+from ui.base.base_planner_window import _BasePlannerListWindow
 from ui.windows.planner_themes_dialog import PlannerThemesDialog
 from ui.windows.planner_task_dialogs import NewTaskDialog
 from utils.log_tools.decorators import log_button_action
@@ -72,7 +72,6 @@ class PlannerWindow(_BasePlannerListWindow):
 
         self.service = planner_service
         self.archive_service = archive_service
-        self._archive_window = None
 
         super().__init__(
             parent, "Планировщик", bg_color=bg_color,
@@ -126,7 +125,6 @@ class PlannerWindow(_BasePlannerListWindow):
     def _on_new_task(self):
         """Открывает диалог, создаёт задачу, перерисовывает список."""
         dialog = NewTaskDialog(self, self.service, main_config=self.main_config)
-        dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
             result = dialog.get_result()
             priority = result["priority"]
@@ -154,16 +152,20 @@ class PlannerWindow(_BasePlannerListWindow):
             self._reload_tasks()
 
     def _on_open_archive(self):
-        """Открывает окно архива модально относительно PlannerWindow."""
+        """Открывает окно архива.
+
+        Модальность, флаги и геометрию ставит WindowManager
+        (register_window(modal=True) из _BasePlannerListWindow
+        при modal=True в PlannerArchiveWindow). Здесь только
+        создание и show().
+        """
         from ui.windows.planner_archive_window import PlannerArchiveWindow
-        self._archive_window = PlannerArchiveWindow(
+        archive = PlannerArchiveWindow(
             self,
             archive_service=self.archive_service,
             log_manager_v2=self.log_manager_v2,
         )
-        self._archive_window.setWindowModality(Qt.WindowModal)
-        WindowFactory.show_child_window(self, self._archive_window, cover_parent=True)
-        self._sync_archive_geometry()
+        archive.show()
 
     def _on_task_done(self, task: PlannerTask) -> None:
         """Кнопка ✓ — задача завершается и уходит в архив."""
@@ -187,7 +189,6 @@ class PlannerWindow(_BasePlannerListWindow):
     def _on_edit_task(self, task: PlannerTask) -> None:
         """Открывает диалог редактирования задачи и сохраняет результат."""
         dialog = NewTaskDialog(self, self.service, task=task, main_config=self.main_config)
-        dialog.setWindowModality(Qt.WindowModal)
         if dialog.exec() == QDialog.Accepted:
             result = dialog.get_result()
             self.service.update_task(
@@ -267,20 +268,6 @@ class PlannerWindow(_BasePlannerListWindow):
     # ============================================================
     # ВЗАИМОДЕЙСТВИЕ С ОКНОМ
     # ============================================================
-
-    def _sync_archive_geometry(self):
-        """Синхронизирует геометрию архива с PlannerWindow."""
-        if self._archive_window is None or not self._archive_window.isVisible():
-            return
-        geo = self.frameGeometry()
-        self._archive_window.setGeometry(
-            geo.x() - 10, geo.y() - 10, geo.width(), geo.height()
-        )
-
-    def resizeEvent(self, event):
-        """При изменении размера PlannerWindow — тянем за собой архив."""
-        super().resizeEvent(event)
-        self._sync_archive_geometry()
 
     def closeEvent(self, event):
         """Чистит active_child у MainWindow, обновляет мини-планировщик, затем — базовая логика."""

@@ -64,11 +64,6 @@ class ChecklistItemDialog(BaseEditDialog):
             log_manager_v2=None,
         )
 
-        from PySide6.QtCore import Qt as _Qt
-        self.setWindowFlag(_Qt.Window, True)
-        self.setWindowModality(_Qt.NonModal)
-        self.setWindowFlag(_Qt.WindowStaysOnTopHint, True)
-
     def _build_content(self, layout) -> None:
         """Поля short/detail + кнопки."""
         self._short_edit = InputWidgetFactory.create_default_line_edit(
@@ -170,26 +165,6 @@ class ChecklistItemDialog(BaseEditDialog):
             "detail": self._detail_edit.toPlainText().strip(),
         }
 
-    def showEvent(self, event):
-        """Центрирует диалог относительно родителя и поднимает поверх.
-
-        Роль: делегирует в WindowStyle.center_in_app_window.
-              Затем raise_() и activateWindow() — родитель
-              (MainCommentary) с Qt.WindowStaysOnTopHint; без
-              явного поднятия дочерний диалог рисуется за ним,
-              пользователь его не видит.
-        """
-
-        super().showEvent(event)
-        if getattr(self, "_placed_once", False):
-            return
-        self._placed_once = True
-        from ui.styles import WindowStyle
-        WindowStyle.center_in_app_window(self, anchor=self.parent())
-        self.raise_()
-        self.activateWindow()
-
-
 class ChecklistDialog(BaseEditDialog):
     """Модальный диалог чек-листа задачи — правка целиком.
 
@@ -237,7 +212,7 @@ class ChecklistDialog(BaseEditDialog):
             ok_cancel=not is_view,
             draggable=True,
             close_on_click_outside=is_view,
-            modal=True,
+            modal=not is_view,
             center=True,
             log_manager_v2=log_manager_v2,
         )

@@ -56,13 +56,18 @@ class Stage1ReviewDialog(QDialog):
             title="Подтверждение жёстких совпадений (этап 1)",
             bg_color=(40, 50, 60, 0.95),
             close_button=False,
-            modal=True,
-            center=True,
             draggable=True,
             return_content_layout=True,
             default_width=850,
             default_height=550,
         )
+
+        # Регистрация в WindowManager: модальный диалог (Level N+1),
+        # geometry — относительно MainWindow (fill_parent=False).
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=False, modal=True,
+            )
 
         info_label = LabelFactory.create_label(
             self,
@@ -212,12 +217,15 @@ class ConfirmMatchDialog(QDialog):
             title=f"Подтверждение совпадения (осталось {total_remaining})",
             bg_color=(40, 30, 50, 0.95),
             close_button=False,
-            modal=True,
-            center=True,
             return_content_layout=True,
             default_width=500,
             default_height=450,
         )
+
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=False, modal=True,
+            )
 
         content_layout.addWidget(LabelFactory.create_label(
             self, "Товар из листа поставки:",
@@ -328,13 +336,16 @@ class ManualMatchDialog(QDialog):
             title=f"Ручной выбор (осталось {total_remaining})",
             bg_color=(40, 30, 50, 0.95),
             close_button=False,
-            modal=True,
-            center=True,
             draggable=True,
             return_content_layout=True,
             default_width=700,
             default_height=900,
         )
+
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=False, modal=True,
+            )
 
         content_layout.addWidget(LabelFactory.create_label(
             self, "Товар из листа поставки:",

@@ -24,7 +24,8 @@ from ui.windows import (
     SellsFBSWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
     StringListDialog, PlannerWindow, KizBySellersWindow
 )
-from ui.factories.factories import ButtonFactory, LayoutFactory, WindowFactory
+from ui.managers.window_manager import WindowManager
+from ui.factories.factories import ButtonFactory, LayoutFactory
 from ui.widgets.planner_quick_view import PlannerQuickView
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
@@ -63,6 +64,11 @@ class MainWindow(QMainWindow):
         # --- Тег активности дочерних окон ---
         self.active_child = None
 
+        # --- Уровень MainWindow в иерархии окон ---
+        # window_level=0 — корень. Все дочерние окна получают
+        # window_level = parent.window_level + 1 в WindowManager.
+        self.window_level = 0
+
         # --- debug_enabled из config.json напрямую ---
         debug_enabled = self._read_debug_enabled()
 
@@ -76,6 +82,12 @@ class MainWindow(QMainWindow):
             source="MainWindow.main",
             domain="main",
         )
+
+        # --- Менеджер окон ---
+        # Единая точка регистрации, модальности и геометрии
+        # всех дочерних окон. Требует уже созданных log_manager_v2
+        # и self (для расчёта геометрии fill_parent=False окон).
+        self.window_manager = WindowManager(self, self.log_manager_v2)
 
         # Счётчик тиков on_timer — для периодического debug.
         self._timer_tick_count = 0
@@ -92,15 +104,6 @@ class MainWindow(QMainWindow):
         self.compare_mappings_storage = CompareMappingsStorage(
             self.paths, log_manager_v2=self.log_manager_v2,
         )
-
-        # --- Теги активности дочерних окон ---
-        self.sells_fbs_window = None
-        self.sellers_window = None
-        self.brands_window = None
-        self.returns_window = None
-        self.compare_window = None
-        self.kiz_by_sellers_window = None
-        self.planner_window = None
 
         # --- KizStorage (used_kiz.json) ---
         self.kiz_storage = KizStorage(
@@ -286,115 +289,110 @@ class MainWindow(QMainWindow):
         "Ошибка при открытии окна 'Списание КИЗов': {e}",
     )
     def open_sells_fbs_window(self):
-        if self.sells_fbs_window is None or not self.sells_fbs_window.isVisible():
-            self.sells_fbs_window = SellsFBSWindow(
-                self, log_manager_v2=self.log_manager_v2,
-            )
-            WindowFactory.show_child_window(self, self.sells_fbs_window)
-            self.logger.debug("open_sells_fbs_window: окно создано заново")
-        else:
-            self.sells_fbs_window.raise_()
-            self.sells_fbs_window.activateWindow()
+        existing = self.window_manager.get_window(SellsFBSWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug("open_sells_fbs_window: окно активировано")
+            return
+        window = SellsFBSWindow(self, log_manager_v2=self.log_manager_v2)
+        window.show()
+        self.logger.debug("open_sells_fbs_window: окно создано заново")
 
     @log_button_action(
         "open_returns_window",
         "Ошибка при открытии окна 'Возвраты': {e}",
     )
     def open_returns_window(self):
-        if self.returns_window is None or not self.returns_window.isVisible():
-            self.returns_window = ReturnsWindow(
-                self, log_manager_v2=self.log_manager_v2,
-            )
-            self.returns_window.destroyed.connect(
-                lambda: setattr(self, "returns_window", None)
-            )
-            WindowFactory.show_child_window(self, self.returns_window)
-            self.logger.debug("open_returns_window: окно создано заново")
-        else:
-            self.returns_window.raise_()
-            self.returns_window.activateWindow()
+        existing = self.window_manager.get_window(ReturnsWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug("open_returns_window: окно активировано")
+            return
+        window = ReturnsWindow(self, log_manager_v2=self.log_manager_v2)
+        window.show()
+        self.logger.debug("open_returns_window: окно создано заново")
 
     @log_button_action(
         "open_sellers_window",
         "Ошибка при открытии окна 'Продавцы': {e}",
     )
     def open_sellers_window(self):
-        if self.sellers_window is None or not self.sellers_window.isVisible():
-            # REPLACE: добавлен log_manager_v2 — SellersWindow
-            # создаёт свой LoggerV2.
-            self.sellers_window = SellersWindow(
-                self, log_manager_v2=self.log_manager_v2,
-            )
-            WindowFactory.show_child_window(self, self.sellers_window)
-            self.logger.debug("open_sellers_window: окно создано заново")
-        else:
-            self.sellers_window.raise_()
-            self.sellers_window.activateWindow()
+        existing = self.window_manager.get_window(SellersWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug("open_sellers_window: окно активировано")
+            return
+        window = SellersWindow(self, log_manager_v2=self.log_manager_v2)
+        window.show()
+        self.logger.debug("open_sellers_window: окно создано заново")
 
     def refresh_sellers_window(self):
         # Без декоратора: внутренний метод, не кнопка.
-        if self.sellers_window and self.sellers_window.isVisible():
-            self.sellers_window.refresh_ui()
+        window = self.window_manager.get_window(SellersWindow)
+        if window is not None:
+            window.refresh_ui()
 
     @log_button_action(
         "open_brands_window",
         "Ошибка при открытии окна 'Бренды': {e}",
     )
     def open_brands_window(self):
-        if self.brands_window is None or not self.brands_window.isVisible():
-            self.brands_window = BrandsWindow(
-                self, log_manager_v2=self.log_manager_v2,
-            )
-            WindowFactory.show_child_window(self, self.brands_window)
-            self.logger.debug("open_brands_window: окно создано заново")
-        else:
-            self.brands_window.raise_()
-            self.brands_window.activateWindow()
+        existing = self.window_manager.get_window(BrandsWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug("open_brands_window: окно активировано")
+            return
+        window = BrandsWindow(self, log_manager_v2=self.log_manager_v2)
+        window.show()
+        self.logger.debug("open_brands_window: окно создано заново")
 
     @log_button_action(
         "open_compare_window",
         "Ошибка при открытии окна 'Сравнение поставок': {e}",
     )
     def open_compare_window(self):
-        if self.compare_window is None or not self.compare_window.isVisible():
-            self.compare_window = CompareWindow(
-                self,
-                mappings_storage=self.compare_mappings_storage,
-                log_manager_v2=self.log_manager_v2,
-            )
-            WindowFactory.show_child_window(self, self.compare_window)
-            self.logger.debug("open_compare_window: окно создано заново")
-        else:
-            self.compare_window.raise_()
-            self.compare_window.activateWindow()
+        existing = self.window_manager.get_window(CompareWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug("open_compare_window: окно активировано")
+            return
+        window = CompareWindow(
+            self,
+            mappings_storage=self.compare_mappings_storage,
+            log_manager_v2=self.log_manager_v2,
+        )
+        window.show()
+        self.logger.debug("open_compare_window: окно создано заново")
 
     @log_button_action(
         "open_kiz_by_sellers_window",
         "Ошибка при открытии окна 'Продажи КИЗов': {e}",
     )
+    @log_button_action(
+        "open_kiz_by_sellers_window",
+        "Ошибка при открытии окна 'Продажи КИЗов': {e}",
+    )
     def open_kiz_by_sellers_window(self):
-        if (self.kiz_by_sellers_window is None
-                or not self.kiz_by_sellers_window.isVisible()):
-            self.kiz_by_sellers_window = KizBySellersWindow(
-                self, log_manager_v2=self.log_manager_v2,
-            )
-            WindowFactory.show_child_window(
-                self, self.kiz_by_sellers_window,
-            )
-            self.logger.debug(
-                "open_kiz_by_sellers_window: окно создано заново"
-            )
-        else:
-            self.kiz_by_sellers_window.raise_()
-            self.kiz_by_sellers_window.activateWindow()
+        existing = self.window_manager.get_window(KizBySellersWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug(
                 "open_kiz_by_sellers_window: окно активировано"
             )
+            return
+        window = KizBySellersWindow(
+            self, log_manager_v2=self.log_manager_v2,
+        )
+        window.show()
+        self.logger.debug(
+            "open_kiz_by_sellers_window: окно создано заново"
+        )
 
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
@@ -403,33 +401,25 @@ class MainWindow(QMainWindow):
         "open_datetime_window",
         "Ошибка при открытии окна 'Планировщик': {e}",
     )
+    @log_button_action(
+        "open_datetime_window",
+        "Ошибка при открытии окна 'Планировщик': {e}",
+    )
     def open_datetime_window(self):
-        if self.planner_window is None or not self.planner_window.isVisible():
-            # REPLACE: добавлен log_manager_v2.
-            self.planner_window = PlannerWindow(
-                self,
-                planner_service=self.planner_service,
-                archive_service=self.planner_archive_service,
-                log_manager_v2=self.log_manager_v2,
-            )
-            WindowFactory.show_child_window(self, self.planner_window)
-            self.logger.debug("open_datetime_window: окно создано заново")
-        else:
-            self.planner_window.raise_()
-            self.planner_window.activateWindow()
+        existing = self.window_manager.get_window(PlannerWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
             self.logger.debug("open_datetime_window: окно активировано")
-
-    def resizeEvent(self, event):
-        for child in (self.sells_fbs_window, self.sellers_window,
-                      self.brands_window, self.returns_window,
-                      self.compare_window, self.kiz_by_sellers_window,
-                      self.planner_window):
-            if child and child.isVisible():
-                parent_rect = self.frameGeometry()
-                child.setGeometry(10, 10,
-                                  parent_rect.width() - 20,
-                                  parent_rect.height() - 50)
-        super().resizeEvent(event)
+            return
+        window = PlannerWindow(
+            self,
+            planner_service=self.planner_service,
+            archive_service=self.planner_archive_service,
+            log_manager_v2=self.log_manager_v2,
+        )
+        window.show()
+        self.logger.debug("open_datetime_window: окно создано заново")
 
     def moveEvent(self, event):
         screen = QApplication.primaryScreen().availableGeometry()
@@ -495,6 +485,18 @@ class MainWindow(QMainWindow):
                 can_influence=False,
             )
 
+    def closeEvent(self, event):
+        """Закрывает все дочерние окна при закрытии MainWindow.
+
+        Вход: event — QCloseEvent.
+
+        Роль: WindowManager.close_all(except_=self) закрывает все
+              зарегистрированные окна каскадно. Без этого top-level
+              диалоги без Qt-родителя (NotificationDialog и т.п.)
+              оставались бы висеть после выхода.
+        """
+        self.window_manager.close_all(except_=self)
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

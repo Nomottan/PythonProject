@@ -22,7 +22,6 @@ from ui.factories.factories import (
 )
 from ui.styles import ColorCalculator
 from models.planner_task import ChecklistItem
-from ui.windows.message_dialog import NotificationDialog
 
 
 class ChecklistWidget(QWidget):
@@ -150,17 +149,6 @@ class ChecklistWidget(QWidget):
     def _sorted_items(self) -> list:
         """Сортировка: невыполненные сверху, внутри — по order."""
         return sorted(self._items, key=lambda i: (i.checked, i.order))
-
-    def _resolve_dialog_parent(self):
-        """Возвращает ближайший QDialog по цепочке parent()."""
-        from PySide6.QtWidgets import QMainWindow
-        w = self.parent()
-        depth = 0
-        while w is not None:
-            if isinstance(w, QMainWindow):
-                return w
-            w = w.parent()
-            depth += 1
 
     def _rebuild(self) -> None:
         """Очищает layout строк и перерисовывает."""
@@ -355,7 +343,14 @@ class ChecklistWidget(QWidget):
             self.changed.emit(self.get_items(), "edit")
 
     def _on_show_detail(self, item: ChecklistItem) -> None:
-        """Показывает детали при клике на short (в любом режиме)."""
+        """Показывает детали при клике на short (в любом режиме).
+
+        Импорт NotificationDialog — ленивый, внутри метода: на
+        этапе загрузки модуля не тянем ui.windows.message_dialog
+        → ui.base.base_message_dialog → ui.base.__init__ →
+        base_service_window → ui.factories (цикл).
+        """
+        from ui.windows.message_dialog import NotificationDialog
         text = item.detail.strip() or "Подробное описание отсутствует."
         NotificationDialog.notify(
             self.window(),

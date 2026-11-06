@@ -45,12 +45,6 @@ class PlannerTaskMainCommentary(QDialog):
         self._service = planner_service
         self._edit_mode = False
         self.service_window = parent
-        # --- Флаги окна ---
-        self.setWindowFlags(
-            Qt.Window | Qt.Dialog | Qt.FramelessWindowHint
-        )
-        self.setWindowModality(Qt.WindowModal)
-        self.setAttribute(Qt.WA_TranslucentBackground)
 
         # --- Цвета ---
         parent_bg = WindowStyle.resolve_parent_bg(
@@ -293,6 +287,13 @@ class PlannerTaskMainCommentary(QDialog):
         from ui.factories.window_factories import ExtendedWindowFactory
         ExtendedWindowFactory._setup_dragging(self, self._central_widget)
 
+        # Регистрация в WindowManager: модальное окно (Level N+1),
+        # geometry — относительно MainWindow (fill_parent=False).
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=False, modal=True,
+            )
+
     # ---------- Вспомогательные ----------
 
     @staticmethod
@@ -311,23 +312,6 @@ class PlannerTaskMainCommentary(QDialog):
         if avg <= 128:
             return (clamp(r + 40), clamp(g + 20), clamp(b + 20), 0.9)
         return (clamp(r - 20), clamp(g - 40), clamp(b - 40), 0.9)
-
-    def showEvent(self, event):
-        """Сдвигает диалог на +10 по X от штатной позиции Qt.
-
-        Роль: Qt центрирует QDialog относительно родителя в
-              showEvent — до вызова super(). После super() позиция
-              уже выставлена, добавляем сдвиг. Флаг — чтобы при
-              повторном show (например, из модального цикла) не
-              сдвигать второй раз.
-        """
-        super().showEvent(event)
-        if not getattr(self, "_x_shift_applied", False):
-            self._x_shift_applied = True
-            parent = self.parent()
-            WindowStyle.center_in_app_window(
-                self, anchor=parent,
-            )
 
     # ---------- Слоты ----------
 

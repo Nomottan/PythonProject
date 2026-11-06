@@ -33,8 +33,7 @@ class DialogSetupMixin:
                            width=400, height=350,
                            close_button=True, ok_cancel=True,
                            draggable=False, close_on_click_outside=False,
-                           modal=True, center=True, on_close=None,
-                           service_window_override=None):
+                           on_close=None):
         """Настраивает каркас диалога.
 
         Вход:
@@ -46,16 +45,14 @@ class DialogSetupMixin:
             ok_cancel — показывать ли кнопки ОК/Отмена.
             draggable — перетаскивание за тело.
             close_on_click_outside — закрывать при клике вне.
-            modal — модальность.
-            center — центрировать.
             on_close — callback при закрытии.
-            service_window_override — явное сервисное окно для
-                центрирования. Если None — наследуется у parent.
 
         Выход: content_layout — QVBoxLayout для контента.
 
         Роль: обёртка над ExtendedWindowFactory.setup_window.
               Кнопки ОК/Отмена замыкаются на self.accept / self.reject.
+              Модальность, центрирование и флаги — ответственность
+              WindowManager при register_window.
         """
         return ExtendedWindowFactory.setup_window(
             window=self,
@@ -68,11 +65,8 @@ class DialogSetupMixin:
             cancel_callback=self.reject if ok_cancel else None,
             draggable=draggable,
             close_on_click_outside=close_on_click_outside,
-            modal=modal,
-            center=center,
             on_close=on_close,
             return_content_layout=True,
             default_width=width,
             default_height=height,
-            service_window_override=service_window_override,
         )

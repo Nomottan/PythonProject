@@ -388,7 +388,7 @@ class PreparationService:
         # R1: путь returns.txt готовим заранее — он нужен уже в фазе 5.
         returns_txt_dir = PathManager.ensure_dir(
             Path(ctx.target_dir) / ctx.date_str
-            / f"Возвратов_{ctx.date_str}" / "Отчёты"
+            / f"Возвраты_{ctx.date_str}" / "Отчёты"
         )
         returns_txt_path = returns_txt_dir / "возвраты.txt"
 

@@ -88,12 +88,18 @@ class BrandsWindow(QMainWindow):
             close_button=True,
             draggable=False,
             close_on_click_outside=False,
-            center=True,
             on_close=self.save_and_close,
             return_content_layout=True,
             default_width=580,
             default_height=500,
         )
+
+        # Регистрация в WindowManager: BrandsWindow — псевдосервисное
+        # окно (не модальное, занимает область родителя с отступами).
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=True, modal=False,
+            )
 
         content_layout.addWidget(LabelFactory.create_header_label(self, "Бренды"))
 
@@ -355,7 +361,6 @@ class BrandEditDialog(BaseEditDialog):
             on_close=self._apply_changes,
             width=550, height=500,
             log_manager_v2=log_manager_v2,
-            force_window=True,
         )
 
         self.setAttribute(Qt.WA_DeleteOnClose, True)

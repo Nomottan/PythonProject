@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from ui.factories.button_factory import ButtonFactory
 from ui.factories.element_factory import LabelFactory
 from ui.windows.message_dialog import MessageDialog
-from ui.base.planner_base_window import _BasePlannerListWindow
+from ui.base.base_planner_window import _BasePlannerListWindow
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
 from ui.windows.planner_task_dialogs import (
     DeadlineEditDialog, PlannerRecurrenceEditDialog,
@@ -88,6 +88,7 @@ class PlannerArchiveWindow(_BasePlannerListWindow):
             parent, "Архив", bg_color=bg_color,
             log_manager_v2=log_manager_v2,
             main_config=getattr(parent, "main_config", None),
+            modal=True,
         )
 
         # ---------- ДАННЫЕ ----------

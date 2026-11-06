@@ -24,13 +24,12 @@ from PySide6.QtWidgets import (
 
 from ui.factories.factories import (
     LabelFactory, StatusLogFactory, WindowFactory,
-    ThreadFactory, FileDialogFactory,
+    ThreadFactory, FileDialogFactory, ButtonFactory, LayoutFactory,
 )
 from ui.styles import ColorCalculator
 from utils.log_tools.decorators import log_button_action
 from services.sales_accumulator import SalesAccumulatorService
 from ui.widgets.path_selector import PathSelector
-from ui.factories import ButtonFactory, LayoutFactory
 
 class BaseServiceWindow(QMainWindow):
     """Базовое окно сервиса.
@@ -108,9 +107,6 @@ class BaseServiceWindow(QMainWindow):
         if self.logger:
             self.logger.debug(f"{type(self).__name__}.__init__: старт")
 
-        self.bg_color = self.BG_COLOR
-        self.service_window = self
-
         # Каркас окна — из фабрики.
         self.main_layout = WindowFactory.setup_child_window(
             self, title, bg_color=self.bg_color,
@@ -130,6 +126,17 @@ class BaseServiceWindow(QMainWindow):
         self._ui_info_signal.connect(self.set_info)
         self._ui_status_signal.connect(self.set_status)
         self._ui_critical_signal.connect(self._show_critical_dialog)
+
+        # Регистрация в WindowManager: окно занимает область
+        # Qt-родителя с отступами (10, 10, 0, 0), немодальное.
+        # После регистрации WindowManager ставит флаги
+        # (Qt.Dialog | Qt.FramelessWindowHint), WA_TranslucentBackground
+        # и setWindowModality(NonModal) — то, что раньше делал
+        # WindowFactory.setup_child_window.
+        if parent is not None and hasattr(parent, "window_manager"):
+            parent.window_manager.register_window(
+                self, parent=parent, fill_parent=True, modal=False,
+            )
 
     def _show_critical_dialog(self, msg: str, can_influence: bool) -> None:
         """Показывает критический диалог в UI-потоке.
