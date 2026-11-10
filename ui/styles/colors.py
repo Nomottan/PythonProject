@@ -380,52 +380,33 @@ class ColorCalculator:
         return ColorCalculator.pack_rgba(new_r, new_g, new_b, a)
 
     @staticmethod
-    def indicator_unchecked(bg_color):
-        """Фон индикатора в обычном (не отмеченном) состоянии.
+    def error_color(bg_color):
+        """Вычисляет цвет рамки ошибки от фона.
 
-        Вход: bg_color — эффективный фон родителя (кортеж).
+        Вход:
+            bg_color — фон (кортеж или строка).
 
         Выход:
-            Кортеж (r, g, b) или (r, g, b, a) — через pack_rgba.
-            None при невалидном входе.
+            Кортеж через pack_rgba или None, если вход невалиден.
 
-        Роль: на тёмном фоне (avg < 127) индикатор светлее фона
-              в 1.5 раза (c + c//2), на светлом — темнее
-              (c − c//2). Полутон + контраст к подписи.
+        Роль:
+            Красноватый оттенок от фона для рамки-ошибки:
+                rgba = to_rgba(bg_color);
+                avg = (r + g + b) // 3;
+                new_r = clamp((avg + 10) * 2);
+                new_g = clamp(g // 2);
+                new_b = clamp(b // 2).
+            Alpha сохраняется. Применяется в WidgetStyle.apply_checkbox.
         """
-        value_fn = lambda c, avg: c + c // 2 if avg < 127 else c - c // 2
-        return ColorCalculator._adjust(bg_color, value_fn)
-
-    @staticmethod
-    def indicator_checked(bg_color):
-        """Фон индикатора в состоянии :checked.
-
-        Вход: bg_color — эффективный фон родителя.
-
-        Выход: кортеж через pack_rgba или None.
-
-        Роль: мягкий сдвиг на 1/8 канала в ту же сторону, что и
-              indicator_unchecked — отличие checked от unchecked
-              заметное, но не «вырви-глаз». Точка различия — 1/8
-              против 1/2 у unchecked.
-        """
-        value_fn = lambda c, avg: c - c // 8 if avg < 127 else c + c // 8
-        return ColorCalculator._adjust(bg_color, value_fn)
-
-    @staticmethod
-    def indicator_border(bg_color):
-        """Цвет рамки индикатора.
-
-        Вход: bg_color — эффективный фон родителя.
-
-        Выход: кортеж через pack_rgba или None.
-
-        Роль: c − c//5 (на 20% темнее фона) без проверки яркости —
-              рамка всегда темнее, читается как контур квадратика
-              и на светлом, и на тёмном фоне.
-        """
-        value_fn = lambda c, avg: c - c // 5
-        return ColorCalculator._adjust(bg_color, value_fn)
+        rgba = ColorCalculator.to_rgba(bg_color)
+        if rgba is None:
+            return None
+        r, g, b, a = rgba
+        avg = (r + g + b) // 3
+        new_r = ColorCalculator.clamp((avg + 10) * 2)
+        new_g = ColorCalculator.clamp(g // 2)
+        new_b = ColorCalculator.clamp(b // 2)
+        return ColorCalculator.pack_rgba(new_r, new_g, new_b, a)
 
     @staticmethod
     def extract_rgb(color) -> Tuple[int, int, int]:

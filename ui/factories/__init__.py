@@ -11,6 +11,7 @@ ui.factories:
 from .factories import (
     BaseWidgetFactory,
     ButtonFactory, ActionButtonType,
+    CheckBoxFactory,
     InputWidgetFactory,
     StatusLabel, LabelFactory,
     ListWidgetFactory, StatusLogFactory,
@@ -27,6 +28,7 @@ from .factories import (
 __all__ = [
     "BaseWidgetFactory",
     "ButtonFactory", "ActionButtonType",
+    "CheckBoxFactory",
     "InputWidgetFactory",
     "StatusLabel", "LabelFactory",
     "ListWidgetFactory", "StatusLogFactory",

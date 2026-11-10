@@ -16,7 +16,7 @@
 
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.factories.factories import (
-    LabelFactory, InputWidgetFactory, ListWidgetFactory,
+    LabelFactory, CheckBoxFactory, ListWidgetFactory,
 )
 
 
@@ -214,18 +214,18 @@ class ChecklistDialog(BaseEditDialog):
         object_name = self._get_checkbox_object_name()
 
         for item in checked_items:
-            cb = InputWidgetFactory.create_checkbox(
+            cb = CheckBoxFactory.create_checkbox(
                 self, self._get_item_label(item), checked=True,
-                bg_color=(0, 0, 0, 0), text_color=None,
+                bg_color=(0, 0, 0, 0),
                 object_name=object_name,
             )
             self._checkbox_items.append((cb, item))
             content_layout.addWidget(cb)
 
         for item in unchecked_items:
-            cb = InputWidgetFactory.create_checkbox(
+            cb = CheckBoxFactory.create_checkbox(
                 self, self._get_item_label(item), checked=False,
-                bg_color=(0, 0, 0, 0), text_color=None,
+                bg_color=(0, 0, 0, 0),
                 object_name=object_name,
             )
             self._checkbox_items.append((cb, item))

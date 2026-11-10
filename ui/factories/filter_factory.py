@@ -1,23 +1,21 @@
 """
 Фабрика виджетов панели фильтров.
 
-Содержит FilterFactory — единая точка создания тристейт-чекбокса
-с SVG-иконками, мастер-кнопки, кнопок категории, скролл-контейнера
-значений и самой панели FilterPanel.
+Содержит FilterFactory — единая точка создания тристейт-чекбокса,
+мастер-кнопки, кнопок категории, скролл-контейнера значений и
+самой панели FilterPanel.
 
 Роль в программе:
     Изолирует FilterPanel/FilterCategory от прямых вызовов
-    ButtonFactory / InputWidgetFactory / ListWidgetFactory.
+    ButtonFactory / CheckBoxFactory / ListWidgetFactory.
     Логика фильтра — в utils/filter_utils.py; панель — в
     ui/widgets/filter_panel.py. Фабрика только собирает виджеты.
 """
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt
 
 from ui.factories.button_factory import ButtonFactory
-from ui.factories.input_factory import InputWidgetFactory
+from ui.factories.checkbox_factory import CheckBoxFactory
 from ui.factories.widget_factory import ListWidgetFactory
 from ui.widgets.filter_panel import FilterPanel, FilterCategory
 
@@ -30,8 +28,6 @@ class FilterFactory:
         ui.widgets.filter_panel; фабрика только передаёт им
         параметры.
     """
-
-    _ICONS_DIR = Path(__file__).parent.parent / "styles" / "icons"
 
     # ---------- Панель и категория ----------
 
@@ -101,40 +97,26 @@ class FilterFactory:
     # ---------- Чекбоксы ----------
 
     @staticmethod
-    def create_tristate_checkbox(parent, bg_color):
-        """Создаёт тристейт-чекбокс с SVG-иконками.
+    def create_tristate_checkbox(parent, bg_color, text=""):
+        """Создаёт тристейт-чекбокс с текстом.
 
         Вход:
             parent — родитель.
             bg_color — фон.
+            text — подпись (по умолчанию пустая).
 
-        Выход: QCheckBox с setTristate(True), начальное состояние
-        Unchecked. Иконки — tristate_empty / tristate_partial /
-        tristate_full из ui/styles/icons/.
+        Выход: CheckBox с setTristate(True), начальное состояние
+        Unchecked.
 
-        Роль: иконки пробрасываются через icon_paths, который
-              поддержан InputWidgetFactory.create_checkbox и
-              WidgetStyle.apply_checkbox.
+        Роль: размер квадратика фиксирован (20), а сам виджет
+              растягивается под текст — поэтому fixed_size не
+              используется.
         """
-        icon_paths = {
-            "unchecked": (
-                FilterFactory._ICONS_DIR / "tristate_empty.svg"
-            ).as_posix(),
-            "indeterminate": (
-                FilterFactory._ICONS_DIR / "tristate_partial.svg"
-            ).as_posix(),
-            "checked": (
-                FilterFactory._ICONS_DIR / "tristate_full.svg"
-            ).as_posix(),
-        }
-        cb = InputWidgetFactory.create_checkbox(
-            parent, text="", bg_color=bg_color,
-            fixed_size=(20, 20),
-            icon_paths=icon_paths,
+        return CheckBoxFactory.create_checkbox(
+            parent, text=text, bg_color=bg_color,
+            square_size=20, position="left",
+            tristate=True, check_state=Qt.Unchecked,
         )
-        cb.setTristate(True)
-        cb.setCheckState(Qt.Unchecked)
-        return cb
 
     @staticmethod
     def create_value_checkbox(parent, text, checked, bg_color):
@@ -146,9 +128,9 @@ class FilterFactory:
             checked — начальное состояние.
             bg_color — фон.
 
-        Выход: QCheckBox.
+        Выход: CheckBox.
         """
-        return InputWidgetFactory.create_checkbox(
+        return CheckBoxFactory.create_checkbox(
             parent, text, checked=checked, bg_color=bg_color,
         )
 

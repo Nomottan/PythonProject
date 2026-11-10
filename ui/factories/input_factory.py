@@ -2,7 +2,7 @@
 Фабрика полей ввода.
 
 Содержит InputWidgetFactory — единая точка создания полей ввода
-(QLineEdit, QCheckBox, QComboBox, QTextEdit, QSpinBox,
+(QLineEdit, QComboBox, QTextEdit, QSpinBox,
 QDateTimeEdit, QDateEdit).
 
 QSS собирается через ui.styles.WidgetStyle.apply_*. Класс
@@ -11,7 +11,7 @@ QSS собирается через ui.styles.WidgetStyle.apply_*. Класс
 
 from PySide6.QtCore import QDateTime, QDate, QEvent
 from PySide6.QtWidgets import (
-    QLineEdit, QCheckBox, QComboBox, QTextEdit, QSpinBox,
+    QLineEdit, QComboBox, QTextEdit, QSpinBox,
     QDateTimeEdit, QAbstractSpinBox, QDateEdit, QApplication
 )
 from ui.styles import WidgetStyle, ColorCalculator
@@ -116,73 +116,6 @@ class InputWidgetFactory:
             padding, font_size, font_family, extra_style,
         )
         return line_edit
-
-    @staticmethod
-    def create_checkbox(parent, text, checked=False,
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                        border="none", border_radius=0, padding="0px",
-                        fixed_size=None, object_name=None, cursor_shape=None,
-                        font_size=None, font_weight=None,
-                        extra_style="", tooltip=None,
-                        indicator_size=(16, 16),
-                        indicator_border_radius=5,
-                        indicator_border_width=1,
-                        indicator_border_style="solid",
-                        *, icon_paths: dict | None = None):
-        """Создаёт стилизованный QCheckBox.
-
-        Вход:
-            parent — родитель.
-            text — подпись рядом с чекбоксом.
-            checked — начальное состояние.
-            bg_color, text_color, border, border_radius, padding — стиль.
-            fixed_size, object_name, cursor_shape — общие настройки.
-            font_size, font_weight — шрифт.
-            extra_style — доп. CSS.
-            tooltip — подсказка.
-            indicator_size — (w, h) квадратика-индикатора.
-            indicator_border_radius — скругление индикатора в px.
-            indicator_border_width — толщина рамки индикатора в px.
-            indicator_border_style — стиль рамки ("solid").
-            icon_paths — keyword-only. dict {"unchecked": str,
-                          "indeterminate": str, "checked": str} —
-                          абсолютные пути к SVG для состояний
-                          индикатора. Любой ключ опционален.
-                          None → индикатор рисуется только цветом.
-                          Пробрасывается в WidgetStyle.apply_checkbox.
-
-        Выход: QCheckBox с QSS.
-
-        Роль:
-            Единая точка создания чекбоксов. Цвета индикатора не
-            принимаются снаружи: WidgetStyle.apply_checkbox сам
-            считает их от эффективного фона родителя через
-            BackgroundResolver + ColorCalculator.indicator_*.
-            Это снимает риск «случайных» hex-констант и
-            рассинхронизации индикатора с фоном.
-        """
-
-        checkbox = QCheckBox(text, parent)
-        checkbox.setChecked(checked)
-
-        if object_name:
-            checkbox.setObjectName(object_name)
-        if cursor_shape is not None:
-            checkbox.setCursor(cursor_shape)
-        if tooltip:
-            checkbox.setToolTip(tooltip)
-        if fixed_size:
-            checkbox.setFixedSize(*fixed_size)
-
-        WidgetStyle.apply_checkbox(
-            checkbox, bg_color, text_color, border, border_radius,
-            padding, font_size, font_weight,
-            indicator_size, indicator_border_radius,
-            indicator_border_width, indicator_border_style,
-            extra_style,
-            icon_paths=icon_paths,
-        )
-        return checkbox
 
     @staticmethod
     def create_combo_box(parent, items=None, current_index=0,

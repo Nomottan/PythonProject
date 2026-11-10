@@ -24,6 +24,7 @@
 
 from .base_factory import BaseWidgetFactory
 from .button_factory import ButtonFactory, ActionButtonType
+from .checkbox_factory import CheckBoxFactory
 from .input_factory import InputWidgetFactory
 from .element_factory import StatusLabel, LabelFactory
 from .widget_factory import (
@@ -49,6 +50,7 @@ __all__ = [
     # Кнопки
     "ButtonFactory", "ActionButtonType",
     # Ввод
+    "CheckBoxFactory",
     "InputWidgetFactory",
     # Метки
     "StatusLabel", "LabelFactory",

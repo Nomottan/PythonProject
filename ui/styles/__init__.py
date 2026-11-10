@@ -3,6 +3,7 @@
 
 Реэкспортирует публичные классы:
     ColorCalculator — работа с цветами.
+    IconRenderer — рисование иконок через QPainter.
     SelectorBuilder — сборка QSS-селекторов.
     QssBuilder — сборка QSS-блоков.
     ScrollbarStyle — стиль скроллбаров.
@@ -17,6 +18,7 @@
 """
 
 from .colors import ColorCalculator
+from .icon_renderer import IconRenderer
 from .selectors import SelectorBuilder
 from .qss import QssBuilder
 from .scrollbar import ScrollbarStyle
@@ -26,6 +28,7 @@ from .bg_resolver import BackgroundResolver
 
 __all__ = [
     "ColorCalculator",
+    "IconRenderer",
     "SelectorBuilder",
     "QssBuilder",
     "ScrollbarStyle",

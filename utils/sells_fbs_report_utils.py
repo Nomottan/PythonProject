@@ -254,26 +254,39 @@ class BaseMpReportReader:
 
     @classmethod
     def _find_seller(cls, report_path, sellers, logger):
-        """Ищет продавца по имени файла.
+        """Ищет продавца по sanitized-имени в уже переименованном файле.
 
-        Дефолт: TextUtils.find_seller_by_file_name(stem.lower(), sellers).
-        Наследник может переопределить.
+        Роль:
+            Файл уже переименован сервисом подготовки (Отчёт_WB_Имя Фамилия_Дата).
+            Ищем по sanitize_filename(seller.name), так как исходные keys
+            (например, "ИП Иванов И.И.") не совпадают с новым именем,
+            а ключи других продавцов могут случайно содержать имя файла.
         """
         report_path = Path(report_path)
-        found = TextUtils.find_seller_by_file_name(
-            report_path.stem.lower(), sellers,
-        )
+        stem = report_path.stem
+
+        found = []
+        for s in sellers:
+            safe_name = TextUtils.sanitize_filename(s.name)
+            if safe_name and safe_name in stem:
+                found.append((len(safe_name), s))
+
         if not found:
             logger.report("  Не удалось определить продавца – пропущен")
             return None
-        if len(found) > 1:
+
+        # Сортируем по длине имени, чтобы "Иван Иванов" имел приоритет над "Иван"
+        found.sort(key=lambda x: x[0], reverse=True)
+
+        # Если топовые совпадения имеют одинаковую длину — неоднозначность
+        if len(found) > 1 and found[0][0] == found[1][0]:
             logger.report(
                 f"  Найдено несколько продавцов ({len(found)}), "
                 f"требуется уточнение – пропущен"
             )
             return None
 
-        seller = found[0]
+        seller = found[0][1]
         logger.report(f"  Продавец определён: {seller.name}")
         return seller
 
@@ -500,54 +513,6 @@ class WarehouseReportReader(BaseMpReportReader):
     _REQUIRED_SHEETS = ()
     COLLECT_PRICES = False
     _DESCRIPTION = "отчёт склада"
-
-    @classmethod
-    def _find_seller(cls, report_path, sellers, logger):
-        """Ищет продавца по имени файла «Отчёт_склада_{safe}_{date}.xlsx».
-
-        Вход:
-            report_path — путь к файлу.
-            sellers — список Seller.
-            logger — LoggerV2.
-
-        Роль:
-            Основной путь — TextUtils.find_seller_by_file_name
-            по seller.keys. Он работает для большинства имён,
-            но у файла склада имя построено из seller.name через
-            sanitize_filename — без ключей бренда. Поэтому при
-            промахе разбираем stem: убираем префикс
-            «Отчёт_склада_» и суффикс «_{D}_{M}_{YYYY}»,
-            остаток сравниваем с sanitize_filename(s.name) для
-            каждого продавца. Первое совпадение выигрывает.
-            Логирование — как в базе.
-        """
-        report_path = Path(report_path)
-
-        found = TextUtils.find_seller_by_file_name(
-            report_path.stem.lower(), sellers,
-        )
-        if len(found) == 1:
-            logger.report(f"  Продавец определён: {found[0].name}")
-            return found[0]
-        if len(found) > 1:
-            logger.report(f"  Найдено несколько продавцов ({len(found)}) – требуется уточнение")
-
-        # Fallback: разбор имени файла.
-        stem = report_path.stem
-        prefix = "Отчёт_склада_"
-        if stem.startswith(prefix):
-            middle = stem[len(prefix):]
-            # Отрезаем суффикс _D_M_YYYY (см. TaskContext.date_str).
-            parts = middle.rsplit("_", 3)
-            if len(parts) == 4:
-                middle = parts[0]
-            for s in sellers:
-                if middle == TextUtils.sanitize_filename(s.name):
-                    logger.report(f"  Продавец определён: {s.name}")
-                    return s
-
-        logger.report("  Не удалось определить продавца – пропущен")
-        return None
 
     @classmethod
     def _load_occurrences(cls, wb, logger) -> tuple:

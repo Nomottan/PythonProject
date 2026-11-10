@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QDialog
 
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, InputWidgetFactory,
+    ButtonFactory, LabelFactory, CheckBoxFactory,
     ListWidgetFactory,
 )
 from ui.styles import ColorCalculator
@@ -208,35 +208,25 @@ class ChecklistWidget(QWidget):
             down_btn.setEnabled(False)
         arrows_layout.addWidget(down_btn)
 
-        # --- Чекбокс ---
-        cb = InputWidgetFactory.create_checkbox(
-            row, text="", checked=item.checked,
-            bg_color=self._element_bg,
-        )
-        if self._mode == "view":
-            # В режиме view чекбокс только для вида — игнорируем клики
-            cb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        else:
-            cb.clicked.connect(
-                lambda checked, i=item: self._on_toggle(i, checked)
-            )
-        row_layout.addWidget(cb)
-
-        # --- Short-лейбл (в edit клик открывает редактор, иначе — просмотр) ---
+        # --- Чекбокс с интегрированным текстом ---
         if self._mode == "edit":
             on_click = lambda i=item: self._on_edit(i)
         else:
             on_click = lambda i=item: self._on_show_detail(i)
 
-        lbl = LabelFactory.create_label(
-            row, item.short,
-            bg_color=(0, 0, 0, 0),
-            alignment=Qt.AlignLeft | Qt.AlignVCenter,
-            word_wrap=True,
-            clickable=True,
-            on_click=on_click,
+        cb = CheckBoxFactory.create_checkbox(
+            row, text=item.short, checked=item.checked,
+            bg_color=self._element_bg,
+            position="left",
+            fixed_height=28,
+            read_only=(self._mode == "view"),
         )
-        row_layout.addWidget(lbl, 1)
+        cb.text_clicked.connect(on_click)
+        if self._mode != "view":
+            cb.clicked.connect(
+                lambda checked, i=item: self._on_toggle(i, checked)
+            )
+        row_layout.addWidget(cb, 1)
 
         # Стрелки видны в edit и view, скрыты в work
         arrows.setVisible(self._mode in ("edit", "work"))

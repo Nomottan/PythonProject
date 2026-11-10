@@ -20,8 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, InputWidgetFactory,
-    ListWidgetFactory, LayoutFactory,
+    ButtonFactory, ListWidgetFactory,
 )
 from ui.styles import ColorCalculator
 from utils.filter_utils import FieldDef, FilterCore
@@ -80,18 +79,10 @@ class FilterCategory(QWidget):
         header.setSpacing(4)
 
         self._tristate_cb = FilterFactory.create_tristate_checkbox(
-            self, self._bg_color,
+            self, self._bg_color, text=self._field_def.label,
         )
         self._tristate_cb.clicked.connect(self._on_tristate_clicked)
         header.addWidget(self._tristate_cb)
-
-        self._label = LabelFactory.create_label(
-            self, self._field_def.label,
-            bg_color=(0, 0, 0, 0), text_color=None,
-            clickable=True, on_click=self._toggle_expanded,
-            alignment=Qt.AlignLeft | Qt.AlignVCenter,
-        )
-        header.addWidget(self._label)
 
         self._arrow_btn = ButtonFactory.create_button(
             self, "", self._bg_color,
@@ -220,12 +211,12 @@ class FilterCategory(QWidget):
         return set(self._selected)
 
     def refresh_counter(self) -> None:
-        """Обновляет подпись лейбла категории.
+        """Обновляет подпись чекбокса категории.
 
         Роль: счётчик выбранных значений не показываем — он
-              растягивает лейбл. Текст всегда — имя категории.
+              растягивает виджет. Текст всегда — имя категории.
         """
-        self._label.setText(self._field_def.label)
+        self._tristate_cb.setText(self._field_def.label)
 
     # ---------- Внутренние ----------
 
@@ -332,7 +323,11 @@ class FilterCategory(QWidget):
             self._select_all()
 
     def _update_tristate(self) -> None:
-        """Синхронизирует состояние тристейт-чекбокса."""
+        """Синхронизирует состояние тристейт-чекбокса.
+
+        CheckBox обновляет pixmap индикатора сам при setCheckState —
+        unpolish/polish/update не нужны.
+        """
         self._tristate_cb.blockSignals(True)
         if self._values and self._selected == set(self._values):
             self._tristate_cb.setCheckState(Qt.Checked)
@@ -341,9 +336,6 @@ class FilterCategory(QWidget):
         else:
             self._tristate_cb.setCheckState(Qt.PartiallyChecked)
         self._tristate_cb.blockSignals(False)
-        self._tristate_cb.style().unpolish(self._tristate_cb)
-        self._tristate_cb.style().polish(self._tristate_cb)
-        self._tristate_cb.update()
 
     def _select_all(self) -> None:
         """Отмечает все значения."""

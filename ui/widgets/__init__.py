@@ -10,6 +10,7 @@
     editable_list_widget.py             — редактируемый список строк.
     path_selector.py                    — виджет выбора папки.
     file_list_widget.py                 — список файлов с крестиком.
+    checkbox.py                         — композитный чекбокс CheckBox.
 
 Публичные виджеты реэкспортируются. _BaseTaskButton — приватный,
 наружу не выходит.
@@ -25,6 +26,7 @@ from .editable_list_widget import EditableListWidget
 from .file_list_widget import FileListWidget
 from .filter_panel import FilterPanel, FilterCategory
 from .checklist_widget import ChecklistWidget
+from .checkbox import CheckBox
 
 __all__ = [
     "DeadlineTaskButton",
@@ -37,4 +39,5 @@ __all__ = [
     "FileListWidget",
     "FilterCategory",
     "ChecklistWidget",
+    "CheckBox",
 ]

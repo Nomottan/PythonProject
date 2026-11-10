@@ -17,6 +17,7 @@ from .window import WindowStyle
 from .selectors import SelectorBuilder
 from .bg_resolver import BackgroundResolver
 from pathlib import Path
+from PySide6.QtGui import QFont, QFontMetrics
 
 class WidgetStyle:
     """Фасад стилей.
@@ -57,6 +58,29 @@ class WidgetStyle:
         if extra_style:
             current = widget.styleSheet()
             widget.setStyleSheet(current + extra_style)
+
+    @staticmethod
+    def get_text_height(widget, font_size=None) -> int:
+        """Вычисляет высоту текста на основе стиля шрифта.
+
+        Вход:
+            widget — QWidget, чей шрифт используется как базовый.
+            font_size — размер шрифта в пикселях (как в QSS font-size).
+                        Если None — используется текущий шрифт виджета.
+
+        Выход: высота текста (int).
+
+        Роль:
+            Единая точка вычисления высоты текста для стилевых
+            расчетов. Если font_size задан, создаётся QFont с
+            pixelSize и вычисляется QFontMetrics.height(). Если
+            нет — QFontMetrics(widget.font()).height().
+        """
+        if font_size is not None:
+            f = QFont(widget.font())
+            f.setPixelSize(font_size)
+            return QFontMetrics(f).height()
+        return QFontMetrics(widget.font()).height()
 
     @staticmethod
     def _effective_text_for(widget, bg_color, forced=None):
@@ -253,129 +277,71 @@ class WidgetStyle:
             style += extra_style
         edit.setStyleSheet(style)
 
-    def apply_checkbox(cb, bg_color, text_color=None, border="none",
-                       border_radius=0, padding="0px", font_size=None,
-                       font_weight=None,
-                       indicator_size=(16, 16),
-                       indicator_border_radius=5,
-                       indicator_border_width=1,
-                       indicator_border_style="solid",
-                       extra_style="",
-                       *, icon_paths: dict | None = None) -> None:
-        """QSS для QCheckBox.
+    @staticmethod
+    def apply_checkbox(widget, bg_color, error_color=None, padding="0px",
+                       spacing=6, square_size=None, extra_style="") -> None:
+        """QSS для CheckBox.
 
         Вход:
-            cb — QCheckBox.
-            bg_color — фон основного блока.
-            text_color — цвет текста; None → контрастный.
-            border, border_radius, padding — стиль.
-            font_size, font_weight — шрифт.
-            indicator_size — (w, h) квадратика-индикатора.
-            indicator_border_radius — скругление индикатора в px.
-            indicator_border_width — толщина рамки индикатора в px.
-            indicator_border_style — стиль рамки ("solid").
+            widget — CheckBox (композит на базе QWidget).
+            bg_color — эффективный фон (кортеж или строка).
+            error_color — цвет рамки ошибки. None → рамка совпадает
+                          с bg_color (визуально не видна).
+            padding — QSS padding для текстовой метки.
+            spacing — отступ между квадратиком и текстом;
+                      устанавливается в layout виджета.
+            square_size — размер квадратика для расчёта border-radius
+                          рамки. None → 3px.
             extra_style — дополнительный CSS.
-            icon_paths — keyword-only. dict {"unchecked": str,
-                          "indeterminate": str, "checked": str} —
-                          абсолютные пути к SVG для состояний
-                          индикатора. Любой ключ опционален. None →
-                          индикатор рисуется только цветом.
-                          Пробрасывается в QssBuilder.indicator_rule.
 
         Выход: нет.
 
         Роль:
-            Единая сборка QSS чекбокса. Три базовых цвета
-            индикатора (unchecked / checked / border) считаются от
-            эффективного фона родителя через
-            ColorCalculator.indicator_*; hover/pressed/disabled —
-            через ColorCalculator.hover/pressed/disabled от
-            unchecked/checked. Если эффективный фон не удалось
-            получить (None) или он полностью прозрачен
-            (alpha == 0) — fallback (100, 100, 100). Fallback
-            живёт только здесь.
+            Единая точка стилизации CheckBox. Устанавливает:
+                — QSS самого CheckBox: рамка 1px (error_color или
+                  bg_color) + border-radius;
+                — QSS текстовой метки через WidgetStyle.apply_label:
+                  цвет через _effective_text_for, padding;
+                — spacing в layout виджета;
+                — extra_style.
+            При error_color=None рамка возвращается к bg_color —
+            сброс ошибки без потери рамки.
         """
+        if bg_color is None or not isinstance(bg_color, (tuple, list)):
+            bg_color = (255, 255, 255, 1.0)
 
-        # Шаг 1. Эффективный фон.
-        effective_bg = BackgroundResolver.resolve_bg_color(cb, bg_color)
+        border_color = error_color if error_color is not None else bg_color
+        radius = max(3, (square_size // 4) if square_size else 3)
 
-        # Шаг 2. Fallback — единственная точка.
-        if effective_bg is None:
-            effective_bg = (100, 100, 100)
-        elif (isinstance(effective_bg, (tuple, list))
-              and len(effective_bg) >= 4
-              and float(effective_bg[3]) == 0.0):
-            effective_bg = (100, 100, 100)
-
-        # Шаг 3. Три базовых цвета индикатора.
-        unchecked_bg = ColorCalculator.indicator_unchecked(effective_bg)
-        checked_bg = ColorCalculator.indicator_checked(effective_bg)
-        border_c = ColorCalculator.indicator_border(effective_bg)
-        # Страховка: если _adjust вернул None (невалидный вход,
-        # но fallback уже отработал) — те же (100, 100, 100).
-        if unchecked_bg is None:
-            unchecked_bg = (100, 100, 100)
-        if checked_bg is None:
-            checked_bg = (100, 100, 100)
-        if border_c is None:
-            border_c = (100, 100, 100)
-
-        # Шаг 4. Состояния — через существующие публичные методы.
-        unchecked_hover = ColorCalculator.hover(unchecked_bg)
-        checked_hover = ColorCalculator.hover(checked_bg)
-        unchecked_pressed = ColorCalculator.pressed(unchecked_bg)
-        checked_pressed = ColorCalculator.pressed(checked_bg)
-        disabled_bg = ColorCalculator.disabled(unchecked_bg)
-
-        # Шаг 5. Текст — от эффективного фона, как в варианте А.
-        text_c = WidgetStyle._effective_text_for(
-            cb, effective_bg, text_color,
-        )
-
-        # Шаг 6. Сборка.
         selector = SelectorBuilder.build(
-            "QCheckBox", cb.objectName() or None)
+            "CheckBox", widget.objectName() or None)
 
-        # Шаг 6a. Если переданный фон полностью прозрачен — не пишем
-        # background-color в QSS. Иначе Qt рисует у QCheckBox свою
-        # серую подложку (текстовое поле), и оно торчит поверх фона
-        # родителя. Без свойства виджет наследует фон — ничего лишнего.
-
-        base_bg = None
         style = QssBuilder.base_rule(
             selector,
-            bg_color=base_bg,
-            text_color=text_c,
-            border=border,
-            border_radius=6,
-            padding=padding,
-            font_size=font_size,
-            font_weight=font_weight,
+            border=f"1px solid {ColorCalculator.to_str(border_color)}",
+            border_radius=radius,
         )
-        style += QssBuilder.indicator_rule(
-            selector,
-            indicator_size,
-            indicator_border_width,
-            indicator_border_style,
-            ColorCalculator.to_str(border_c),
-            indicator_border_radius,
-            state_colors={
-                "unchecked_bg": unchecked_bg,
-                "checked_bg": checked_bg,
-                "unchecked_hover": unchecked_hover,
-                "checked_hover": checked_hover,
-                "unchecked_pressed": unchecked_pressed,
-                "checked_pressed": checked_pressed,
-                "disabled_bg": disabled_bg,
-            },
-            hover_selector=f"{selector}:hover",
-            icon_paths=icon_paths,
-        )
-
         if extra_style:
             style += extra_style
+        widget.setStyleSheet(style)
 
-        cb.setStyleSheet(style)
+        text_label = getattr(widget, "_text_label", None)
+        if text_label is not None:
+            text_color = WidgetStyle._effective_text_for(
+                widget, bg_color, None,
+            )
+            WidgetStyle.apply_label(
+                text_label,
+                bg_color=(0, 0, 0, 0),
+                text_color=text_color,
+                padding=padding,
+                border_radius=0,
+                border="none",
+            )
+
+        layout = widget.layout()
+        if layout is not None:
+            layout.setSpacing(spacing)
 
     @staticmethod
     def apply_combo_box(combo, bg_color, text_color=None, border="none",
