@@ -114,14 +114,18 @@ class QssBuilder:
 
         Выход: QSS-блок.
         """
+
         return (
             f" {selector} {{ "
-            f"image: url({data_uri}); "  # Убрали одинарные кавычки
+            f"subcontrol-origin: padding; "
+            f"subcontrol-position: center center; "
+            f"image: url('{data_uri}'); "
             f"width: {width}px; "
             f"height: {height}px; "
             f"margin-right: {margin_right}; "
             f"}}"
         )
+
 
     @staticmethod
     def item_rule(selector: str, padding: str = "2px",

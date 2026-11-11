@@ -80,7 +80,8 @@ class CheckBox(QWidget):
                  font_size: int | None = None,
                  read_only: bool = False,
                  word_wrap: bool = True,
-                 text_padding: str = "1px"):
+                 text_padding: str = "1px",
+                 border: str = "none"):
         """Конструктор.
 
         Вход:
@@ -103,6 +104,8 @@ class CheckBox(QWidget):
         self._hovered = False
         self._pressed = False
         self._read_only = read_only
+        self._text_padding = text_padding
+        self._border = border
 
         self._text_label = LabelFactory.create_label(
             self, text=text, bg_color=text_bg, padding=text_padding,
@@ -151,7 +154,8 @@ class CheckBox(QWidget):
         self._icon_label.hover_changed.connect(self._on_hover_changed)
         WidgetStyle.apply_checkbox(
             self, self.bg_color, error_color=None,
-            padding=text_padding, square_size=self._square_size,
+            padding=self._text_padding, square_size=self._square_size,
+            border=self._border,
         )
         self._refresh_icon()
 
@@ -246,14 +250,14 @@ class CheckBox(QWidget):
             err = ColorCalculator.error_color(self.bg_color)
             WidgetStyle.apply_checkbox(
                 self, self.bg_color, error_color=err,
-                padding=self._text_label.styleSheet() and "1px" or "1px",  # fallback
-                square_size=self._square_size,
+                padding=self._text_padding, square_size=self._square_size,
+                border=self._border,
             )
         else:
             WidgetStyle.apply_checkbox(
                 self, self.bg_color, error_color=None,
-                padding="1px",
-                square_size=self._square_size,
+                padding=self._text_padding, square_size=self._square_size,
+                border=self._border,
             )
 
     # ---------- Обработчики мыши ----------

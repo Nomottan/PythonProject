@@ -344,11 +344,14 @@ class ColorCalculator:
         return ColorCalculator.to_str(text)
 
     @staticmethod
-    def element_bg_for(bg_color) -> tuple:
+    def element_bg_for(bg_color, r_div: int = 1, g_div: int = 1,
+                       b_div: int = 1, divisor: int = 8) -> tuple:
         """Производный цвет элемента от фона родителя.
 
         Вход:
             bg_color — кортеж/список/строка или None.
+            r_div, g_div, b_div — множители (доли) для каналов.
+            divisor — делитель (по умолчанию 8, что дает 1/8).
 
         Выход:
             Кортеж (r, g, b) при a == 1.0 либо (r, g, b, a) —
@@ -360,11 +363,10 @@ class ColorCalculator:
                 avg = (r + g + b) // 3;
                 edge = 255 if avg < 127 else 0;
                 sign = 1 if avg < 127 else -1;
-                c' = clamp(c + (c + edge) * sign // 8).
-            На тёмном фоне каждый канал движется к белому на 1/8
-            расстояния до 255. На светлом — к чёрному на 1/8
-            расстояния до 0. Цветность (соотношение каналов)
-            сохраняется, к серому не усредняется.
+                c' = clamp(c + (c + edge) * sign * div // divisor).
+            На тёмном фоне каждый канал движется к белому. На светлом —
+            к чёрному. Если передать r_div=2, divisor=10, канал
+            сдвинется на 2/10 дистанции.
             При невалидном входе — fallback (63, 63, 63, 1.0).
         """
         rgba = ColorCalculator.to_rgba(bg_color)
@@ -374,9 +376,10 @@ class ColorCalculator:
         avg = (r + g + b) // 3
         edge = 255 if avg < 127 else 0
         sign = 1 if avg < 127 else -1
-        new_r = ColorCalculator.clamp(r + (r + edge) * sign // 8)
-        new_g = ColorCalculator.clamp(g + (g + edge) * sign // 8)
-        new_b = ColorCalculator.clamp(b + (b + edge) * sign // 8)
+
+        new_r = ColorCalculator.clamp(r + (r + edge) * sign * r_div // divisor)
+        new_g = ColorCalculator.clamp(g + (g + edge) * sign * g_div // divisor)
+        new_b = ColorCalculator.clamp(b + (b + edge) * sign * b_div // divisor)
         return ColorCalculator.pack_rgba(new_r, new_g, new_b, a)
 
     @staticmethod
@@ -407,6 +410,44 @@ class ColorCalculator:
         new_g = ColorCalculator.clamp(g // 2)
         new_b = ColorCalculator.clamp(b // 2)
         return ColorCalculator.pack_rgba(new_r, new_g, new_b, a)
+
+    @staticmethod
+    def action_bg(action_name: str, bg_color) -> tuple:
+        """Вычисляет фон для кнопки действия от базового фона.
+
+        Вход:
+            action_name — тип действия.
+            bg_color — базовый фон.
+
+        Выход: кортеж цвета.
+        """
+        if action_name in ("delete", "close"):
+            res = ColorCalculator.error_color(bg_color)
+            return res if res is not None else (63, 63, 63, 1.0)
+
+        match action_name:
+            case "start":
+                return ColorCalculator.element_bg_for(
+                    bg_color, r_div=1, g_div=2, b_div=2, divisor=10
+                )
+            case "stop":
+                return ColorCalculator.element_bg_for(
+                    bg_color, r_div=2, g_div=2, b_div=1, divisor=10
+                )
+            case "complete":
+                return ColorCalculator.element_bg_for(
+                    bg_color, r_div=1, g_div=3, b_div=1, divisor=10
+                )
+            case "edit":
+                return ColorCalculator.element_bg_for(
+                    bg_color, r_div=2, g_div=1, b_div=2, divisor=10
+                )
+            case "restore":
+                return ColorCalculator.element_bg_for(
+                    bg_color, r_div=1, g_div=1, b_div=3, divisor=10
+                )
+            case _:
+                return ColorCalculator.element_bg_for(bg_color)
 
     @staticmethod
     def extract_rgb(color) -> Tuple[int, int, int]:

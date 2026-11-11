@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 
-from ui.styles import WidgetStyle, ColorCalculator
+from ui.styles import WidgetStyle, ColorCalculator, IconRenderer
 from ui.factories.base_factory import BaseWidgetFactory
 
 
@@ -31,26 +31,18 @@ class ActionButtonType(Enum):
         )
     """
 
-    # (symbol, color, size, font_size)
-    EDIT = ("✎", (120, 120, 150), (26, 26), 14)
-    COMPLETE = ("✓", (70, 150, 90), (26, 26), 14)
-    DELETE = ("✕", (176, 80, 80), (22, 22), None)
-    RESTORE = ("↺", (100, 130, 150), (26, 26), 14)
+    START = ("start", (26, 26), "play")
+    STOP = ("stop", (26, 26), "pause")
+    COMPLETE = ("complete", (26, 26), "complete")
+    EDIT = ("edit", (26, 26), "edit")
+    RESTORE = ("restore", (26, 26), "restore")
+    DELETE = ("delete", (26, 26), "close")
 
-    def __init__(self, symbol: str, color: Tuple[int, ...],
-                 size: Tuple[int, int], font_size: Optional[int]) -> None:
-        """Конструктор члена Enum.
-
-        Вход:
-            symbol — отображаемый символ.
-            color — цвет фона по умолчанию.
-            size — фиксированный размер (w, h).
-            font_size — размер шрифта или None.
-        """
-        self.symbol = symbol
-        self.color = color
+    def __init__(self, action_name: str, size: Tuple[int, int],
+                 icon_type: str) -> None:
+        self.action_name = action_name
         self.size = size
-        self.font_size = font_size
+        self.icon_type = icon_type
 
 
 class ButtonFactory:
@@ -78,7 +70,8 @@ class ButtonFactory:
                       font_weight=None, extra_style="", checkable=False,
                       checked=False, tooltip=None, min_size=None,
                       max_size=None, hover_color=None, pressed_color=None,
-                      disabled_color=None, bg_modifier=None):
+                      disabled_color=None, bg_modifier=None,
+                      icon_type: str = None):
         """Создаёт стилизованную QPushButton.
 
         Вход:
@@ -124,6 +117,8 @@ class ButtonFactory:
             btn.setMaximumSize(*max_size)
         if fixed_size:
             btn.setFixedSize(*fixed_size)
+        if icon_type:
+            btn.setIcon(IconRenderer.make_icon(icon_type, btn))
         if checkable:
             btn.setCheckable(True)
             btn.setChecked(checked)
@@ -167,13 +162,26 @@ class ButtonFactory:
 
         Выход: QPushButton.
         """
+        if bg_color is None:
+            # Берем чистый фон окна (без предварительного осветления)
+            from ui.styles.window import WindowStyle
+            parent_bg = WindowStyle.resolve_parent_bg(parent, (63, 63, 63))
+
+            # Если фон прозрачный — ставим базовый серый
+            if (isinstance(parent_bg, (tuple, list))
+                    and len(parent_bg) >= 4
+                    and float(parent_bg[3]) == 0.0):
+                parent_bg = (63, 63, 63, 1.0)
+
+            bg_color = ColorCalculator.action_bg(action.action_name, parent_bg)
+
         btn = ButtonFactory.create_button(
             parent,
-            text=action.symbol,
-            bg_color=bg_color if bg_color is not None else action.color,
+            text="",
+            bg_color=bg_color,
             fixed_size=size if size is not None else action.size,
             padding="0px",
-            font_size=font_size if font_size is not None else action.font_size,
+            icon_type=action.icon_type,
             tooltip=tooltip,
         )
         btn.clicked.connect(callback)
@@ -323,14 +331,14 @@ class ButtonFactory:
         """
         btn = ButtonFactory.create_button(
             parent,
-            text="+",
+            text="",
             bg_color=bg_color,
             fixed_size=size,
             border_radius=size[0] // 2,
             border=border,
             font_size=font_size,
             hover_color=hover_color,
-            extra_style="QPushButton { color: white; }",
+            icon_type="add",
         )
         btn.clicked.connect(callback)
         return btn

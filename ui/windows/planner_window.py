@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLabel, QLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from ui.factories.factories import ButtonFactory
+from ui.factories.factories import ButtonFactory, ActionButtonType
 from ui.base.base_planner_window import _BasePlannerListWindow
 from ui.windows.planner_themes_dialog import PlannerThemesDialog
 from ui.windows.planner_task_dialogs import NewTaskDialog
@@ -243,13 +243,17 @@ class PlannerWindow(_BasePlannerListWindow):
         layout.setSpacing(4)
 
         if task.is_generator():
-            symbol = "▶" if task.status == TaskStatus.PAUSED else "⏸"
-            pause_btn = ButtonFactory.create_button(
-                container, symbol, bg_color=(150, 130, 70, 0.85),
-                fixed_size=(26, 26), padding="0px", font_size=14,
+            # Выбираем действие в зависимости от статуса
+            action = (
+                ActionButtonType.START
+                if task.status == TaskStatus.PAUSED
+                else ActionButtonType.STOP
             )
-            pause_btn.clicked.connect(
-                lambda checked=False, t=task: self._on_recurring_pause(t)
+
+            pause_btn = ButtonFactory.create_action_button(
+                container,
+                action=action,
+                callback=lambda checked=False, t=task: self._on_recurring_pause(t),
             )
             layout.addWidget(pause_btn)
         else:

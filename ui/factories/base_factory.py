@@ -76,3 +76,34 @@ class BaseWidgetFactory:
             parent_bg = (63, 63, 63, 1.0)
 
         return ColorCalculator.element_bg_for(parent_bg)
+
+    @staticmethod
+    def apply_geometry(widget, fixed_size=None, min_size=None,
+                       max_size=None, fixed_width=None,
+                       fixed_height=None) -> None:
+        """Единая точка применения размеров к виджету.
+
+        Вход:
+            widget — целевой QWidget.
+            fixed_size — (w, h) или None.
+            min_size — (w, h) или None.
+            max_size — (w, h) или None.
+            fixed_width — ширина в px или None.
+            fixed_height — высота в px или None.
+
+        Выход: нет.
+
+        Роль:
+            Заменяет ручные вызовы setFixedSize/setMinimumSize
+            в фабриках. Применяет размеры в строгом порядке.
+        """
+        if fixed_size is not None:
+            widget.setFixedSize(*fixed_size)
+        if fixed_width is not None:
+            widget.setFixedWidth(fixed_width)
+        if fixed_height is not None:
+            widget.setFixedHeight(fixed_height)
+        if min_size is not None:
+            widget.setMinimumSize(*min_size)
+        if max_size is not None:
+            widget.setMaximumSize(*max_size)

@@ -35,17 +35,17 @@ class NewTaskDialog(BaseTaskDialog):
         if self.creator:
             self.bg_color = ColorCalculator.derive(
                 parent_bg,
-                r_fn=lambda r: r + 10,
+                r_fn=lambda r: r - 20,
                 g_fn=lambda g: g + 10,
-                b_fn=lambda b: b - 20,
+                b_fn=lambda b: b + 10,
                 alpha=0.95,
             )
         else:
             self.bg_color = ColorCalculator.derive(
                 parent_bg,
-                r_fn=lambda r: r - 20,
+                r_fn=lambda r: r + 10,
                 g_fn=lambda g: g + 10,
-                b_fn=lambda b: b + 10,
+                b_fn=lambda b: b - 20,
                 alpha=0.95,
             )
 
@@ -85,6 +85,8 @@ class NewTaskDialog(BaseTaskDialog):
             self, text="",
             checked=(not self.creator and self._task.checklist_required),
             bg_color=self._elements_bg,
+            position="left",
+            border="none",
         )
         self.checklist_cb.clicked.connect(self._on_checklist_cb_clicked)
 

@@ -27,7 +27,7 @@ class CheckBoxFactory:
                         fixed_height=None, spacing=6,
                         object_name=None, tooltip=None,
                         read_only=False, word_wrap=False, font_size=None,
-                        text_padding="1px"):
+                        text_padding="1px", border="none"):
         """Создаёт CheckBox.
 
         Вход:
@@ -69,7 +69,7 @@ class CheckBoxFactory:
             fixed_size=fixed_size, fixed_height=fixed_height,
             spacing=spacing, read_only=read_only,
             font_size=font_size, word_wrap=word_wrap,
-            text_padding=text_padding,
+            text_padding=text_padding, border=border,
         )
 
         if object_name:

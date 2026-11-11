@@ -256,7 +256,8 @@ class WidgetStyle:
 
     @staticmethod
     def apply_checkbox(widget, bg_color, error_color=None, padding="0px",
-                       spacing=6, square_size=None, extra_style="") -> None:
+                       spacing=6, square_size=None, extra_style="",
+                       border="none") -> None:
         """QSS для CheckBox.
 
         Вход:
@@ -287,7 +288,10 @@ class WidgetStyle:
         if bg_color is None or not isinstance(bg_color, (tuple, list)):
             bg_color = (255, 255, 255, 1.0)
 
-        border_color = error_color if error_color is not None else bg_color
+        border_style = (
+            f"1px solid {ColorCalculator.to_str(error_color)}"
+            if error_color is not None else border
+        )
         radius = max(3, (square_size // 4) if square_size else 3)
 
         selector = SelectorBuilder.build(
@@ -295,7 +299,7 @@ class WidgetStyle:
 
         style = QssBuilder.base_rule(
             selector,
-            border=f"1px solid {ColorCalculator.to_str(border_color)}",
+            border=border_style,
             border_radius=radius,
         )
         if extra_style:
@@ -506,8 +510,6 @@ class WidgetStyle:
             f" {selector} QAbstractItemView::item:hover "
             f"{{ background-color: {hover_bg}; }}"
         )
-        sel_rgba = ColorCalculator.to_rgba(sel_text)
-
         style += (
             f" {selector} QAbstractItemView::item:selected "
             f"{{ background-color: {sel_bg}; color: {sel_text}; "

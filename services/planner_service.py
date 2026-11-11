@@ -290,7 +290,7 @@ class PlannerService(QObject):
                 if (old_status == TaskStatus.PAUSED
                         and new_status == TaskStatus.WAITING
                         and task.is_generator()):
-                    catch_up = RecurrenceCalculator.catch_up_date(
+                    catch_up = RecurrenceCalculator.compute_next_date(
                         task, date.today()
                     )
                     task.next_generation_date = (

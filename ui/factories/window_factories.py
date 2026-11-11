@@ -19,10 +19,10 @@ ui.styles.WidgetStyle и ui.styles.WindowStyle.
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QApplication,
-    QMainWindow, QDialog, QPushButton,
+    QMainWindow, QDialog,
 )
 
-from .button_factory import ButtonFactory
+from .button_factory import ButtonFactory, ActionButtonType
 from .element_factory import LabelFactory
 from ui.styles import WidgetStyle, WindowStyle
 
@@ -44,7 +44,7 @@ class WindowFactory:
     @staticmethod
     def setup_child_window(child, title, bg_color=(64, 48, 66, 0.8),
                            close_callback=None, close_button=True,
-                           close_button_color=(253, 94, 83, 1.0),
+                           close_button_color=None,
                            return_layout=True,
                            parent=None):
         """Настраивает дочернее окно (каркас).
@@ -71,14 +71,14 @@ class WindowFactory:
         top_layout.addStretch()
 
         if close_button:
-            close_btn = QPushButton("✕")
-            close_btn.setFixedSize(25, 25)
-            WidgetStyle.apply_close_button(close_btn, close_button_color)
-            if close_callback:
-                close_btn.clicked.connect(close_callback)
-            else:
-                close_btn.clicked.connect(child.close)
-            top_layout.addWidget(close_btn)
+            if close_button:
+                close_btn = ButtonFactory.create_action_button(
+                    child,
+                    ActionButtonType.DELETE,
+                    close_callback if close_callback else child.close,
+                    bg_color=close_button_color
+                )
+                top_layout.addWidget(close_btn)
 
         main_layout.addLayout(top_layout)
 
@@ -184,11 +184,11 @@ class ExtendedWindowFactory(WindowFactory):
         top_layout.addStretch()
 
         if close_button:
-            close_btn = ButtonFactory.create_button(
-                window, "✕", (200, 60, 60, 0.8),
-                padding="4px 8px", fixed_size=(30, 30)
+            close_btn = ButtonFactory.create_action_button(
+                window,
+                ActionButtonType.DELETE,
+                window.close
             )
-            close_btn.clicked.connect(window.close)
             top_layout.addWidget(close_btn)
 
         main_layout.addLayout(top_layout)
