@@ -31,6 +31,7 @@ from .widget_factory import (
     ListWidgetFactory, TableWidgetFactory, StatusLogFactory,
 )
 from .layout_factory import LayoutFactory
+from .window_block_factory import WindowBlockFactory
 from .infrastructure_factory import ThreadFactory, FileDialogFactory
 from .window_factories import WindowFactory, ExtendedWindowFactory
 from .composite_widget_factory import CompositeWidgetFactory
@@ -58,6 +59,7 @@ __all__ = [
     "ListWidgetFactory", "TableWidgetFactory", "StatusLogFactory",
     # Компоновки
     "LayoutFactory",
+    "WindowBlockFactory",
     # Инфраструктура
     "ThreadFactory", "FileDialogFactory",
     # Окна

@@ -78,9 +78,7 @@ class ButtonFactory:
                       font_weight=None, extra_style="", checkable=False,
                       checked=False, tooltip=None, min_size=None,
                       max_size=None, hover_color=None, pressed_color=None,
-                      disabled_color=None, bg_modifier=None,
-                      *, icon_path: str | None = None,
-                      icon_size: tuple | None = None):
+                      disabled_color=None, bg_modifier=None):
         """Создаёт стилизованную QPushButton.
 
         Вход:
@@ -114,13 +112,6 @@ class ButtonFactory:
         Выход: QPushButton с QSS.
         """
         btn = QPushButton(text, parent)
-        # Иконка — локальные импорты, чтобы не трогать шапку.
-        if icon_path:
-            from PySide6.QtGui import QIcon
-            from PySide6.QtCore import QSize
-            btn.setIcon(QIcon(icon_path))
-            if icon_size:
-                btn.setIconSize(QSize(*icon_size))
         if object_name:
             btn.setObjectName(object_name)
         if cursor_shape:

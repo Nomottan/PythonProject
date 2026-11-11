@@ -9,10 +9,9 @@
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QSizePolicy
-
 from ui.factories.element_factory import LabelFactory
 from ui.styles import (
-    ColorCalculator, IconRenderer, WidgetStyle, BackgroundResolver
+    ColorCalculator, IconRenderer, WidgetStyle, BackgroundResolver, SizingCalculator
 )
 
 
@@ -80,7 +79,8 @@ class CheckBox(QWidget):
                  spacing: int = 6,
                  font_size: int | None = None,
                  read_only: bool = False,
-                 word_wrap: bool = True):
+                 word_wrap: bool = True,
+                 text_padding: str = "1px"):
         """Конструктор.
 
         Вход:
@@ -105,14 +105,14 @@ class CheckBox(QWidget):
         self._read_only = read_only
 
         self._text_label = LabelFactory.create_label(
-            self, text=text, bg_color=text_bg, padding="0px",
+            self, text=text, bg_color=text_bg, padding=text_padding,
             font_size=font_size,
             alignment=Qt.AlignLeft | Qt.AlignVCenter, word_wrap=word_wrap,
         )
         self._text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._text_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
-        label_height = WidgetStyle.get_text_height(self._text_label, font_size)
+        label_height = SizingCalculator.get_text_height(self._text_label, font_size)
         if square_size is None:
             widget_height = None
             if fixed_size:
@@ -151,7 +151,7 @@ class CheckBox(QWidget):
         self._icon_label.hover_changed.connect(self._on_hover_changed)
         WidgetStyle.apply_checkbox(
             self, self.bg_color, error_color=None,
-            square_size=self._square_size,
+            padding=text_padding, square_size=self._square_size,
         )
         self._refresh_icon()
 
@@ -246,11 +246,13 @@ class CheckBox(QWidget):
             err = ColorCalculator.error_color(self.bg_color)
             WidgetStyle.apply_checkbox(
                 self, self.bg_color, error_color=err,
+                padding=self._text_label.styleSheet() and "1px" or "1px",  # fallback
                 square_size=self._square_size,
             )
         else:
             WidgetStyle.apply_checkbox(
                 self, self.bg_color, error_color=None,
+                padding="1px",
                 square_size=self._square_size,
             )
 

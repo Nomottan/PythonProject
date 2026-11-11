@@ -16,8 +16,8 @@ from .scrollbar import ScrollbarStyle
 from .window import WindowStyle
 from .selectors import SelectorBuilder
 from .bg_resolver import BackgroundResolver
-from pathlib import Path
-from PySide6.QtGui import QFont, QFontMetrics
+from .sizing import SizingCalculator
+from .adapter import IconAdapter
 
 class WidgetStyle:
     """Фасад стилей.
@@ -58,29 +58,6 @@ class WidgetStyle:
         if extra_style:
             current = widget.styleSheet()
             widget.setStyleSheet(current + extra_style)
-
-    @staticmethod
-    def get_text_height(widget, font_size=None) -> int:
-        """Вычисляет высоту текста на основе стиля шрифта.
-
-        Вход:
-            widget — QWidget, чей шрифт используется как базовый.
-            font_size — размер шрифта в пикселях (как в QSS font-size).
-                        Если None — используется текущий шрифт виджета.
-
-        Выход: высота текста (int).
-
-        Роль:
-            Единая точка вычисления высоты текста для стилевых
-            расчетов. Если font_size задан, создаётся QFont с
-            pixelSize и вычисляется QFontMetrics.height(). Если
-            нет — QFontMetrics(widget.font()).height().
-        """
-        if font_size is not None:
-            f = QFont(widget.font())
-            f.setPixelSize(font_size)
-            return QFontMetrics(f).height()
-        return QFontMetrics(widget.font()).height()
 
     @staticmethod
     def _effective_text_for(widget, bg_color, forced=None):
@@ -497,16 +474,9 @@ class WidgetStyle:
             border_radius=dd_radius,
             extra_props=dd_extra,
         )
-        arrow_path = (
-                Path(__file__).parent / "icons" / "arrow_down.svg"
-        ).as_posix()
-        style += (
-            f" {selector}::down-arrow {{"
-            f" image: url('{arrow_path}');"
-            f" width: 12px;"
-            f" height: 12px;"
-            f" margin-right: 1px;"
-            f" }}"
+        style += IconAdapter.arrow_rule(
+            f"{selector}::down-arrow", "down", combo,
+            bg_color=view_bg, size=12, margin_right="1px"
         )
         style += QssBuilder.base_rule(
             f"{selector} QAbstractItemView",

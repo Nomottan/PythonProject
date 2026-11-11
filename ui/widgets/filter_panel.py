@@ -12,17 +12,15 @@ FilterPanel — набор категорий с мастер-кнопкой «�
     собирает выбор и отдаёт отфильтрованный список.
 """
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt, Signal, QEvent, QPoint
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QApplication,
 )
-
+from ui.styles import ColorCalculator, IconRenderer
 from ui.factories.factories import (
     ButtonFactory, ListWidgetFactory,
 )
-from ui.styles import ColorCalculator
+from ui.styles import ColorCalculator, IconRenderer
 from utils.filter_utils import FieldDef, FilterCore
 
 class FilterCategory(QWidget):
@@ -39,8 +37,6 @@ class FilterCategory(QWidget):
     """
 
     selection_changed = Signal(str)
-
-    _ICONS_DIR = Path(__file__).parent.parent / "styles" / "icons"
 
     def __init__(self, parent, field_def: FieldDef, bg_color):
         """Конструктор.
@@ -87,7 +83,9 @@ class FilterCategory(QWidget):
         self._arrow_btn = ButtonFactory.create_button(
             self, "", self._bg_color,
             padding="0px", fixed_size=(20, 20),
-            icon_path=(self._ICONS_DIR / "arrow_left.svg").as_posix(),
+        )
+        self._arrow_btn.setIcon(
+            IconRenderer.make_arrow("left", self, bg_color=self._bg_color, size=16)
         )
         self._arrow_btn.clicked.connect(self._toggle_expanded)
         header.addWidget(self._arrow_btn)
@@ -229,7 +227,6 @@ class FilterCategory(QWidget):
               При сворачивании — скрывается. Родитель сохраняется
               между вызовами.
         """
-        from PySide6.QtGui import QIcon
         self._expanded = not self._expanded
         if self._expanded:
             if self._overlay_parent is None:
@@ -242,9 +239,9 @@ class FilterCategory(QWidget):
             self._body.raise_()
         else:
             self._body.hide()
-        name = "arrow_down.svg" if self._expanded else "arrow_left.svg"
+        direction = "down" if self._expanded else "left"
         self._arrow_btn.setIcon(
-            QIcon((self._ICONS_DIR / name).as_posix())
+            IconRenderer.make_arrow(direction, self, bg_color=self._bg_color, size=16)
         )
 
     def _position_body(self) -> None:
@@ -283,9 +280,8 @@ class FilterCategory(QWidget):
             return
         self._expanded = False
         self._body.hide()
-        from PySide6.QtGui import QIcon
         self._arrow_btn.setIcon(
-            QIcon((self._ICONS_DIR / "arrow_left.svg").as_posix())
+            IconRenderer.make_arrow("left", self, bg_color=self._bg_color, size=16)
         )
 
     def is_body_open(self) -> bool:

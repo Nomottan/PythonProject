@@ -13,12 +13,14 @@
     элемент и переиспользует приватные утилиты класса.
 """
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+import base64
+from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import (
-    QPixmap, QPainter, QPen, QColor, QBrush, QPainterPath, QPolygonF
+    QPixmap, QPainter, QPen, QColor, QBrush, QPainterPath, QPolygonF,
+    QTransform, QIcon
 )
 from .colors import ColorCalculator
-
+from .sizing import SizingCalculator
 
 class IconRenderer:
     """Рендерер иконок проекта.
@@ -141,3 +143,94 @@ class IconRenderer:
 
         painter.end()
         return pixmap
+
+    @staticmethod
+    def _arrow_polygon(direction: str) -> QPolygonF:
+        """Создаёт полигон стрелки с учётом направления."""
+        base = QPolygonF([
+            QPointF(7.5, 3), QPointF(7.5, 9), QPointF(3.5, 6)
+        ])
+        if direction == "left":
+            return base
+        if direction == "up":
+            angle = -90
+        elif direction == "right":
+            angle = 180
+        elif direction == "down":
+            angle = 90
+        else:
+            return base
+
+        transform = QTransform().translate(6, 6).rotate(angle).translate(-6, -6)
+        return transform.map(base)
+
+    @staticmethod
+    def _draw_arrow(painter: QPainter, direction: str, color: tuple, size: int) -> None:
+        """Отрисовывает стрелку в painter."""
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.scale(size / 12.0, size / 12.0)
+
+        pen = QPen(QColor(*color))
+        pen.setWidthF(1.6)
+        pen.setJoinStyle(Qt.RoundJoin)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+
+        painter.drawPolygon(IconRenderer._arrow_polygon(direction))
+
+    @staticmethod
+    def make_arrow_pixmap(direction: str, bg_color, size: int = None, widget=None) -> QPixmap:
+        """Рисует стрелку как QPixmap (HiDPI 2x)."""
+        if bg_color is None:
+            bg_color = (255, 255, 255)
+
+        if size is None:
+            if widget is not None:
+                text_height = SizingCalculator.get_text_height(widget)
+                size = int(text_height * 0.8)
+                max_size = int(text_height * 1.2)
+                size = max(8, min(size, max_size))
+            else:
+                size = 12
+
+        pixmap = QPixmap(size * 2, size * 2)
+        pixmap.setDevicePixelRatio(2)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        arrow_color = ColorCalculator.text_for(bg_color)
+        IconRenderer._draw_arrow(
+            painter, direction, IconRenderer._to_rgb(arrow_color), size
+        )
+        painter.end()
+        return pixmap
+
+    @staticmethod
+    def make_arrow(direction: str, widget, bg_color=None, size: int = None) -> QIcon:
+        """Возвращает QIcon стрелки."""
+        if bg_color is None:
+            from .bg_resolver import BackgroundResolver
+            bg_color = BackgroundResolver.resolve_bg_color(widget, None)
+            if bg_color is None:
+                bg_color = (63, 63, 63)
+
+        pixmap = IconRenderer.make_arrow_pixmap(direction, bg_color, size, widget)
+        return QIcon(pixmap)
+
+    @staticmethod
+    def pixmap_to_data_uri(pixmap: QPixmap) -> str:
+        """Конвертирует QPixmap в base64 Data URI."""
+        byte_array = QByteArray()
+        buffer = QBuffer(byte_array)
+        buffer.open(QIODevice.WriteOnly)
+        pixmap.save(buffer, "PNG")
+        buffer.close()
+        base64_str = base64.b64encode(byte_array.data()).decode("utf-8")
+        return f"data:image/png;base64,{base64_str}"
+
+    @staticmethod
+    def make_arrow_data_uri(direction: str, widget, bg_color=None, size: int = None) -> str:
+        """Возвращает base64 Data URI для стрелки."""
+        pixmap = IconRenderer.make_arrow_pixmap(direction, bg_color, size, widget)
+        return IconRenderer.pixmap_to_data_uri(pixmap)

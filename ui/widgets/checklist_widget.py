@@ -11,8 +11,6 @@ ChecklistWidget — список пунктов ChecklistItem с возможн�
     ChecklistDialog и inline.
 """
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QDialog
 
@@ -20,7 +18,7 @@ from ui.factories.factories import (
     ButtonFactory, LabelFactory, CheckBoxFactory,
     ListWidgetFactory,
 )
-from ui.styles import ColorCalculator
+from ui.styles import ColorCalculator, IconRenderer
 from models.planner_task import ChecklistItem
 
 
@@ -33,8 +31,6 @@ class ChecklistWidget(QWidget):
     """
 
     changed = Signal(list, str)
-
-    _ICONS_DIR = Path(__file__).parent.parent / "styles" / "icons"
 
     def __init__(self, parent, items: list, mode: str, bg_color,
                  task_id: int = None):
@@ -182,8 +178,9 @@ class ChecklistWidget(QWidget):
             arrows, "",
             bg_color=self._arrow_bg,
             fixed_size=(14, 14), padding="0px",
-            icon_path=(self._ICONS_DIR / "arrow_up.svg").as_posix(),
-            icon_size=(16, 16),
+        )
+        up_btn.setIcon(
+            IconRenderer.make_arrow("up", self, bg_color=self._arrow_bg, size=12)
         )
         up_btn.clicked.connect(
             lambda checked=False, i=item: self._on_move_up(i)
@@ -197,8 +194,9 @@ class ChecklistWidget(QWidget):
             arrows, "",
             bg_color=self._arrow_bg,
             fixed_size=(14, 14), padding="0px",
-            icon_path=(self._ICONS_DIR / "arrow_down.svg").as_posix(),
-            icon_size=(16, 16),
+        )
+        down_btn.setIcon(
+            IconRenderer.make_arrow("down", self, bg_color=self._arrow_bg, size=12)
         )
         down_btn.clicked.connect(
             lambda checked=False, i=item: self._on_move_down(i)

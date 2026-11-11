@@ -253,13 +253,13 @@ class BaseServiceWindow(QMainWindow):
         row.addWidget(btn)
         return row
 
-    def _add_service_page(self, header_widget, box,
+    def _add_service_page(self, header_widget, box_widget,
                           accumulate_row=None):
         """Собирает стандартную страницу сервиса в main_layout.
 
         Вход:
             header_widget — верхний лейбл (desc_label / header_label).
-            box — центральный бокс (из LayoutFactory.create_service_box).
+            box_widget — центральный бокс (из WindowBlockFactory).
             accumulate_row — QLayout с кнопкой «Собрать продажи»
                             или None, если операция не нужна.
 
@@ -271,7 +271,7 @@ class BaseServiceWindow(QMainWindow):
               без ручного копирования макета.
         """
         page = LayoutFactory.create_service_page(
-            header_widget, box, self.status_log, accumulate_row,
+            header_widget, box_widget, self.status_log, accumulate_row,
         )
         self.main_layout.addLayout(page)
         return page

@@ -1,129 +1,473 @@
 [
   {
-    "task_id": 20260921007,
-    "title": "ЗЯ",
-    "description": "Мониторить на добавление товара \nотправить товары на добавление когда придут от дизайнера фоточки",
-    "priority": 1,
-    "status": "Активная",
-    "created_date": "21.09.2026",
-    "completed_date": null,
-    "spawner_task": null,
-    "deadline_datetime": null,
-    "created_datetime": null,
-    "task_type": "regular",
-    "recurrence_type": null,
-    "recurrence_value": null,
-    "recurrence_weekdays": null,
-    "recurrence_monthdays": null,
-    "recurrence_use_last_day": false,
-    "next_generation_date": null,
-    "event_date": null
-  },
-  {
-    "task_id": 20260921011,
-    "title": "Аптека +",
-    "description": "мониторить МАХ на отписку о приходе поставки",
-    "priority": 1,
-    "status": "Активная",
-    "created_date": "21.09.2026",
-    "completed_date": null,
-    "spawner_task": 20260921006,
-    "deadline_datetime": null,
-    "created_datetime": "21.09.2026 16:58",
-    "task_type": "regular",
-    "recurrence_type": null,
-    "recurrence_value": null,
-    "recurrence_weekdays": null,
-    "recurrence_monthdays": null,
-    "recurrence_use_last_day": false,
-    "next_generation_date": null,
-    "event_date": null
-  },
-  {
-    "task_id": 20260921012,
-    "title": "Досудебки",
-    "description": "Досудебки по уничтоженным товарам WB\nсоглашение подписано\nне оплачено\nперенесено на начало следующей недели оплата + примерно время на подготовку досудебки\nвроде как все доки для него я собрал",
-    "priority": 4,
-    "status": "Активная",
-    "created_date": "21.09.2026",
-    "completed_date": null,
-    "spawner_task": null,
-    "deadline_datetime": "02.10.2026 15:00",
-    "created_datetime": "21.09.2026 16:59",
-    "task_type": "regular",
-    "recurrence_type": null,
-    "recurrence_value": null,
-    "recurrence_weekdays": null,
-    "recurrence_monthdays": null,
-    "recurrence_use_last_day": false,
-    "next_generation_date": null,
-    "event_date": null
-  },
-  {
     "task_id": 20260922007,
     "title": "ЧЗ МП",
-    "description": "",
-    "priority": 5,
-    "status": "Ожидание",
     "created_date": "22.09.2026",
-    "completed_date": null,
-    "spawner_task": null,
-    "deadline_datetime": null,
-    "created_datetime": "22.09.2026 12:46",
+    "description": "Подготовка и списание КИЗов по товарам отданных на FBS",
     "task_type": "recurring",
+    "theme": "green",
+    "created_datetime": "22.09.2026 12:46",
     "recurrence_type": "weekdays",
-    "recurrence_value": null,
     "recurrence_weekdays": [
       0,
       2,
       4
     ],
-    "recurrence_monthdays": null,
-    "recurrence_use_last_day": false,
-    "next_generation_date": "28.09.2026",
-    "event_date": null
+    "next_generation_date": "13.11.2026"
   },
   {
     "task_id": 20260922008,
     "title": "ЧЗ возвраты",
-    "description": "Вернуть кизы с возвратов",
-    "priority": 5,
-    "status": "Ожидание",
     "created_date": "22.09.2026",
-    "completed_date": null,
-    "spawner_task": null,
-    "deadline_datetime": null,
-    "created_datetime": "22.09.2026 17:34",
+    "description": "Вернуть кизы с возвратов",
+    "status": "Ожидание",
     "task_type": "recurring",
+    "theme": "green",
+    "created_datetime": "22.09.2026 17:34",
     "recurrence_type": "weekdays",
-    "recurrence_value": null,
     "recurrence_weekdays": [
       1,
       3
     ],
-    "recurrence_monthdays": null,
-    "recurrence_use_last_day": false,
-    "next_generation_date": "29.09.2026",
-    "event_date": null
+    "next_generation_date": "12.11.2026"
   },
   {
-    "task_id": 20260924002,
-    "title": "Стилизация",
-    "description": "Нужно стилизовать чекбоксы, а то стрёмные\nнужно стилизовать кнопки листов а то стрёмные",
+    "task_id": 20260930006,
+    "title": "Архив",
+    "created_date": "30.09.2026",
+    "description": "Для работы с архивом",
     "priority": 1,
-    "status": "Активная",
-    "created_date": "24.09.2026",
-    "completed_date": null,
-    "spawner_task": null,
-    "deadline_datetime": null,
-    "created_datetime": "24.09.2026 09:51",
-    "task_type": "regular",
-    "recurrence_type": null,
-    "recurrence_value": null,
-    "recurrence_weekdays": null,
-    "recurrence_monthdays": null,
-    "recurrence_use_last_day": false,
-    "next_generation_date": null,
-    "event_date": null
+    "theme": "cyan",
+    "created_datetime": "30.09.2026 18:12",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Очистка",
+        "detail": "\"Очистка\" при нажатии на которую будет открываться окошко, где будут чекбоксы по типам задач и поле до какой даты задачи и после какой  удалять и с каким статусом завершения. так же проверить наличие бага что при удалении одной копии задачи удаляются все.",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Чек лист",
+        "detail": "не отображается у задач в архиве",
+        "order": 1
+      },
+      {
+        "checked": false,
+        "short": "настройки",
+        "detail": "возможно стоит добавить настройки для автоматического удаления\nдопустим можно будет делать правила\nОкно правил будет содержать чек лист типов задач, выбор их типа помещения в архив, наличие чек боксов, срок давности",
+        "order": 2
+      }
+    ]
+  },
+  {
+    "task_id": 20261005005,
+    "title": "Planner",
+    "created_date": "05.10.2026",
+    "description": "задачи по сервису planner",
+    "priority": 1,
+    "theme": "cyan",
+    "spawner_task": 20260930007,
+    "created_datetime": "05.10.2026 13:30",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": true,
+        "short": "Косметика",
+        "detail": "Исправить текст в окне редактирования\nсделать активные кнопки \"чек лист\" поярче на 10% по всем каналам",
+        "order": 1
+      },
+      {
+        "checked": true,
+        "short": "Обновление",
+        "detail": "main не обновляет все данные по задачам при внесении изменений в planner.",
+        "order": 2
+      },
+      {
+        "checked": true,
+        "short": "недочёт",
+        "detail": "Добавить возможность посмотреть подробное описание и в чек листе planner чтоб показывалась плашка с подробным описанием",
+        "order": 3
+      },
+      {
+        "checked": true,
+        "short": "Столбцы",
+        "detail": "Добавить выравнивание столбцов",
+        "order": 4
+      },
+      {
+        "checked": true,
+        "short": "фильтры",
+        "detail": "расширить темой и чек листом когда первое добавлю",
+        "order": 5
+      },
+      {
+        "checked": true,
+        "short": "ScrollBar",
+        "detail": "скролл бары. в чек листе стандартные, переключить на мой",
+        "order": 6
+      }
+    ]
+  },
+  {
+    "task_id": 20261009003,
+    "title": "чз мп",
+    "created_date": "09.10.2026",
+    "description": "Задача для работы с сервисом подготовки КИЗов к списанию",
+    "priority": 3,
+    "theme": "cyan",
+    "created_datetime": "09.10.2026 17:38",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Логи",
+        "detail": "Оптимизировать код создав шаблоны",
+        "order": 5
+      },
+      {
+        "checked": false,
+        "short": "Сбор сохранений",
+        "detail": "Лучше их сделать после обработки чтоб если что пойдёт не так кизы бы не блочились заодно проводить сразу проверку на бренд. То есть в подготовке просто проверять их отсутствие а в обработке записывать",
+        "order": 8
+      },
+      {
+        "checked": false,
+        "short": "Сохранения",
+        "detail": "Нужно переосмыслить сохранения.. попробовать что то придумать с индексацией для быстрого поиска? или может ещё что... Может разбить сохранения по текстовым файлами.. блин надо продумать сложную систему которая будет быстро сохранять и проверять данные и не будет всё хранить в едином словаре, так же можно продумать идею такую. Файлы по брендам, там списки gtin, по каждому gtin динамические цены и список кизов с датами возврата и продажи",
+        "order": 9
+      },
+      {
+        "checked": true,
+        "short": "выбор селлера",
+        "detail": "если отчёт не определился надо сделать так чтоб выходило окно такое же как при выборе неопознаного бренда только с продавцами который будет добавлять ключи.",
+        "order": 0
+      },
+      {
+        "checked": true,
+        "short": "рефактор",
+        "detail": "сделать рефакторинг в два этапа",
+        "order": 1
+      },
+      {
+        "checked": true,
+        "short": "продажи",
+        "detail": "при агрегации проверять наличие  ЧЗ_МП папки, если имееться нужно проверять все продаваемые кизы из продаж на наличие их присутствия в файлах на списание, и если они там имеютсья то проверять что тот на кого продаються тот же владелец итога",
+        "order": 2
+      },
+      {
+        "checked": true,
+        "short": "Цены",
+        "detail": "можно объеденить применение цен и проверка по кластеров.\nКогда цены подставляються из кластеров брать их не из самих итоговых файлов а собрать их из сохранённых цен, тогда может покрыться большее количество кластеров",
+        "order": 3
+      },
+      {
+        "checked": true,
+        "short": "проверка для дураков",
+        "detail": "сделать проверку после обработки что кизы из отчётов действительно попали куда нужно, сделать кнопку не обязательной отдельным процессом - кнопкой которая будет активироваться после первого шага. Если она будет активирована до второго шага - проверяет наличие эксель файлов от бестмарка и сверять что кизы попали куда нужно, если после второго шага будет проверять что все кизы что есть в итоговом файле имеються и в первоначальных отчётах. Возможно сделать изменение цвета кнопки выполнением второго этапа.\nрезультатом должно быть окошко нотификации, зелёное с надписью \"Противоречий не обнаружено\" или же красное \"Имеються противоречия\" с информацией о не совпадении.\nПри этом если проверка была проведена до второго этапа изменить название на \"Проверено\"и сменить цвет на немного более тёмный цвет от фона",
+        "order": 4
+      },
+      {
+        "checked": true,
+        "short": "дополнительно",
+        "detail": "кнопку \"собрать продажи\" заменить на дополнительно. туда перенести собрать продажи и \"цены\"..",
+        "order": 6
+      },
+      {
+        "checked": true,
+        "short": "проверка баз данных",
+        "detail": "создать проверку базы данных кизов. По факту будет просто выгружать кизы и просить провести через BestMark, потом будет удалять все кизы брендов которые не нужно сохранять",
+        "order": 7
+      }
+    ]
+  },
+  {
+    "task_id": 20261009004,
+    "title": "Возвраты",
+    "created_date": "09.10.2026",
+    "description": "задача для работы с сервисом Возвраты",
+    "priority": 1,
+    "theme": "cyan",
+    "created_datetime": "09.10.2026 17:38",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "рефактор",
+        "detail": "Нужно объеденить два функционала формирования файлов в один.",
+        "order": 2
+      },
+      {
+        "checked": true,
+        "short": "Повтор",
+        "detail": "Добавить возможность дополнительных проходок в день",
+        "order": 0
+      },
+      {
+        "checked": true,
+        "short": "Бренды",
+        "detail": "Добавить приориты Брендов для уменьшения вероятность продажи бренда не на того",
+        "order": 1
+      }
+    ]
+  },
+  {
+    "task_id": 20261014008,
+    "title": "Помощник",
+    "created_date": "14.10.2026",
+    "description": "Задача для работы с помощником",
+    "priority": 1,
+    "theme": "cyan",
+    "created_datetime": "14.10.2026 14:18",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Цвета",
+        "detail": "настроить высчитывание цветов от первоначального экрана.",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Q библиотеки",
+        "detail": "Снизить количество импортов, определив как можно больше элементов через фабрики",
+        "order": 1
+      },
+      {
+        "checked": false,
+        "short": "чек листы",
+        "detail": "Поменять мерзкие чек боксы на иконки",
+        "order": 2
+      }
+    ]
+  },
+  {
+    "task_id": 20261015002,
+    "title": "Хелперы",
+    "created_date": "15.10.2026",
+    "description": "Заметки — идея behavior-хелперов\nНе отчёт, а разбор идеи для будущего. Записать в заметки.\nЧто НЕ делать\nФабрику методов — тупик. Фабрика, возвращающая готовые eventFilter, closeEvent, mousePressEvent:\nЛомает super(). Уже видел хак super(QLabel, _lbl).mousePressEvent(event) — работает только пока знаем класс. В «универсальной фабрике» превратится в super(UnknownClass, _x) — не работает.\nОтладка теряет стек — traceback уходит в фабрику, а не в место вызова.\nПараметризация становится кашей флагов (close_on_outside, hide_on_outside, ignore_outside — и всё ради экономии 4 строк).\nPyCharm не видит override — типизация падает.\nЧто делать\nAttachable behavior objects — QObject-хелперы, которые цепляются к виджету и делают одну вещь.\nПаттерн:\npython\n# ui/behaviors/click_outside_watcher.py\nclass ClickOutsideWatcher(QObject):\n    \"\"\"Эмитит clicked_outside при клике вне watched_widget.\"\"\"\n\n    clicked_outside = Signal()\n\n    def __init__(self, watched_widget, parent=None):\n        super().__init__(parent or watched_widget)\n        self._watched = watched_widget\n        app = QApplication.instance()\n        if app is not None:\n            app.installEventFilter(self)\n\n    def eventFilter(self, obj, event):\n        if event.type() == QEvent.MouseButtonPress:\n            pos = event.globalPosition().toPoint()\n            if not self._watched.rect().contains(\n                self._watched.mapFromGlobal(pos)\n            ):\n                self.clicked_outside.emit()\n        return False\n\n    def detach(self):\n        app = QApplication.instance()\n        if app is not None:\n            app.removeEventFilter(self)\nИспользование:\npython\nself._watcher = ClickOutsideWatcher(self)\nself._watcher.clicked_outside.connect(self.close)\nПочему чище фабрики методов:\nsuper() не трогается — оригинальный eventFilter не переопределяется, поведение добавляется рядом.\nНесколько behaviors вешаются на один виджет независимо.\nQObject удаляется с parent — автоматический detach.\nСтек-трейс ведёт в конкретный behavior-объект.\nPyCharm видит сигналы и навигацию.\nТестируется в изоляции.\nЧто выносить — кандидаты\nClickOutsideWatcher — NotificationDialog + FilterPanel + потенциально CompanyDialog / PricesEditWindow.\nEscapeKeyCloser — MessageDialog (Esc = клик по последней кнопке) + NotificationDialog (Esc = close).\nDraggableWindow — сейчас WindowFactory._setup_dragging инъецирует mousePressEvent на экземпляр; behavior-объект был бы чище.\nRule of Three. Потребителей сейчас по 2–3 на паттерн. Граница «делать / не делать». Один новый потребитель — и делать.\nЧто НЕ выносить\nВсё, что знает про конкретное состояние владельца, оставить методом. Пример: FilterPanel.eventFilter в сложной части (проверяет _is_open, все _body категорий, самого родителя на resize) — это не «клик вне». Это «сложное состояние панели». В общий ClickOutsideWatcher уйдёт только сама проверка «позиция клика вне rect».\nПравило: behavior-object — чистый, stateless-по-отношению-к-владельцу паттерн. Всё про состояние — остаётся методом.\nКуда класть\nui/behaviors/ — отдельная папка. Не в ui/factories/ (там фабрики виджетов) и не в ui/widgets/ (там виджеты-контейнеры).\nКогда делать\nСразу — если появляется третий чистый потребитель одного паттерна. Тогда API проектируется на трёх реальных случаях, а не на двух.\nНе сразу — если только два. С двумя потребителями есть риск, что API окажется не тем: для контекстного меню нужна позиция по курсору, для фильтра — по anchor, для dropdown — по родителю. Обобщать до третьего — преждевременно.\nМой голос: ждать третьего. Сейчас начинать не стоит — FilterPanel активно правится, ещё один слой абстракции поверх рискует дать новые баги на ровном месте.",
+    "priority": 1,
+    "theme": "cyan",
+    "created_datetime": "15.10.2026 11:10"
+  },
+  {
+    "task_id": 20261016002,
+    "title": "Ап",
+    "created_date": "16.10.2026",
+    "description": "Работа с Аптекой+",
+    "priority": 1,
+    "theme": "blue",
+    "created_datetime": "16.10.2026 10:26",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Возврат",
+        "detail": "Вернуть то что не приянала Аптека+",
+        "order": 0
+      },
+      {
+        "checked": true,
+        "short": "Акт",
+        "detail": "Пересобрать поставку с менджером для приёмки",
+        "order": 1
+      }
+    ]
+  },
+  {
+    "task_id": 20261016003,
+    "title": "ЗЯ",
+    "created_date": "16.10.2026",
+    "description": "Работа с Золотым Яблоком",
+    "theme": "blue",
+    "created_datetime": "16.10.2026 10:40",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Товары",
+        "detail": "довести добавление товаров до завершения",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Возврат",
+        "detail": "Забрать товары не приятые ЗЯ",
+        "order": 2
+      },
+      {
+        "checked": true,
+        "short": "УКД",
+        "detail": "оформить УКД",
+        "order": 1
+      }
+    ]
+  },
+  {
+    "task_id": 20261016004,
+    "title": "Логи",
+    "created_date": "16.10.2026",
+    "description": "работа с логированием по программе",
+    "priority": 1,
+    "theme": "cyan",
+    "created_datetime": "16.10.2026 10:45",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Куратор",
+        "detail": "Добавить новый уровень логирования который будет объяснять что делает тот или иной шаг",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Чз МП Продажи",
+        "detail": "В инфо добавить информацию о том какие файлы были созданы, сколько в них кизов.",
+        "order": 1
+      },
+      {
+        "checked": false,
+        "short": "ЧЗ МП фильтрация",
+        "detail": "По сводке по фильтрации кизов исправить \"опознано брендов\"",
+        "order": 2
+      }
+    ]
+  },
+  {
+    "task_id": 20261019003,
+    "title": "ЧЗ",
+    "created_date": "19.10.2026",
+    "description": "Есть компания которая помогает нам создавать карточки товаров и выпускать кизы",
+    "theme": "green",
+    "created_datetime": "19.10.2026 12:16",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "отправить список",
+        "detail": "Отправить список на позиции которые нам нужны",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Вопрос",
+        "detail": "Спросить о том смогут ли они определить то что уже делали ранее",
+        "order": 1
+      },
+      {
+        "checked": false,
+        "short": "Кизы",
+        "detail": "Кизы запросить с учётом тех поставок что мы ждём\nзаполнить файл запроса",
+        "order": 2
+      }
+    ]
+  },
+  {
+    "task_id": 20261023002,
+    "title": "Юрист",
+    "created_date": "23.10.2026",
+    "priority": 3,
+    "theme": "red",
+    "created_datetime": "23.10.2026 10:27",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "Озон 275",
+        "detail": "заблокирвоанные карточки",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "WB",
+        "detail": "Жора даст мне пояснения",
+        "order": 1
+      }
+    ]
+  },
+  {
+    "task_id": 20261110003,
+    "title": "Отпуск",
+    "created_date": "10.11.2026",
+    "task_type": "recurring",
+    "theme": "yellow",
+    "created_datetime": "10.11.2026 15:48",
+    "recurrence_type": "every_n_days",
+    "recurrence_value": 1,
+    "next_generation_date": "12.11.2026",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "УПД",
+        "detail": "Принимать УПД от РВБ и ОЗОН по всем кабинетам",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Проверять приёмки поставок",
+        "detail": "В озон и рвб\nпри положительном качестве ОЗОН в контур",
+        "order": 1
+      },
+      {
+        "checked": false,
+        "short": "Поставки бадов",
+        "detail": "Сверяем по количествую, позициям и владельцу и срокам",
+        "order": 2
+      },
+      {
+        "checked": false,
+        "short": "УОП",
+        "detail": "обрабатывать уведомления от РВБ и те что присылает Николай",
+        "order": 3
+      }
+    ]
+  },
+  {
+    "task_id": 20261111001,
+    "title": "ЧЗ МП",
+    "created_date": "11.11.2026",
+    "description": "Подготовка и списание КИЗов по товарам отданных на FBS",
+    "task_type": "instance",
+    "theme": "green",
+    "spawner_task": 20260922007,
+    "created_datetime": "11.11.2026 10:05"
+  },
+  {
+    "task_id": 20261111002,
+    "title": "Отпуск",
+    "created_date": "11.11.2026",
+    "task_type": "instance",
+    "theme": "yellow",
+    "spawner_task": 20261110003,
+    "created_datetime": "11.11.2026 10:05",
+    "checklist_required": true,
+    "checklist": [
+      {
+        "checked": false,
+        "short": "УПД",
+        "detail": "Принимать УПД от РВБ и ОЗОН по всем кабинетам",
+        "order": 0
+      },
+      {
+        "checked": false,
+        "short": "Проверять приёмки поставок",
+        "detail": "В озон и рвб\nпри положительном качестве ОЗОН в контур",
+        "order": 1
+      },
+      {
+        "checked": false,
+        "short": "Поставки бадов",
+        "detail": "Сверяем по количествую, позициям и владельцу и срокам",
+        "order": 2
+      },
+      {
+        "checked": false,
+        "short": "УОП",
+        "detail": "обрабатывать уведомления от РВБ и те что присылает Николай",
+        "order": 3
+      }
+    ]
   }
 ]

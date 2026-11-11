@@ -19,20 +19,24 @@
 
 from .colors import ColorCalculator
 from .icon_renderer import IconRenderer
+from .sizing import SizingCalculator
 from .selectors import SelectorBuilder
 from .qss import QssBuilder
 from .scrollbar import ScrollbarStyle
 from .window import WindowStyle
 from .widget_style import WidgetStyle
 from .bg_resolver import BackgroundResolver
+from .adapter import IconAdapter
 
 __all__ = [
     "ColorCalculator",
     "IconRenderer",
+    "SizingCalculator",
     "SelectorBuilder",
     "QssBuilder",
     "ScrollbarStyle",
     "WindowStyle",
     "WidgetStyle",
     "BackgroundResolver",
+    "IconAdapter",
 ]

@@ -18,10 +18,11 @@
 """
 
 from PySide6.QtCore import Qt, Slot
+from PySide6.QtWidgets import QSpacerItem, QSizePolicy
 
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, LayoutFactory,
+    ButtonFactory, LabelFactory, LayoutFactory, WindowBlockFactory,
 )
 from ui.styles import ColorCalculator, WindowStyle
 from services.returns_service import (
@@ -160,15 +161,38 @@ class ReturnsWindow(BaseServiceWindow):
         self.btn_prepare_transfer.setEnabled(False)
 
         # ---------- МАКЕТ ----------
-        box = LayoutFactory.create_service_box(
-            self,
-            path_selector=self.path_selector,
-            status_label=self.status_label,
-            left_buttons=[self.btn_prepare],
-            right_items=[self.btn_export_kiz, self.btn_prepare_transfer],
-            file_row=self.file_row,
-            right_stretch_top=True,
-        )
+        layout_def = {
+            "type": "box",
+            "header": {
+                "type": "header",
+                "rows": [
+                    {"widgets": [self.path_selector]},
+                    {"widgets": [self.file_row]},
+                    {"widgets": [self.status_label]},
+                ],
+            },
+            "body": {
+                "type": "row",
+                "stretch_factors": [1, 1],
+                "alignment": Qt.AlignTop,
+                "items": [
+                    {
+                        "type": "stack",
+                        "items": [self.btn_prepare],
+                    },
+                    {
+                        "type": "stack",
+                        "items": [
+                            QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding),
+                            self.btn_export_kiz,
+                            self.btn_prepare_transfer,
+                        ],
+                    },
+                ],
+            },
+        }
+
+        box = WindowBlockFactory.build_layout(self, layout_def)
 
         self._add_service_page(
             self.header_label, box, self._create_accumulate_row(),

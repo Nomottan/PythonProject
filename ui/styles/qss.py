@@ -102,6 +102,28 @@ class QssBuilder:
         )
 
     @staticmethod
+    def image_rule(selector: str, data_uri: str, width: int, height: int,
+                   margin_right: str = "0px") -> str:
+        """Собирает QSS-правило для image (например, иконки стрелки).
+
+        Вход:
+            selector — селектор псевдоэлемента (например, "QComboBox::down-arrow").
+            data_uri — base64 Data URI или путь к файлу.
+            width, height — размеры иконки.
+            margin_right — отступ справа.
+
+        Выход: QSS-блок.
+        """
+        return (
+            f" {selector} {{ "
+            f"image: url({data_uri}); "  # Убрали одинарные кавычки
+            f"width: {width}px; "
+            f"height: {height}px; "
+            f"margin-right: {margin_right}; "
+            f"}}"
+        )
+
+    @staticmethod
     def item_rule(selector: str, padding: str = "2px",
                   selected_bg=None) -> str:
         """Собирает QSS для ::item и опционально ::item:selected.

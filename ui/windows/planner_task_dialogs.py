@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory, LayoutFactory,
-    DeadlineFieldsWidget,
+    DeadlineFieldsWidget, CheckBoxFactory,
 )
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.base.base_planner_dialogs import BaseTaskDialog
@@ -81,7 +81,7 @@ class NewTaskDialog(BaseTaskDialog):
         )
 
         # Чекбокс чек-листа.
-        self.checklist_cb = InputWidgetFactory.create_checkbox(
+        self.checklist_cb = CheckBoxFactory.create_checkbox(
             self, text="",
             checked=(not self.creator and self._task.checklist_required),
             bg_color=self._elements_bg,

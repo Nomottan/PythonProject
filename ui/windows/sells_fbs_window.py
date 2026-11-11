@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QSizePolicy
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory,
-    ListWidgetFactory,
+    ListWidgetFactory, WindowBlockFactory,
 )
 from ui.styles import ColorCalculator, WindowStyle, WidgetStyle
 from ui.windows.shared_dialogs import (
@@ -167,16 +167,35 @@ class SellsFBSWindow(BaseServiceWindow):
         self.btn_files.clicked.connect(self.select_files)
 
         # ---------- МАКЕТ ----------
-        box = LayoutFactory.create_service_box(
-            self,
-            path_selector=self.path_selector,
-            status_label=self.status_label,
-            left_buttons=[
-                self.btn_prepare, self.btn_data_verification,
-                self.btn_processing, self.btn_prices,
-            ],
-            right_items=[self.btn_files, self.list_files],
-        )
+        layout_def = {
+            "type": "box",
+            "header": {
+                "type": "header",
+                "rows": [
+                    {"widgets": [self.path_selector]},
+                    {"widgets": [self.status_label]}
+                ]
+            },
+            "body": {
+                "type": "row",
+                "alignment": Qt.AlignTop,
+                "items": [
+                    {
+                        "type": "stack",
+                        "items": [
+                            self.btn_prepare, self.btn_data_verification,
+                            self.btn_processing, self.btn_prices
+                        ]
+                    },
+                    {
+                        "type": "stack",
+                        "items": [self.btn_files, self.list_files]
+                    }
+                ]
+            }
+        }
+
+        box = WindowBlockFactory.build_layout(self, layout_def)
 
         self._add_service_page(
             self.desc_label, box, self._create_accumulate_row(),

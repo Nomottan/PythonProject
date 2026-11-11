@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt
 
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, InputWidgetFactory,
-    ListWidgetFactory, TableWidgetFactory,
+    CheckBoxFactory, ListWidgetFactory, TableWidgetFactory,
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 
@@ -157,10 +157,9 @@ class Stage1ReviewDialog(QDialog):
             cand_item.setFlags(cand_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(i, 2, cand_item)
 
-            cb = InputWidgetFactory.create_checkbox(
-                self, "", checked=True,
+            cb = CheckBoxFactory.create_checkbox(
+                self, text="", checked=True,
                 bg_color=(30, 20, 35, 0.3),
-                text_color=None,
             )
             cb.stateChanged.connect(
                 lambda state, row=i: self._on_checkbox_changed(row, state)

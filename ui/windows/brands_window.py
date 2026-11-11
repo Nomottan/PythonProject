@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt
 from ui.styles import ColorCalculator, WindowStyle
 from ui.factories.factories import (
     LabelFactory, ListWidgetFactory, ButtonFactory, LayoutFactory,
-    InputWidgetFactory, FilterFactory,
+    InputWidgetFactory, FilterFactory, CheckBoxFactory,
 )
 from ui.factories.window_factories import ExtendedWindowFactory
 from ui.widgets.editable_list_widget import EditableListWidget
@@ -435,12 +435,11 @@ class BrandEditDialog(BaseEditDialog):
             b_fn=lambda b: b - 10,
             alpha=0.9,
         )
-        self.requires_saving_cb = InputWidgetFactory.create_checkbox(
+        self.requires_saving_cb = CheckBoxFactory.create_checkbox(
             parent=self,
             text="Требует сохранения. Есть вероятность возврата",
             checked=self.brand.requires_saving,
             bg_color=cb_bg,
-            text_color=None,
         )
         LayoutFactory.add_centered_widget(
             layout, self.requires_saving_cb,

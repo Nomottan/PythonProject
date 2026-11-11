@@ -23,7 +23,7 @@ from PySide6.QtCore import Qt
 from ui.styles import ColorCalculator, WindowStyle
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, LayoutFactory,
+    ButtonFactory, LabelFactory, WindowBlockFactory,
 )
 from ui.windows.kiz_by_sellers_dialogs import KizBySellersDialog
 from utils.log_tools.decorators import log_button_action
@@ -124,17 +124,25 @@ class KizBySellersWindow(BaseServiceWindow):
         )
 
         # ---------- МАКЕТ ----------
-        bottom_widget = LayoutFactory.create_row(
-            self, self.btn_accumulate, self.btn_open_distribute,
-            spacing=10,
-        )
-        box = LayoutFactory.create_service_box(
-            self,
-            path_selector=self.path_selector,
-            status_label=self.status_label,
-            left_buttons=[],
-            bottom_widget=bottom_widget,
-        )
+        layout_def = {
+            "type": "box",
+            "header": {
+                "type": "header",
+                "rows": [
+                    {"widgets": [self.path_selector]},
+                    {"widgets": [self.status_label]},
+                ],
+            },
+            "body": {
+                "type": "row",
+                "items": [
+                    self.btn_accumulate,
+                    self.btn_open_distribute,
+                ],
+            },
+        }
+
+        box = WindowBlockFactory.build_layout(self, layout_def)
 
         self._add_service_page(
             self.desc_label, box, accumulate_row=None,

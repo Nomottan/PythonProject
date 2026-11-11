@@ -20,12 +20,12 @@
 """
 
 from PySide6.QtCore import Qt, QMetaObject, QThread, Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSpacerItem, QSizePolicy
 from pathlib import Path
 from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, ListWidgetFactory,
-    LayoutFactory, FileDialogFactory,
+    LayoutFactory, FileDialogFactory, WindowBlockFactory,
 )
 from ui.styles import ColorCalculator, WindowStyle
 from ui.windows.mappings_window import BrandMappingsWindow
@@ -213,21 +213,45 @@ class CompareWindow(BaseServiceWindow):
         )
 
         # ---------- МАКЕТ ----------
-        # Левая колонка: step_label, кнопки этапов.
-        # Правая колонка: btn_add_supply, list_supply.
-        box = LayoutFactory.create_service_box(
-            self,
-            path_selector=self.path_selector,
-            status_label=self.status_label,
-            left_buttons=[
-                self.btn_prepare, self.btn_stage1,
-                self.btn_stage2, self.btn_stage3,
-                self.btn_report,
-            ],
-            right_items=[self.btn_add_supply, self.list_supply],
-            file_row=self.file_row,
-            right_stretch_top=True,
-        )
+        layout_def = {
+            "type": "box",
+            "header": {
+                "type": "header",
+                "rows": [
+                    {"widgets": [self.path_selector]},
+                    {"widgets": [self.file_row]},
+                ],
+            },
+            "body": {
+                "type": "row",
+                "stretch_factors": [0, 0],
+                "alignment": Qt.AlignTop,
+                "items": [
+                    {
+                        "type": "stack",
+                        "items": [
+                            self.status_label,
+                            QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding),
+                            self.btn_prepare,
+                            self.btn_stage1,
+                            self.btn_stage2,
+                            self.btn_stage3,
+                            self.btn_report,
+                        ],
+                    },
+                    {
+                        "type": "stack",
+                        "items": [
+                            QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding),
+                            self.btn_add_supply,
+                            self.list_supply,
+                        ],
+                    },
+                ],
+            },
+        }
+
+        box = WindowBlockFactory.build_layout(self, layout_def)
 
         page = self._add_service_page(
             self.instruction_label, box, accumulate_row=None,

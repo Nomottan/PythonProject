@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from PySide6.QtCore import Signal
 
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, InputWidgetFactory,
+    ButtonFactory, LabelFactory, InputWidgetFactory, CheckBoxFactory,
 )
 from ui.factories.composite_widget_factory import CompositeWidgetFactory
 from ui.styles import ColorCalculator
@@ -151,26 +151,14 @@ class PlannerRecurrenceFieldsWidget(QWidget):
         wd_l.setSpacing(6)
         self._weekday_boxes = []
         for day_name in ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]:
-            cell = QWidget()
-            cell_l = QHBoxLayout(cell)
-            cell_l.setContentsMargins(0, 0, 0, 0)
-            cell_l.setSpacing(2)
-            # Сначала label с днём — потом чекбокс без текста.
-            day_lbl = LabelFactory.create_label(
-                cell, day_name,
-                bg_color=self._label_bg, text_color=None,
-                font_size=11, padding="0px",
-            )
-            day_lbl.setFixedHeight(24)
-            cell_l.addWidget(day_lbl)
-            cb = InputWidgetFactory.create_checkbox(
-                cell, "", checked=False,
-                bg_color=self._field_bg,
+            cb = CheckBoxFactory.create_checkbox(
+                self._weekdays_widget, text=day_name, checked=False,
+                bg_color=self._field_bg, position="right",
+                font_size=11, fixed_height=24,
             )
             cb.stateChanged.connect(lambda _: self.data_changed.emit())
-            cell_l.addWidget(cb)
             self._weekday_boxes.append(cb)
-            wd_l.addWidget(cell)
+            wd_l.addWidget(cb)
         wd_l.addStretch()
         layout.addWidget(self._weekdays_widget)
 
