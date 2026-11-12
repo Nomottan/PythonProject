@@ -18,9 +18,8 @@ from PySide6.QtWidgets import (
 )
 from ui.styles import ColorCalculator, IconRenderer
 from ui.factories.factories import (
-    ButtonFactory, ListWidgetFactory,
+    ButtonFactory, ListWidgetFactory, BaseWidgetFactory,
 )
-from ui.styles import ColorCalculator, IconRenderer
 from utils.filter_utils import FieldDef, FilterCore
 
 class FilterCategory(QWidget):
@@ -407,35 +406,6 @@ class FilterPanel(QWidget):
         self._build_ui()
 
     # ---------- Сборка ----------
-    def _resolve_overlay_parent(self):
-        """Возвращает контейнер для overlay независимо от типа окна.
-
-        Выход:
-            QWidget — родитель для overlay-ряда.
-
-        Роль:
-            Обходит цепочку предков снизу вверх. Первый QMainWindow
-            в цепочке отдаёт centralWidget() — видимую область без
-            меню и статус-бара. Если такого нет — берётся top-level
-            окно (QDialog, plain QWidget).
-            `self.window()` не используется: на момент __init__
-            FilterPanel ещё не вписан в иерархию окна, и window()
-            может вернуть MainWindow вместо непосредственного
-            QMainWindow-родителя (BrandsWindow).
-        """
-        # Обход предков: ищем первый QMainWindow.
-        w = self
-        while w is not None:
-            if hasattr(w, "centralWidget"):
-                cw = w.centralWidget()
-                if cw is not None:
-                    return cw
-            w = w.parent()
-        # Fallback — top-level.
-        top = self.window()
-        if top is not None:
-            return top
-        return self
 
     def _on_horizontal_scroll(self, value: int = 0) -> None:
         """Реакция на прокрутку ряда категорий.
@@ -564,7 +534,7 @@ class FilterPanel(QWidget):
         )
 
         # Overlay-контейнер: parent — центральный виджет окна.
-        parent_widget = self._resolve_overlay_parent()
+        parent_widget = BaseWidgetFactory.resolve_overlay_parent(self)
 
         # Ряд категорий создаётся без родителя — его присвоит
         # QScrollArea.setWidget (передаст владение).

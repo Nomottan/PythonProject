@@ -19,7 +19,7 @@
 
 from .colors import ColorCalculator
 from .icon_renderer import IconRenderer
-from .sizing import SizingCalculator
+from .sizing import SizingCalculator, GeometryCalculator
 from .selectors import SelectorBuilder
 from .qss import QssBuilder
 from .scrollbar import ScrollbarStyle
@@ -32,6 +32,7 @@ __all__ = [
     "ColorCalculator",
     "IconRenderer",
     "SizingCalculator",
+    "GeometryCalculator",
     "SelectorBuilder",
     "QssBuilder",
     "ScrollbarStyle",

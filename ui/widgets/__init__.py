@@ -11,6 +11,7 @@
     path_selector.py                    — виджет выбора папки.
     file_list_widget.py                 — список файлов с крестиком.
     checkbox.py                         — композитный чекбокс CheckBox.
+    dropdown_composite.py               — выпадающий список DropdownComposite.
 
 Публичные виджеты реэкспортируются. _BaseTaskButton — приватный,
 наружу не выходит.
@@ -27,6 +28,7 @@ from .file_list_widget import FileListWidget
 from .filter_panel import FilterPanel, FilterCategory
 from .checklist_widget import ChecklistWidget
 from .checkbox import CheckBox
+from .dropdown_composite import DropdownComposite
 
 __all__ = [
     "DeadlineTaskButton",
@@ -40,4 +42,5 @@ __all__ = [
     "FilterCategory",
     "ChecklistWidget",
     "CheckBox",
+    "DropdownComposite",
 ]

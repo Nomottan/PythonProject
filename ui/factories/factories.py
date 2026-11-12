@@ -36,6 +36,7 @@ from .infrastructure_factory import ThreadFactory, FileDialogFactory
 from .window_factories import WindowFactory, ExtendedWindowFactory
 from .composite_widget_factory import CompositeWidgetFactory
 from .filter_factory import FilterFactory
+from .droplist_factory import DroplistFactory
 
 # Планировщик-специфичные виджеты — из ui.widgets.
 from ui.widgets.planner_slot_buttons import (
@@ -68,6 +69,8 @@ __all__ = [
     "CompositeWidgetFactory",
     # Фильтры
     "FilterFactory",
+    # Выпадающие списки
+    "DroplistFactory",
     # Планировщик-специфичные
     "DeadlineTaskButton", "InstanceTaskButton",
     "EventTaskButton", "SimpleTaskButton",

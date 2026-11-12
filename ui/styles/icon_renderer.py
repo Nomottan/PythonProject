@@ -91,11 +91,11 @@ class IconRenderer:
         if direction == "left":
             return base
         if direction == "up":
-            angle = -90
+            angle = 90
         elif direction == "right":
             angle = 180
         elif direction == "down":
-            angle = 90
+            angle = -90
         else:
             return base
         transform = QTransform().translate(6, 6).rotate(angle).translate(-6, -6)

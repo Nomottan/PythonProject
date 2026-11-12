@@ -107,3 +107,36 @@ class BaseWidgetFactory:
             widget.setMinimumSize(*min_size)
         if max_size is not None:
             widget.setMaximumSize(*max_size)
+
+    @staticmethod
+    def resolve_overlay_parent(widget):
+        """Возвращает контейнер для overlay независимо от типа окна.
+
+        Вход:
+            widget — QWidget, для которого ищется родитель overlay.
+
+        Выход:
+            QWidget — родитель для overlay-ряда.
+
+        Роль:
+            Обходит цепочку предков снизу вверх. Первый QMainWindow
+            в цепочке отдаёт centralWidget() — видимую область без
+            меню и статус-бара. Если такого нет — берётся top-level
+            окно (QDialog, plain QWidget).
+            `widget.window()` не используется на первом шаге: на
+            момент __init__ виджет ещё не вписан в иерархию окна,
+            и window() может вернуть MainWindow вместо
+            непосредственного QMainWindow-родителя.
+        """
+        w = widget
+        while w is not None:
+            if hasattr(w, "centralWidget"):
+                cw = w.centralWidget()
+                if cw is not None:
+                    return cw
+            w = w.parent()
+        # Fallback — top-level.
+        top = widget.window()
+        if top is not None:
+            return top
+        return widget

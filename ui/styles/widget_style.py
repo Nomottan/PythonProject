@@ -856,3 +856,27 @@ class WidgetStyle:
         Роль: делегирует в WindowStyle.close_button_qss.
         """
         btn.setStyleSheet(WindowStyle.close_button_qss(color))
+
+    @staticmethod
+    def apply_dropdown_separator(widget, bg_color) -> None:
+        text_color = ColorCalculator.text_for(bg_color)
+        rgba = ColorCalculator.to_rgba(text_color)
+        if rgba:
+            style = (
+                f"background-color: rgba({rgba[0]}, {rgba[1]}, {rgba[2]}, 0.15); "
+                f"border: none; "
+                f"max-height: 1px;"
+            )
+            widget.setStyleSheet(style)
+            widget.setFixedHeight(1)
+
+    @staticmethod
+    def apply_dropdown_chip(widget, bg_color) -> None:
+        """QSS для плашки (chip) в выпадающем списке."""
+        hover_color = ColorCalculator.hover(bg_color)
+        WidgetStyle.apply_label(
+            widget,
+            bg_color=hover_color,
+            padding="2px 6px",
+            border_radius=4
+        )

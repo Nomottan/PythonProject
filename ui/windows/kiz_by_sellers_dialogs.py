@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QHBoxLayout
 
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, InputWidgetFactory,
+    ButtonFactory, LabelFactory, DroplistFactory,
     FileDialogFactory, ThreadFactory,
 )
 from ui.styles import ColorCalculator, WindowStyle
@@ -124,11 +124,22 @@ class KizBySellersDialog(BaseEditDialog):
         row.addWidget(self._file_label, stretch=1)
         layout.addLayout(row)
 
-        self._combo = InputWidgetFactory.create_combo_box(
-            self, items=[s.name for s in self._sellers],
-            bg_color=element_bg,
+        dropdown_config = {
+            "settings": {
+                "auto_select_first": False,
+                "popup_bg_color": element_bg,
+                "popup_border": f"1px solid {ColorCalculator.to_str(ColorCalculator.hover(element_bg))}",
+                "item_separators": True,
+            },
+            "items": [
+                {"label": s.name, "data": s} for s in self._sellers
+            ]
+        }
+
+        self._combo = DroplistFactory.create_dropdown(
+            self, config=dropdown_config
         )
-        self._combo.currentIndexChanged.connect(self._on_seller_changed)
+        self._combo.selection_changed.connect(self._on_seller_changed)
         layout.addWidget(self._combo)
 
         self._btn_distribute = ButtonFactory.create_button(
@@ -164,20 +175,20 @@ class KizBySellersDialog(BaseEditDialog):
             self.logger.debug(f"Выбран файл: {Path(path).name}")
         self._update_button_state()
 
-    def _on_seller_changed(self, index) -> None:
-        """Реакция на выбор продавца в комбобоксе.
+    def _on_seller_changed(self, selected_seller) -> None:
+        """Реакция на выбор продавца в выпадающем списке.
 
-        Вход: index — индекс выбранного элемента.
+        Вход: selected_seller — объект Seller (или None).
         Роль: сохраняет Seller или None, обновляет кнопку.
         """
-        if 0 <= index < len(self._sellers):
-            self._selected_seller = self._sellers[index]
-            if self.logger:
+        self._selected_seller = selected_seller
+        if self.logger:
+            if self._selected_seller:
                 self.logger.debug(
                     f"Выбран продавец: {self._selected_seller.name}"
                 )
-        else:
-            self._selected_seller = None
+            else:
+                self.logger.debug("Продавец сброшен")
         self._update_button_state()
 
     def _update_button_state(self) -> None:
