@@ -7,11 +7,11 @@
 позиции происходит только по границам экрана.
 """
 
-from PySide6.QtCore import Qt, Signal, QEvent, QPoint
+from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer
 from PySide6.QtGui import QGuiApplication, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QApplication,
-    QSpacerItem, QSizePolicy, QGraphicsDropShadowEffect,  QLayoutItem
+    QSpacerItem, QSizePolicy, QGraphicsDropShadowEffect, QLayoutItem
 )
 
 from ui.factories.factories import (
@@ -22,11 +22,13 @@ from ui.styles import (
     GeometryCalculator, BackgroundResolver,
 )
 
+
 class _DropdownRow(QWidget):
     """Строка выпадающего списка с поддержкой hover и press."""
+
     def __init__(self, parent, bg_color):
         super().__init__(parent)
-        self.bg_color = bg_color  # <--- Публичный атрибут для BackgroundResolver
+        self.bg_color = bg_color
         self._bg_color = bg_color
         self._hover = False
         self._pressed = False
@@ -63,39 +65,21 @@ class _DropdownRow(QWidget):
             bg = ColorCalculator.hover(self._bg_color)
         else:
             bg = (0, 0, 0, 0)
-        self.setStyleSheet(f"background-color: {ColorCalculator.to_str(bg)}; border-radius: 4px;")
+        self.setStyleSheet(
+            f"background-color: {ColorCalculator.to_str(bg)}; border-radius: 4px;"
+        )
+
 
 class DropdownComposite(QWidget):
     """Композитный выпадающий список.
 
     Представляет собой кнопку-триггер и выпадающую панель (popup),
-    которая позиционируется как отдельное окно (Qt.Popup). Благодаря
-    этому список не обрезается границами родительских виджетов и
-    может выходить за пределы MainWindow, но всегда ограничивается
-    физическими границами экрана.
-
-    Пример использования:
-        dropdown = DroplistFactory.create_dropdown(parent, config={
-            "settings": {"placeholder": "Выберите...", "max_length": 300},
-            "items": [
-                {"label": "Пункт 1", "data": 1},
-                {"label": "Пункт 2", "data": 2},
-                {"separator": True},
-                {"label": "Пункт 3", "data": 3},
-            ]
-        })
-
-    Сигналы:
-        selection_changed(object) — испускается при смене выбора.
-            Для одиночного выбора (multi_select=False) возвращает data
-            выбранного элемента (или None). Для мультивыбора возвращает
-            список list[data] всех выбранных элементов.
-        item_clicked(int) — испускается при клике по любой активной
-            строке, передает её индекс.
+    которая позиционируется как отдельное окно (Qt.Popup).
     """
 
     selection_changed = Signal(object)
     item_clicked = Signal(int)
+    opened = Signal()
 
     _DEFAULT_SETTINGS = {
         "multi_select": False,
@@ -109,87 +93,52 @@ class DropdownComposite(QWidget):
         "popup_border": "none",
         "popup_border_radius": 6,
         "popup_shadow": False,
-        "max_length": 600,
+        "max_length": None,
         "row_style": "default",
         "arrow_position": "right",
         "auto_select_first": True,
         "item_separators": False,
+        "trigger_items": None,
+        "layout_direction": "vertical",
+        "preferred_direction": "auto",
+        "sync_checkboxes": False,
+        "is_category": False,
+        "debug": False,
     }
 
     def __init__(self, parent, config: dict = None, **kwargs):
-        """Конструктор выпадающего списка.
-
-                Вход:
-                    parent — родительский виджет.
-                    config — словарь конфигурации, содержащий два ключа:
-                        "settings" (dict) — переопределение настроек (см. ниже).
-                        "items" (list[dict]) — список элементов для наполнения.
-                    **kwargs — дополнительные настройки, которые объединяются
-                        с config["settings"] (приоритет: config["settings"] > kwargs).
-
-                --- НАСТРОЙКИ (config["settings"]) ---
-                multi_select (bool): Режим множественного выбора. Если True,
-                    current_data() возвращает список, а кнопка показывает
-                    "Выбрано: N". По умолчанию False.
-                close_on_select (bool | None): Закрывать ли попап при выборе
-                    элемента. None означает: True для одиночного выбора,
-                    False для мультивыбора.
-                placeholder (str): Текст-заглушка на кнопке, если ничего
-                    не выбрано. По умолчанию "Выберите...".
-                auto_update_button (bool): Автоматически обновлять текст
-                    кнопки при выборе элемента. По умолчанию True.
-                allow_multiple_open (bool): Разрешать открытие вложенных
-                    DropdownComposite одновременно с родительским. По умолчанию False.
-                close_on_scroll (bool): Закрывать ли вложенные списки при
-                    скролле родительского. По умолчанию True.
-                select_on_interactive_click (bool): Выбирать строку целиком
-                    при клике на интерактивный элемент внутри неё (кнопку, чекбокс).
-                    По умолчанию False (клик по кнопке не меняет выбор строки).
-                popup_bg_color (tuple | None): Цвет фона выпадающего списка.
-                    Если None, вычисляется автоматически от фона родителя.
-                popup_border (str): QSS-рамка списка. Например,
-                    "1px solid rgba(255,255,255,0.2)". По умолчанию "none".
-                popup_border_radius (int): Радиус скругления углов списка.
-                    По умолчанию 6.
-                popup_shadow (bool): Отображать ли тень под попапом.
-                    По умолчанию False.
-                max_length (int): Максимальная длина списка в пикселях.
-                    Если список раскрывается по вертикали — это max-height,
-                    если по горизонтали — max-width. По умолчанию 600.
-                row_style (str): Стиль строк. "default" — обычный текст,
-                    "chip" — текст в виде цветной плашки. По умолчанию "default".
-                arrow_position (str): Положение стрелки на кнопке ("left" или
-                    "right"). По умолчанию "right".
-                auto_select_first (bool): Автоматически выбирать первый элемент
-                    при добавлении. По умолчанию True.
-                item_separators (bool): Автоматически вставлять горизонтальные
-                    разделители между всеми элементами списка. По умолчанию False.
-
-                --- СТРУКТУРА ЭЛЕМЕНТОВ (config["items"]) ---
-                Каждый элемент списка — это словарь. Поддерживаются следующие типы:
-                1. {"label": "Текст", "data": <любые данные>} — обычная текстовая строка.
-                2. {"button": "Текст", "callback": func, "icon_type": "..."} — строка с кнопкой.
-                3. {"widget": QWidget | QLayoutItem} — произвольный виджет (например, вложенный дропдаун).
-                4. {"spacer": True} — распорка для отжатия элементов.
-                5. {"separator": True} — горизонтальная линия-разделитель.
-                Также можно добавить "disabled": True, чтобы заблокировать строку.
-                """
+        """Конструктор выпадающего списка."""
         super().__init__(parent)
+
         if config is None:
             config = {}
 
-        # Слияние настроек: _DEFAULT_SETTINGS -> kwargs -> config["settings"]
         self.settings = self._DEFAULT_SETTINGS.copy()
         self.settings.update(kwargs)
         self.settings.update(config.get("settings", {}))
 
+        # Поднимаемся по родителям, чтобы найти main_config и взять флаг debug
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "main_config"):
+                if p.main_config.get("debug", False):
+                    self.settings["debug"] = True
+                break
+            p = p.parent()
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/__init__]"
+            print(f"\n{prefix} === СОЗДАНИЕ {id(self)} ===")
+            print(f"{prefix}   config: {config}")
+            print(f"{prefix}   kwargs: {kwargs}")
+
         if self.settings["close_on_select"] is None:
             self.settings["close_on_select"] = not self.settings["multi_select"]
 
-        self._rows = []  # list[QWidget]
-        self._row_datas = []  # list[object]
-        self._row_texts = []  # list[str] (первый текстовый элемент)
-        self._row_disabled = []  # list[bool]
+        self._rows = []
+        self._row_datas = []
+        self._row_texts = []
+        self._row_disabled = []
         self._row_is_separator = []
 
         self._current_index = -1
@@ -197,7 +146,6 @@ class DropdownComposite(QWidget):
         self._popup = None
         self._popup_direction = "down"
 
-        # Резолв фона для popup
         if self.settings["popup_bg_color"] is None:
             parent_bg = BackgroundResolver.resolve_bg_color(self, None)
             if parent_bg is None:
@@ -206,46 +154,98 @@ class DropdownComposite(QWidget):
         else:
             self._popup_bg = self.settings["popup_bg_color"]
 
-            # 1. Кнопка-триггер (композит из текста и отдельной кнопки-стрелки)
-            self._trigger = QWidget(self)
-            self._trigger.setObjectName(f"dropdown_trigger_{id(self)}")
-            WidgetStyle.apply_panel(
-                self._trigger, self._popup_bg,
-                border_radius=self.settings["popup_border_radius"]
-            )
-            # Клик по пустому месту триггера тоже открывает список
-            self._trigger.mousePressEvent = lambda e: self.toggle()
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/__init__]"
+            print(f"{prefix}   Итоговые настройки:")
+            for k, v in self.settings.items():
+                print(f"{prefix}     {k} = {v}")
+            print(f"{prefix}   Фон попапа: {self._popup_bg}")
 
-            trigger_layout = QHBoxLayout(self._trigger)
-            trigger_layout.setContentsMargins(8, 4, 4, 4)
-            trigger_layout.setSpacing(4)
+        # Сборка триггера (ВСЕГДА)
+        self._build_trigger()
 
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._trigger)
+
+    # ---------- Сборка триггера ----------
+
+    def _build_trigger(self) -> None:
+        """Собирает кнопку-триггер (стандартную или кастомную)."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_trigger]"
+            print(f"\n{prefix} Старт")
+            print(f"{prefix}   trigger_items: {self.settings.get('trigger_items')}")
+            print(f"{prefix}   arrow_position: {self.settings.get('arrow_position')}")
+
+        trigger_widgets = []
+        stretch_factors = []
+
+        if self.settings["trigger_items"] is not None:
+            for item in self.settings["trigger_items"]:
+                match item:
+                    case {"widget": w}:
+                        trigger_widgets.append(w)
+                        stretch_factors.append(0)
+                    case {"label": text}:
+                        lbl = LabelFactory.create_label(None, text, bg_color=(0, 0, 0, 0))
+                        trigger_widgets.append(lbl)
+                        stretch_factors.append(1)
+                    case {"button": btn_text, **kw}:
+                        btn = ButtonFactory.create_button(None, btn_text, bg_color=self._popup_bg)
+                        trigger_widgets.append(btn)
+                        stretch_factors.append(0)
+                    case {"spacer": True}:
+                        trigger_widgets.append(
+                            QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+                        )
+                        stretch_factors.append(0)
+        else:
             self._text_label = LabelFactory.create_label(
-                self._trigger, text=self.settings["placeholder"], bg_color=(0, 0, 0, 0)
+                None, text=self.settings["placeholder"], bg_color=(0, 0, 0, 0)
             )
             self._text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            trigger_widgets.append(self._text_label)
+            stretch_factors.append(1)
 
-            # Фон стрелки — темнее фона триггера
-            arrow_bg = ColorCalculator.element_bg_for(self._popup_bg)
-            self._arrow_btn = ButtonFactory.create_button(
-                self._trigger, text="", bg_color=arrow_bg,
-                fixed_size=(24, 24), padding="0px",
-                border_radius=max(2, self.settings["popup_border_radius"] - 2)
-            )
-            self._arrow_btn.clicked.connect(self.toggle)
+        arrow_bg = ColorCalculator.element_bg_for(self._popup_bg)
+        self._arrow_btn = ButtonFactory.create_button(
+            None, text="", bg_color=arrow_bg,
+            fixed_size=(24, 24), padding="0px",
+            border_radius=max(2, self.settings["popup_border_radius"] - 2)
+        )
+        self._arrow_btn.clicked.connect(self.toggle)
 
-            if self.settings.get("arrow_position") == "left":
-                trigger_layout.addWidget(self._arrow_btn)
-                trigger_layout.addWidget(self._text_label, 1)
+        if self.settings.get("arrow_position") == "left":
+            trigger_widgets.insert(0, self._arrow_btn)
+            stretch_factors.insert(0, 0)
+        else:
+            trigger_widgets.append(self._arrow_btn)
+            stretch_factors.append(0)
+
+        self._trigger = LayoutFactory.create_row(
+            self, *trigger_widgets, spacing=4, margins=(8, 4, 4, 4),
+            stretch_factors=stretch_factors
+        )
+        self._trigger.setObjectName(f"dropdown_trigger_{id(self)}")
+        WidgetStyle.apply_panel(
+            self._trigger, self._popup_bg,
+            border_radius=self.settings["popup_border_radius"]
+        )
+
+        def trigger_mouse_press(event):
+            if event.button() == Qt.LeftButton:
+                self.toggle()
             else:
-                trigger_layout.addWidget(self._text_label, 1)
-                trigger_layout.addWidget(self._arrow_btn)
+                event.ignore()
 
-            layout = QVBoxLayout(self)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.addWidget(self._trigger)
+        self._trigger.mousePressEvent = trigger_mouse_press
 
-            self._update_button_icon()
+        self._update_button_icon()
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_trigger]"
+            print(f"{prefix} Конец. Виджетов в триггере: {len(trigger_widgets)}")
 
     def _update_trigger_style(self):
         """Меняет фон триггера при открытии/закрытии."""
@@ -254,7 +254,6 @@ class DropdownComposite(QWidget):
 
         extra = ""
         if is_open:
-            # Разделитель снизу, чтобы отделить кнопку от списка, и убираем нижние скругления
             sep_color = ColorCalculator.to_str(ColorCalculator.hover(self._popup_bg))
             extra = (
                 f"border-bottom: 1px solid {sep_color};"
@@ -270,37 +269,38 @@ class DropdownComposite(QWidget):
         )
 
     def _update_button_icon(self):
-        """Обновляет иконку стрелки на кнопке в зависимости от состояния."""
+        """Обновляет иконку стрелки на кнопке."""
         is_open = self._popup and self._popup.isVisible()
         pos = self.settings.get("arrow_position", "right")
 
         if is_open:
-            # При раскрытии стрелка смотрит в сторону списка
             direction = self._popup_direction
         else:
-            # В закрытом состоянии стрелка смотрит на текст
             direction = "left" if pos == "right" else "right"
 
         self._arrow_btn.setIcon(
             IconRenderer.make_arrow(direction, self._arrow_btn, bg_color=self._popup_bg)
         )
 
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_update_button_icon]"
+            print(f"{prefix} is_open={is_open}, direction={direction}")
+
     # ---------- Публичный API ----------
 
     def add_item(self, config: dict) -> int:
-        """Добавляет новую строку в выпадающий список.
+        """Добавляет новую строку в выпадающий список."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/add_item]"
+            print(f"\n{prefix} Вход: {config}")
 
-        Вход:
-            config — словарь с описанием строки (см. структуру в __init__).
-
-        Выход: индекс добавленной строки (int) или -1 при ошибке.
-        """
         index = len(self._rows)
         row_widget, data, text, is_sep = self._build_row(config, index)
         if row_widget is None:
+            if self.settings.get("debug"):
+                print(f"{prefix} Выход: -1 (виджет не собран)")
             return -1
 
-        index = len(self._rows)
         self._rows.append(row_widget)
         self._row_datas.append(data)
         self._row_texts.append(text)
@@ -315,13 +315,14 @@ class DropdownComposite(QWidget):
         else:
             self._update_button_text()
 
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/add_item]"
+            print(f"{prefix} Выход: index={index}, data={data}, text='{text}', is_separator={is_sep}")
+
         return index
 
     def add_separator(self) -> int:
-        """Добавляет горизонтальный разделитель в список вручную.
-
-        Выход: индекс добавленного разделителя (int).
-        """
+        """Добавляет горизонтальный разделитель в список вручную."""
         index = len(self._rows)
 
         line = QFrame()
@@ -335,13 +336,18 @@ class DropdownComposite(QWidget):
         self._row_disabled.append(True)
         self._row_is_separator.append(True)
 
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/add_separator]"
+            print(f"{prefix} Добавлен разделитель с индексом {index}")
+
         return index
 
     def clear_items(self) -> None:
-        """Очищает список полностью и сбрасывает состояние выбора.
+        """Очищает список полностью."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/clear_items]"
+            print(f"{prefix} Очистка. Было строк: {len(self._rows)}")
 
-        Возвращает кнопку к отображению placeholder (если auto_update_button=True).
-        """
         if self._popup:
             self._popup.deleteLater()
             self._popup = None
@@ -352,74 +358,156 @@ class DropdownComposite(QWidget):
         self._row_is_separator.clear()
         self._selected_indices.clear()
         self._current_index = -1
-        if self.settings["auto_update_button"]:
+        if self.settings["auto_update_button"] and hasattr(self, "_text_label"):
             self._text_label.setText(self.settings["placeholder"])
 
     def set_current_index(self, index: int) -> None:
-        """Программный выбор строки по её индексу.
+        """Программный выбор строки по её индексу."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_index]"
+            print(f"{prefix} Вход: index={index}, всего строк={len(self._rows)}")
 
-        Вход:
-            index — индекс строки (int). Если индекс выходит за границы,
-                    указывает на разделитель или disabled-строку —
-                    ничего не произойдет.
-        """
         if 0 <= index < len(self._rows) and not self._row_disabled[index] and not self._row_is_separator[index]:
             if not self.settings["multi_select"]:
                 self._selected_indices.clear()
             self._selected_indices.add(index)
             self._current_index = index
-            self._update_row_styles()  # <--- ДОБАВИТЬ
+            self._update_row_styles()
             self._emit_selection()
             if self.settings["auto_update_button"]:
                 self._update_button_text()
 
+            if self.settings.get("debug"):
+                prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_index]"
+                print(f"{prefix} Выбор установлен. selected_indices={self._selected_indices}")
+
     def current_index(self) -> int:
-        """Возвращает индекс текущей выбранной строки (или -1)."""
-        return self._current_index
+        """Возвращает индекс текущей выбранной строки."""
+        result = self._current_index
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/current_index]"
+            print(f"{prefix} Выход: {result}")
+        return result
 
     def set_current_data(self, data) -> None:
-        """Программный выбор строки по связанным с ней данным (data).
+        """Программный выбор строки по связанным с ней данным."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_data]"
+            print(f"{prefix} Вход: data={data}")
 
-        Вход:
-            data — объект, переданный в конфиге строки (ключ "data").
-        """
         for i, d in enumerate(self._row_datas):
             if d == data:
                 self.set_current_index(i)
                 return
 
-    def current_data(self):
-        """Возвращает данные (data) выбранных строк.
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_data]"
+            print(f"{prefix} data не найдена в списке")
 
-        Выход:
-            Для multi_select=False: data выбранного элемента или None.
-            Для multi_select=True: список list[data] выбранных элементов.
-        """
+    def _get_child_dropdowns(self) -> list:
+        """Возвращает список вложенных DropdownComposite."""
+        children = []
+        for row in self._rows:
+            for child in row.findChildren(DropdownComposite):
+                if child is not self and child not in children:
+                    children.append(child)
+        return children
+
+    def select_all(self) -> None:
+        """Выбирает все элементы. Только для multi_select=True."""
+        if not self.settings["multi_select"]:
+            return
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/select_all]"
+            print(f"{prefix} Старт. Всего строк: {len(self._rows)}")
+
+        self._selected_indices.clear()
+        for i in range(len(self._rows)):
+            if not self._row_disabled[i] and not self._row_is_separator[i]:
+                self._selected_indices.add(i)
+
+        if self._selected_indices:
+            self._current_index = list(self._selected_indices)[-1]
+
+        self._update_row_styles()
+
+        if self.settings.get("is_category") and hasattr(self, "_child_dropdowns"):
+            for child in self._child_dropdowns:
+                child.select_all()
+
+        self._emit_selection()
+        if self.settings["auto_update_button"]:
+            self._update_button_text()
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/select_all]"
+            print(f"{prefix} Конец. Выбрано индексов: {len(self._selected_indices)}")
+
+    def clear_selection(self) -> None:
+        """Снимает выбор со всех элементов."""
+        if not self.settings["multi_select"]:
+            return
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/clear_selection]"
+            print(f"{prefix} Старт")
+
+        self._selected_indices.clear()
+        self._current_index = -1
+        self._update_row_styles()
+
+        if self.settings.get("is_category") and hasattr(self, "_child_dropdowns"):
+            for child in self._child_dropdowns:
+                child.clear_selection()
+
+        self._emit_selection()
+        if self.settings["auto_update_button"]:
+            self._update_button_text()
+
+    def current_data(self):
+        """Возвращает данные выбранных строк."""
         if self.settings["multi_select"]:
-            return [self._row_datas[i] for i in sorted(self._selected_indices)]
-        if self._current_index >= 0:
-            return self._row_datas[self._current_index]
-        return None
+            result = [self._row_datas[i] for i in sorted(self._selected_indices)]
+        elif self._current_index >= 0:
+            result = self._row_datas[self._current_index]
+        else:
+            result = None
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/current_data]"
+            print(f"{prefix} Выход: {result}")
+
+        return result
 
     def set_placeholder(self, text: str) -> None:
-        """Динамически меняет текст-заглушку (placeholder).
-
-        Текст применится, если в данный момент ничего не выбрано.
-        """
+        """Динамически меняет placeholder."""
         self.settings["placeholder"] = text
-        if not self._selected_indices and self.settings["auto_update_button"]:
+        if not self._selected_indices and self.settings["auto_update_button"] and hasattr(self, "_text_label"):
             self._text_label.setText(text)
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_placeholder]"
+            print(f"{prefix} Новый placeholder: '{text}'")
 
     def open(self) -> None:
         """Открывает выпадающий список."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/open]"
+            print(f"\n{prefix} Старт. Строк: {len(self._rows)}")
+
         if not self._rows:
+            if self.settings.get("debug"):
+                print(f"{prefix} Список пуст, отмена")
             return
+
         if self._popup is None:
             self._build_popup()
 
         self._position_popup()
         self._update_row_styles()
         self._popup.show()
+        self.opened.emit()
         self._update_button_icon()
         self._update_trigger_style()
 
@@ -429,6 +517,15 @@ class DropdownComposite(QWidget):
 
     def close(self) -> None:
         """Закрывает выпадающий список."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/close]"
+            print(f"{prefix} Вызов close()")
+
+        # Принудительно закрываем дочерние попапы
+        if hasattr(self, "_child_dropdowns"):
+            for child in self._child_dropdowns:
+                child.close()
+
         if self._popup and self._popup.isVisible():
             self._popup.hide()
             self._update_button_icon()
@@ -438,16 +535,21 @@ class DropdownComposite(QWidget):
             app.removeEventFilter(self)
 
     def toggle(self) -> None:
-        """Переключает состояние списка (открывает/закрывает)."""
+        """Переключает состояние списка."""
         if self._popup and self._popup.isVisible():
             self.close()
         else:
-            self.open()
+            # Задержка, чтобы Qt.Popup успел обработать текущий клик
+            QTimer.singleShot(0, self.open)
 
     # ---------- Внутренние методы ----------
 
     def _build_row(self, config: dict, index: int) -> tuple:
         """Собирает одну строку для popup."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_row]"
+            print(f"\n{prefix} index={index}, config={config}")
+
         is_separator = config.get("separator", False)
         if is_separator:
             line = QFrame()
@@ -456,7 +558,6 @@ class DropdownComposite(QWidget):
             WidgetStyle.apply_dropdown_separator(line, self._popup_bg)
             return line, None, "", True
 
-            # Поддержка как {"items": [...]}, так и прямого {"label": ...}
         items = config.get("items")
         if items is None:
             items = [config]
@@ -468,21 +569,29 @@ class DropdownComposite(QWidget):
         for item in items:
             match item:
                 case {"widget": w}:
+                    if not hasattr(self, "_child_dropdowns"):
+                        self._child_dropdowns = []
+
+                    # Если это сам дропдаун
+                    if isinstance(w, DropdownComposite):
+                        if w not in self._child_dropdowns:
+                            self._child_dropdowns.append(w)
+                    # Если это контейнер (например, _categories_row), ищем дропдауны внутри него
+                    elif isinstance(w, QWidget):
+                        for child in w.findChildren(DropdownComposite):
+                            if child not in self._child_dropdowns:
+                                self._child_dropdowns.append(child)
+
                     widgets.append(w)
                 case {"label": lbl_text}:
                     if self.settings["row_style"] == "chip":
                         lbl = LabelFactory.create_label(None, lbl_text, bg_color=(0, 0, 0, 0))
                         WidgetStyle.apply_dropdown_chip(lbl, self._popup_bg)
                     else:
-                        # Прозрачный фон, но с нормальными отступами для высоты
                         text_color = ColorCalculator.text_for(self._popup_bg)
                         lbl = LabelFactory.create_label(
-                            None,
-                            lbl_text,
-                            bg_color=(0, 0, 0, 0),
-                            text_color=text_color,
-                            padding="4px 8px",
-                            border_radius=0
+                            None, lbl_text, bg_color=(0, 0, 0, 0),
+                            text_color=text_color, padding="4px 8px", border_radius=0
                         )
                     widgets.append(lbl)
                     if not first_text:
@@ -502,7 +611,10 @@ class DropdownComposite(QWidget):
 
         row = _DropdownRow(None, self._popup_bg)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(4, 4, 4, 4)
+        if self.settings.get("layout_direction") == "vertical":
+            row_layout.setContentsMargins(0, 2, 0, 2)  # <--- Возвращаем вертикальные отступы
+        else:
+            row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(0)
         row_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         for w in widgets:
@@ -514,37 +626,62 @@ class DropdownComposite(QWidget):
         if config.get("disabled", False):
             row.setEnabled(False)
 
-        # Обработка клика по строке
+        row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        row_checkboxes = []
+        if self.settings.get("sync_checkboxes", False):
+            from ui.widgets.checkbox import CheckBox
+            row_checkboxes = row.findChildren(CheckBox)
+            for cb in row_checkboxes:
+                cb.toggled.connect(
+                    lambda checked, idx=index: self._on_row_checkbox_toggled(idx, checked)
+                )
+
         original_mouse_press = row.mousePressEvent
 
         def mouse_press(event, idx=index):
             if event.button() == Qt.LeftButton:
+                if self.settings.get("sync_checkboxes", False) and row_checkboxes:
+                    # Проверяем, не кликнули ли мы прямо по чекбоксу
+                    from ui.widgets.checkbox import CheckBox
+                    child = row.childAt(event.position().toPoint())
+                    while child:
+                        if isinstance(child, CheckBox):
+                            return  # Чекбокс сам обработает клик
+                        child = child.parent()
+                    # Если клик по пустому месту строки — программно нажимаем чекбокс
+                    row_checkboxes[0].toggle()
+                    return
                 self.item_clicked.emit(idx)
                 if self.settings["select_on_interactive_click"] or not config.get("interactive", False):
                     self.set_current_index(idx)
                     if self.settings["close_on_select"]:
                         self.close()
-            # Вызываем оригинальный метод _DropdownRow для отрисовки эффекта нажатия
             original_mouse_press(event)
 
         row.mousePressEvent = mouse_press
+
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_row]"
+            print(f"{prefix} Выход: data={row_data}, text='{first_text}', disabled={config.get('disabled', False)}")
+
         return row, row_data, first_text, False
 
     def _build_popup(self) -> None:
         """Создает и собирает выпадающее окно."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_popup]"
+            print(f"\n{prefix} Старт. Всего строк: {len(self._rows)}")
+            print(f"{prefix}   layout_direction={self.settings.get('layout_direction')}")
+
         self._popup = QWidget(None, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         self._popup.setAttribute(Qt.WA_TranslucentBackground)
         self._popup.setAttribute(Qt.WA_DeleteOnClose, False)
 
-        # Главный контейнер для фона (тень и закругления)
         container = QWidget(self._popup)
         container.setObjectName("dropdown_popup_container")
-
-        # Перехватываем клики, чтобы Qt.Popup не закрывался при клике в пустоту
         container.mousePressEvent = lambda e: e.accept()
         self._popup.mousePressEvent = lambda e: e.accept()
 
-        # Стилизация контейнера
         WidgetStyle.apply_panel(
             container, self._popup_bg,
             border_radius=self.settings["popup_border_radius"],
@@ -563,24 +700,38 @@ class DropdownComposite(QWidget):
         popup_layout.setContentsMargins(margin, margin, margin, margin)
         popup_layout.addWidget(container)
 
-        # Создаем QScrollArea и внутренний контейнер
-        scroll, content_widget, scroll_layout = ListWidgetFactory.create_scroll_container(
-            container, bg_color=self._popup_bg, rounded=False
-        )
-        self._scroll = scroll
+        if self.settings.get("layout_direction") == "horizontal":
+            from PySide6.QtWidgets import QScrollArea
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            # Отключаем вертикальный скролл, чтобы элементы не ездили вверх-вниз
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setStyleSheet("background: transparent;")
+            content_widget = QWidget()
+            content_widget.setStyleSheet("background: transparent;")
+            scroll_layout = QHBoxLayout(content_widget)
+            scroll_layout.setContentsMargins(0, 0, 0, 0)
+            scroll_layout.setSpacing(4)
+            scroll_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            scroll.setWidget(content_widget)
+            self._scroll = scroll
+        else:
+            scroll, content_widget, scroll_layout = ListWidgetFactory.create_scroll_container(
+                container, bg_color=self._popup_bg, rounded=False
+            )
+            self._scroll = scroll
 
-        # Применяем скругление к самому скроллу и его вьюпорту, чтобы углы списка были круглыми
         radius = self.settings["popup_border_radius"]
         scroll.setStyleSheet(f"QScrollArea {{ border-radius: {radius}px; background: transparent; border: none; }}")
         scroll.viewport().setStyleSheet(f"border-radius: {radius}px; background: transparent;")
         content_widget.setStyleSheet(f"border-radius: {radius}px; background: transparent;")
 
-        # Добавляем строки напрямую в layout скролла
         for i, row in enumerate(self._rows):
             row.setParent(content_widget)
             scroll_layout.addWidget(row)
 
-            # Добавляем разделитель ПОСЛЕ строки, если это не последняя строка
             if self.settings.get("item_separators", False) and i < len(self._rows) - 1:
                 line = QFrame()
                 line.setFrameShape(QFrame.HLine)
@@ -589,9 +740,7 @@ class DropdownComposite(QWidget):
                 line.setParent(content_widget)
                 scroll_layout.addWidget(line)
 
-        # Внутренний layout контейнера (содержит только скролл)
         inner_layout = QVBoxLayout(container)
-        # Теперь можно вернуть отступы в 0, так как QScrollArea стал прозрачным и скругленным
         inner_layout.setContentsMargins(0, 0, 0, 0)
         inner_layout.addWidget(scroll)
 
@@ -600,42 +749,154 @@ class DropdownComposite(QWidget):
         if not self._popup:
             return
 
-        # 1. Сбрасываем лимиты и привязываем ширину к триггеру
-        w = max(self._trigger.width(), 100)
-        self._popup.setFixedWidth(w)
-        self._scroll.setMaximumHeight(16777215)  # Qt-дефолт (сброс)
+        debug = self.settings.get("debug", False)
+        prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_position_popup]"
+
+        # Сбрасываем все предыдущие ограничения
+        self._scroll.setMaximumHeight(16777215)
         self._scroll.setMaximumWidth(16777215)
+        self._popup.setMinimumSize(0, 0)
+        self._popup.setMaximumSize(16777215, 16777215)
+
+        # 1. Получаем координаты триггера и вычисляем динамический max_length
+        trigger_global = self._trigger.mapToGlobal(QPoint(0, 0))
+        window = self.window()
+        win_rect = window.geometry() if window else None
+        preferred_dir = self.settings.get("preferred_direction", "auto")
+
+        max_len = GeometryCalculator.calculate_max_popup_length(
+            trigger_global,
+            self._trigger.width(),
+            self._trigger.height(),
+            preferred_dir,
+            win_rect,
+            self.settings.get("max_length")
+        )
+
+        if debug:
+            print(f"{prefix}   [SIZE] Dynamic max_length: {max_len} (set: {self.settings['max_length']})")
+
+        if self.settings.get("layout_direction") == "vertical":
+            w = max(self._trigger.width(), 100)
+            self._popup.setFixedWidth(w)
+            self._scroll.setMaximumHeight(max_len)
+            self._scroll.setMinimumHeight(0)
+            self._scroll.setFixedWidth(w)  # <--- фиксируем ширину скролла тоже
+
+            # Вычисляем реальную высоту контента
+            scroll_widget = self._scroll.widget()
+            if scroll_widget and scroll_widget.layout():
+                scroll_widget.layout().activate()
+                content_h = scroll_widget.layout().sizeHint().height()
+            else:
+                content_h = 100
+
+            final_h = min(content_h, max_len)
+            self._scroll.setFixedHeight(final_h)
+
+            if debug:
+                print(f"\n{prefix} Режим: ВЕРТИКАЛЬНЫЙ")
+                print(f"{prefix}   Ширина попапа = ширине триггера: {w}")
+                print(f"{prefix}   Content height: {content_h}")
+                print(f"{prefix}   Scroll height: {final_h}")
+        else:
+            # Горизонтальный режим
+            scroll_widget = self._scroll.widget()
+            if scroll_widget:
+                content_width = scroll_widget.sizeHint().width()
+            else:
+                content_width = 400
+
+            # 1. Вычисляем ширину попапа
+            w = min(content_width, max_len)
+
+            # 2. Вычисляем высоту с учетом скроллбара
+            will_scroll = content_width > w
+            hbar_h = 0
+            if will_scroll:
+                hbar_h = self._scroll.horizontalScrollBar().sizeHint().height()
+
+            final_h = self._trigger.height() + hbar_h
+            self._scroll.setFixedHeight(final_h)
+
+            # 3. ФИКСИРУЕМ ширину ДО adjustSize, чтобы он не растянул попап
+            self._popup.setFixedWidth(w)
+            self._scroll.setFixedWidth(w)
+
+            if debug:
+                print(f"\n{prefix} Режим: ГОРИЗОНТАЛЬНЫЙ")
+                print(f"{prefix}   Content width: {content_width}")
+                print(f"{prefix}   Popup width: {w}")
+                print(f"{prefix}   Will scroll: {will_scroll}, hbar_h: {hbar_h}")
+                print(f"{prefix}   Scroll height: {final_h}")
 
         self._popup.layout().activate()
         self._popup.adjustSize()
 
+        h = self._popup.height()  # <--- убрали перезапись w
+
+        margin = 10 if self.settings["popup_shadow"] else 0
+        self._popup.setFixedSize(w, final_h + margin * 2)
         h = self._popup.height()
 
-        # 2. Позиционируем ровно под триггером
-        btn_global = self._trigger.mapToGlobal(QPoint(0, self._trigger.height()))
+        trigger_global = self._trigger.mapToGlobal(QPoint(0, 0))
 
-        # Если есть тень, визуальный край списка начинается ниже на размер отступа
-        margin = 10 if self.settings["popup_shadow"] else 0
-        btn_global.setY(btn_global.y() - margin)
+        if debug:
+            print(f"{prefix}   [SIZE] Итоговый размер попапа: {w}x{h}")
+            print(f"{prefix}   [POS]  Триггер global: ({trigger_global.x()}, {trigger_global.y()})")
+            print(f"{prefix}   [POS]  Триггер size: {self._trigger.width()}x{self._trigger.height()}")
 
-        # 3. Вычисляем координаты и направление
+        # 4. Вычисляем координаты и направление
         x, y, direction = GeometryCalculator.calculate_popup_position(
-            btn_global, w, h, self._trigger.height(), self._trigger.width()
+            trigger_global, w, h, self._trigger.height(), self._trigger.width(),
+            preferred_dir=self.settings.get("preferred_direction", "auto")
         )
         self._popup_direction = direction
 
-        # 4. Применяем max_length в зависимости от направления
-        if direction in ("up", "down"):
-            self._scroll.setMaximumHeight(self.settings["max_length"])
-        else:  # "left", "right"
-            self._scroll.setMaximumWidth(self.settings["max_length"])
+        if debug:
+            print(f"{prefix}   [POS]  Направление: {direction}")
+            print(f"{prefix}   [POS]  Сырые координаты: x={x}, y={y}")
 
-        # 5. Пересчитываем размеры (если лимит был превышен) и применяем позицию
-        self._popup.layout().activate()
-        self._popup.adjustSize()
-        self._popup.move(x, y)
+        # 5. Применяем тень
+        margin = 10 if self.settings["popup_shadow"] else 0
+        final_x = x - margin
+        final_y = y - margin
+
+        if debug:
+            print(f"{prefix}   [POS]  Margin: {margin}")
+            print(f"{prefix}   [POS]  Финальные координаты: ({final_x}, {final_y})")
+
+        # 6. Применяем позицию
+        self._popup.move(final_x, final_y)
+
+    def _on_row_checkbox_toggled(self, index, checked):
+        """Слот для синхронизации чекбоксов в строке."""
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_on_row_checkbox_toggled]"
+            print(f"{prefix} index={index}, checked={checked}, multi_select={self.settings['multi_select']}")
+
+        if self.settings["multi_select"]:
+            if checked:
+                self._selected_indices.add(index)
+            else:
+                self._selected_indices.discard(index)
+            self._current_index = index if checked else -1
+        else:
+            if checked:
+                self._selected_indices = {index}
+                self._current_index = index
+            else:
+                self._selected_indices.clear()
+                self._current_index = -1
+
+        self._update_row_styles()
+        self._update_button_text()
+        self._emit_selection()
 
     def _update_button_text(self) -> None:
+        if not hasattr(self, "_text_label"):
+            return
+
         if not self._selected_indices:
             if self.settings.get("placeholder") is not None:
                 self._text_label.setText(self.settings["placeholder"])
@@ -653,7 +914,6 @@ class DropdownComposite(QWidget):
             self._text_label.setText(text if text else self.settings["placeholder"])
 
     def _update_row_styles(self) -> None:
-        """Обновляет фон строк в зависимости от того, выбраны они или нет."""
         for i, row in enumerate(self._rows):
             if self._row_is_separator[i]:
                 continue
@@ -661,26 +921,63 @@ class DropdownComposite(QWidget):
                 row.is_selected = (i in self._selected_indices)
                 row._update_style()
 
+                if self.settings.get("sync_checkboxes", False):
+                    from ui.widgets.checkbox import CheckBox
+                    checkboxes = row.findChildren(CheckBox)
+                    for cb in checkboxes:
+                        cb.blockSignals(True)
+                        cb.setChecked(i in self._selected_indices)
+                        cb.blockSignals(False)
+
+    def _on_scroll(self, value: int = 0) -> None:
+        """Закрывает вложенные списки при скролле."""
+        if self.settings.get("close_on_scroll", True):
+            if hasattr(self, "_child_dropdowns"):
+                for child in self._child_dropdowns:
+                    child.close()
+
     def _emit_selection(self) -> None:
         """Генерирует сигнал об изменении выбора."""
-        self.selection_changed.emit(self.current_data())
+        data = self.current_data()
+        if self.settings.get("debug"):
+            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_emit_selection]"
+            print(f"{prefix} Эмитим selection_changed({data})")
+        self.selection_changed.emit(data)
 
     def eventFilter(self, obj, event) -> bool:
         """Закрывает popup при клике вне его границ."""
         if event.type() == QEvent.MouseButtonPress and self._popup and self._popup.isVisible():
             pos = event.globalPosition().toPoint()
 
-            # Клик внутри popup — ок, не закрываем
+            # 1. Клик внутри текущего popup — не закрываем
             if self._popup.geometry().contains(pos):
                 return False
 
-            # Клик по кнопке-триггеру — принудительно закрываем и ПОГЛОЩАЕМ событие
+            # 2. Клик внутри дочерних попапов — не закрываем мастер
+            if hasattr(self, "_child_dropdowns"):
+                for child_dd in self._child_dropdowns:
+                    if child_dd._popup and child_dd._popup.isVisible() and child_dd._popup.geometry().contains(pos):
+                        return False
+
+            # 3. Клик по кнопке-триггеру
             if self._trigger.rect().contains(self._trigger.mapFromGlobal(pos)):
+                from ui.widgets.checkbox import CheckBox
+                clicked_widget = self._trigger.childAt(self._trigger.mapFromGlobal(pos))
+                while clicked_widget:
+                    if isinstance(clicked_widget, CheckBox):
+                        # Программно кликаем по чекбоксу и поглощаем клик.
+                        # Popup останется открытым, а тристейт сработает.
+                        clicked_widget._toggle()
+                        return True
+                    clicked_widget = clicked_widget.parent()
+
+                # Клик по пустому месту триггера или стрелке — закрываем и поглощаем.
+                # (Поглощение предотвращает вызов trigger_mouse_press, который вызвал бы мерцание).
                 self.close()
                 return True
 
-            # Клик вне — закрываем и ПОГЛОЩАЕМ событие
+            # 4. Клик вне — закрываем и НЕ ПОГЛОЩАЕМ
             self.close()
-            return True
+            return False
 
         return super().eventFilter(obj, event)

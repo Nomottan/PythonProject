@@ -465,7 +465,15 @@ class CriticalHandler(HandlerV2):
             return
 
         # Fallback: старая логика через _run_in_ui_thread.
+        # Если active_child нет (например, окно упало при инициализации),
+        # берем текущее активное окно приложения, чтобы диалог
+        # отцентрировался относительно него, а не экрана.
         parent = active_child
+        if parent is None:
+            app = QApplication.instance()
+            if app is not None:
+                parent = app.activeWindow()
+
         bg_color = getattr(parent, "bg_color", None) if parent else None
 
         def show_dialog():

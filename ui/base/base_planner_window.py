@@ -174,7 +174,7 @@ class _BasePlannerListWindow(QMainWindow):
         # Qt-родителя с отступами (10, 10, 0, 0).
         if parent is not None and hasattr(parent, "window_manager"):
             parent.window_manager.register_window(
-                self, parent=parent, fill_parent=True, modal=modal,
+                self, parent=parent, fill_parent=True, modal=False,
             )
 
     # ============================================================

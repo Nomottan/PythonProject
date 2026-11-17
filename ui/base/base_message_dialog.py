@@ -63,7 +63,9 @@ class BaseMessageDialog(QDialog):
               по _is_modal() наследника.
         """
         super().__init__(parent)
-
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self._parent_bg = self._resolve_parent_bg(parent, bg_color)
         self._parent_bg = self._resolve_parent_bg(parent, bg_color)
         self._dialog_bg = self._calc_dialog_bg(self._parent_bg)
         self._border_color = (
@@ -172,8 +174,14 @@ class BaseMessageDialog(QDialog):
         layout.setSpacing(15)
 
         if title_text:
+            title_color = BaseWidgetFactory.calc_text_color(self._dialog_bg)
             layout.addWidget(
-                LabelFactory.create_header_label(self, title_text)
+                LabelFactory.create_label(
+                    self, title_text,
+                    bg_color=(0, 0, 0, 0),
+                    text_color=title_color,
+                    alignment=Qt.AlignCenter
+                )
             )
 
         text_color = BaseWidgetFactory.calc_text_color(self._dialog_bg)

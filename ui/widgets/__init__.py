@@ -1,20 +1,5 @@
 """
 Пакет ui.widgets — кастомные виджеты проекта.
-
-Модули:
-    planner_slot_buttons.py             — кнопки-слоты мини-планировщика.
-    planner_dl_fields_widget.py         — поля ввода дедлайна.
-    planner_recurrence_fields_widget.py — поля правила повторения.
-    planner_day_picker_widget.py        — сетка выбора чисел месяца.
-    status_log.py                       — QTextEdit-лог статуса.
-    editable_list_widget.py             — редактируемый список строк.
-    path_selector.py                    — виджет выбора папки.
-    file_list_widget.py                 — список файлов с крестиком.
-    checkbox.py                         — композитный чекбокс CheckBox.
-    dropdown_composite.py               — выпадающий список DropdownComposite.
-
-Публичные виджеты реэкспортируются. _BaseTaskButton — приватный,
-наружу не выходит.
 """
 
 from .planner_slot_buttons import (
@@ -25,7 +10,7 @@ from .planner_dl_fields_widget import DeadlineFieldsWidget
 from .path_selector import PathSelector
 from .editable_list_widget import EditableListWidget
 from .file_list_widget import FileListWidget
-from .filter_panel import FilterPanel, FilterCategory
+from .filter_panel import FilterPanel
 from .checklist_widget import ChecklistWidget
 from .checkbox import CheckBox
 from .dropdown_composite import DropdownComposite
@@ -39,7 +24,7 @@ __all__ = [
     "PathSelector",
     "EditableListWidget",
     "FileListWidget",
-    "FilterCategory",
+    "FilterPanel",
     "ChecklistWidget",
     "CheckBox",
     "DropdownComposite",
