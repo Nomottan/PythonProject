@@ -13,7 +13,8 @@
 
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout
 from PySide6.QtCore import Qt
-
+from ui.windows.address_dialog import AddressDialog
+from utils.log_tools.decorators import log_button_action
 from ui.factories.factories import (
     LabelFactory, InputWidgetFactory, LayoutFactory,
     ListWidgetFactory, ButtonFactory,
@@ -108,48 +109,55 @@ class SellersWindow(QMainWindow):
         Роль: слева кнопка удаления, затем имя, «Компания», «Бренды»,
               «Ключи».
         """
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(4)
-
+        # Создание кнопок
         del_btn = ButtonFactory.create_delete_button(
             self,
             callback=lambda: self._remove_seller(row, seller),
             size=(25, 25),
         )
-        layout.addWidget(del_btn)
-
         name_btn = ButtonFactory.create_button(
             self, seller.name, (30, 50, 90, 0.8),
             fixed_size=(140, 30),
         )
-        name_btn.clicked.connect(
-            lambda checked, b=name_btn, s=seller: self._rename_seller(b, s)
-        )
-        layout.addWidget(name_btn)
-
         company_btn = ButtonFactory.create_button(
             self, "Компания", (80, 100, 120, 0.7),
             fixed_size=(90, 30),
         )
-        company_btn.clicked.connect(lambda: self._edit_company(seller))
-        layout.addWidget(company_btn)
-
+        requisites_btn = ButtonFactory.create_button(
+            self, "Реквизиты", (80, 100, 120, 0.7),
+            fixed_size=(90, 30),
+        )
         brands_btn = ButtonFactory.create_button(
             self, "Бренды", (80, 100, 120, 0.7),
             fixed_size=(90, 30),
         )
-        brands_btn.clicked.connect(lambda: self._edit_brands(seller))
-        layout.addWidget(brands_btn)
-
         keys_btn = ButtonFactory.create_button(
             self, "Доп", (40, 60, 70, 0.7),
             fixed_size=(30, 30), padding="8px 1px", font_size="8",
         )
-        keys_btn.clicked.connect(lambda: self._edit_keys(seller))
-        layout.addWidget(keys_btn)
 
+        # Подключение кнопок
+        name_btn.clicked.connect(
+            lambda checked, b=name_btn, s=seller: self._rename_seller(b, s)
+        )
+        company_btn.clicked.connect(lambda: self._edit_company(seller))
+        requisites_btn.clicked.connect(lambda: self._edit_requisites(seller))
+        brands_btn.clicked.connect(lambda: self._edit_brands(seller))
+        keys_btn.clicked.connect(lambda: self._edit_keys(seller))
+
+        #Макет
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(4)
+        layout.addStretch()
+        layout.addWidget(del_btn)
+        layout.addWidget(name_btn)
+        layout.addWidget(company_btn)
+        layout.addWidget(requisites_btn)
+        layout.addWidget(brands_btn)
+        layout.addWidget(keys_btn)
+        layout.addStretch()
         self.sellers_layout.addWidget(row)
 
     # ---------- Действия ----------
@@ -203,12 +211,20 @@ class SellersWindow(QMainWindow):
         line_edit.returnPressed.connect(finish_edit)
         line_edit.setFocus()
 
+    @log_button_action(
+        "open_edit_company",
+        "Ошибка при открытии окна 'Редактирование данных о компании': {e}",
+    )
     def _edit_company(self, seller: Seller) -> None:
         dialog = CompanyDialog(
             self, seller, log_manager_v2=self.log_manager_v2,
         )
         dialog.show()
 
+    @log_button_action(
+        "open_edit_brands",
+        "Ошибка при открытии окна 'Редактирование данных о брендах компании': {e}",
+    )
     def _edit_brands(self, seller: Seller) -> None:
         brands = self.main_window.sellers_brands_service.get_brands_objects()
         dialog = BrandChecklistDialog(
@@ -216,6 +232,20 @@ class SellersWindow(QMainWindow):
         )
         dialog.show()
 
+    @log_button_action(
+        "_edit_requisites",
+        "Ошибка при открытии окна 'Редактирование данных реквизитах компании': {e}",
+    )
+    def _edit_requisites(self, seller: Seller) -> None:
+        dialog = RequisitesDialog(
+            self, seller, log_manager_v2=self.log_manager_v2,
+        )
+        dialog.show()
+
+    @log_button_action(
+        "open_edit_keys",
+        "Ошибка при открытии окна 'Редактирование служебных данных': {e}",
+    )
     def _edit_keys(self, seller: Seller) -> None:
         """Открывает диалог редактирования ключей продавца.
 
@@ -311,7 +341,9 @@ class CompanyDialog(BaseEditDialog):
         self.company_edit = InputWidgetFactory.create_default_line_edit(
             self, text=self.seller.company,
         )
-
+        self.tax_edit = InputWidgetFactory.create_default_line_edit(
+            self, text=str(self.seller.tax),
+        )
         form_container = LayoutFactory.create_form(
             self,
             rows=[
@@ -328,6 +360,13 @@ class CompanyDialog(BaseEditDialog):
                         bg_color=(0, 0, 0, 0), text_color=None,
                     ),
                     self.company_edit,
+                ),
+                (
+                    LabelFactory.create_label(
+                        self, "НДС:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    self.tax_edit,
                 ),
             ],
             alignment=Qt.AlignLeft,
@@ -350,7 +389,14 @@ class CompanyDialog(BaseEditDialog):
         """
         self.seller.inn = self.inn_edit.text().strip()
         self.seller.company = self.company_edit.text().strip()
-
+        try:
+            self.seller.tax = int(self.tax_edit.text().strip())
+        except Exception as e:
+            if self.logger is not None:
+                self.logger.critical(
+                    f"Налоговая ставка не была сохранена: {e}",
+                    can_influence=False,
+                )
 
 class BrandChecklistDialog(ChecklistDialog):
     """Диалог чек-листа брендов у продавца.
@@ -458,3 +504,189 @@ class BrandChecklistDialog(ChecklistDialog):
     def _get_checkbox_object_name(self) -> str:
         """objectName чекбоксов — сохранён из прежней версии."""
         return "brand_checkbox"
+
+class RequisitesDialog(BaseEditDialog):
+    """Диалог редактирования реквизитов продавца.
+
+    Назначение:
+        Поля: телефон, почта, ЭДО ID, ОГРН, КПП, адрес.
+        Кнопка «Готово» закрывает диалог, closeEvent вызывает
+        _save_and_close.
+
+    Роль в программе:
+        Открывается из SellersWindow по кнопке «Реквизиты».
+        Наследник BaseEditDialog: ok_cancel=False, кнопка «Готово»
+        в _build_content. Сохранение — по закрытию через on_close.
+    """
+
+    def __init__(self, parent, seller: Seller, log_manager_v2=None):
+        """Конструктор.
+
+        Вход:
+            parent — SellersWindow.
+            seller — Seller, чьи реквизиты редактируем.
+            log_manager_v2 — LogManagerV2 или None.
+        """
+        self.seller = seller
+        super().__init__(
+            parent=parent, title="Реквизиты",
+            bg_color=(40, 30, 50, 0.95),
+            close_button=False, ok_cancel=False,
+            draggable=False, close_on_click_outside=True,
+            modal=True, center=True,
+            on_close=self._save_and_close,
+            width=300, height=350,
+            log_manager_v2=log_manager_v2,
+        )
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+
+    def _build_content(self, layout) -> None:
+        """Строит поля реквизитов и адреса + кнопку «Готово».
+
+        Вход: layout — QVBoxLayout из BaseEditDialog.
+        """
+        self.phone_edit = InputWidgetFactory.create_default_line_edit(
+            self, text=self.seller.phone,
+        )
+        self.mail_edit = InputWidgetFactory.create_default_line_edit(
+            self, text=self.seller.mail,
+        )
+        self.edo_id_edit = InputWidgetFactory.create_default_line_edit(
+            self, text=self.seller.edo_id,
+        )
+        self.ogrn_edit = InputWidgetFactory.create_default_line_edit(
+            self, text=self.seller.ogrn,
+        )
+        self.kpp_edit = InputWidgetFactory.create_default_line_edit(
+            self, text=self.seller.kpp,
+        )
+
+        form_container = LayoutFactory.create_form(
+            self,
+            rows=[
+                (
+                    LabelFactory.create_label(
+                        self, "Телефон:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    self.phone_edit,
+                ),
+                (
+                    LabelFactory.create_label(
+                        self, "Почта:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    self.mail_edit,
+                ),
+                (
+                    LabelFactory.create_label(
+                        self, "ЭДО ID:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    self.edo_id_edit,
+                ),
+                (
+                    LabelFactory.create_label(
+                        self, "ОГРН:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    self.ogrn_edit,
+                ),
+                (
+                    LabelFactory.create_label(
+                        self, "КПП:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    self.kpp_edit,
+                ),
+            ],
+            alignment=Qt.AlignLeft,
+            spacing=10,
+        )
+        layout.addWidget(form_container)
+
+        self.address_label = LabelFactory.create_label(
+            self, str(self.seller.address),
+            bg_color=(0, 0, 0, 0), text_color=None,
+        )
+        self.address_edit_btn = ButtonFactory.create_button(
+            self, "Изменить", (80, 100, 120, 0.7), fixed_size=(100, 30),
+        )
+        self.address_edit_btn.clicked.connect(self._on_edit_address)
+
+        address_field = LayoutFactory.create_row(
+            self, self.address_edit_btn, self.address_label,
+            alignment=Qt.AlignLeft | Qt.AlignVCenter, spacing=6,
+        )
+        address_form = LayoutFactory.create_form(
+            self,
+            rows=[
+                (
+                    LabelFactory.create_label(
+                        self, "Адрес:",
+                        bg_color=(0, 0, 0, 0), text_color=None,
+                    ),
+                    address_field,
+                ),
+            ],
+            alignment=Qt.AlignLeft,
+            spacing=10,
+        )
+        layout.addWidget(address_form)
+
+        ok_btn = ButtonFactory.create_button(
+            self, "Готово", (70, 120, 90, 0.8), fixed_size=(200, 30),
+        )
+        ok_btn.clicked.connect(self.close)
+        LayoutFactory.add_centered_widget(layout, ok_btn)
+
+    def _on_edit_address(self) -> None:
+        """Открывает AddressDialog и обновляет адрес при подтверждении.
+
+        Роль:
+            Если пользователь сохранил адрес в AddressDialog, поле
+            self.seller.address заменяется на новое, лейбл рядом
+            с кнопкой обновляется. При отмене — ничего не меняется.
+        """
+        dialog = AddressDialog(self, model=self.seller.address)
+        if dialog.exec() == dialog.Accepted:
+            new_address = dialog.get_result()
+            self.seller.address = new_address
+            self.address_label.setText(str(new_address))
+
+    def _save_and_close(self) -> None:
+        """Переносит валидные поля в модель Seller.
+
+        Роль:
+            Вызывается из closeEvent через on_close. Не вызывает
+            self.close() — иначе была бы рекурсия.
+
+        Валидация:
+            phone, edo_id — пишутся всегда.
+            mail — пишется, если пусто или содержит «@».
+            kpp — пишется, если пусто или 9 цифр.
+            ogrn — пишется, если пусто или 13/15 цифр.
+            Невалидное значение в модель не пишется, поле
+            подсвечивается через set_error_state.
+            Адрес уже обновлён через AddressDialog — здесь не трогается.
+        """
+        self.seller.phone = self.phone_edit.text().strip()
+        self.seller.edo_id = self.edo_id_edit.text().strip()
+
+        mail = self.mail_edit.text().strip()
+        mail_ok = (mail == "") or ("@" in mail)
+        InputWidgetFactory.set_error_state(self.mail_edit, not mail_ok)
+        if mail_ok:
+            self.seller.mail = mail
+
+        kpp = self.kpp_edit.text().strip()
+        kpp_ok = (kpp == "") or (kpp.isdigit() and len(kpp) == 9)
+        InputWidgetFactory.set_error_state(self.kpp_edit, not kpp_ok)
+        if kpp_ok:
+            self.seller.kpp = kpp
+
+        ogrn = self.ogrn_edit.text().strip()
+        ogrn_ok = (ogrn == "") or (ogrn.isdigit() and len(ogrn) in (13, 15))
+        InputWidgetFactory.set_error_state(self.ogrn_edit, not ogrn_ok)
+        if ogrn_ok:
+            self.seller.ogrn = ogrn

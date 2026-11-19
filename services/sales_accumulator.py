@@ -583,9 +583,8 @@ class SalesAccumulatorService:
                 )
                 continue
             from_seller, to_seller = parsed_names
-            A = from_seller.name
-            B = to_seller.name
-
+            from_name = from_seller.name
+            to_name = to_seller.name
             logger.status(f"Сверка: {file_path.name}")
 
             wb = WorkbookOpener.open(
@@ -633,14 +632,14 @@ class SalesAccumulatorService:
 
             # Шаг 1. B — оставить (только вычитаем из remaining).
             itog_b = self._load_itog_set(
-                chz_folder, B, date_str, itog_cache, logger,
+                chz_folder, to_name, date_str, itog_cache, logger,
             )
             if itog_b:
                 remaining -= (remaining & itog_b)
 
             # Шаг 2. A — удалить.
             itog_a = self._load_itog_set(
-                chz_folder, A, date_str, itog_cache, logger,
+                chz_folder, from_name, date_str, itog_cache, logger,
             )
             if itog_a:
                 matched_a = remaining & itog_a
@@ -650,20 +649,20 @@ class SalesAccumulatorService:
                     )
                     remaining -= matched_a
                     verify_stats["kiz_removed"] += len(matched_a)
-                    verify_stats["per_seller_removed"][A] = (
-                            verify_stats["per_seller_removed"].get(A, 0)
+                    verify_stats["per_seller_removed"][from_name] = (
+                            verify_stats["per_seller_removed"].get(from_name, 0)
                             + len(matched_a)
                     )
                     file_matched_total += len(matched_a)
                     for k in sorted(matched_a):
                         logger.report(
-                            f"КИЗ {k}: удалён из {A} → {B} "
-                            f"(ИТОГ у {A})"
+                            f"КИЗ {k}: удалён из {from_name} → {to_name} "
+                            f"(ИТОГ у {from_name})"
                         )
 
             # Шаг 3. Остальные — удалить + переоформить.
             other_names = sorted(
-                s.name for s in sellers if s.name not in (A, B)
+                s.name for s in sellers if s.name not in (from_name, to_name)
             )
             for X in other_names:
                 if not remaining:
@@ -684,15 +683,16 @@ class SalesAccumulatorService:
                 )
                 for k in matched_x:
                     to_reregister.append({
-                        "from_seller": A,
+                        "from_seller": from_name,
                         "to_seller": to_seller_obj,
                         "kiz": k,
                         "product_name": sales_data.get(k, ""),
+                        "tax":from_seller.tax
                     })
                 remaining -= matched_x
                 verify_stats["kiz_reregistered"] += len(matched_x)
-                verify_stats["per_seller_removed"][A] = (
-                        verify_stats["per_seller_removed"].get(A, 0)
+                verify_stats["per_seller_removed"][from_name] = (
+                        verify_stats["per_seller_removed"].get(from_name, 0)
                         + len(matched_x)
                 )
                 verify_stats["per_seller_added"][X] = (
@@ -702,8 +702,8 @@ class SalesAccumulatorService:
                 file_matched_total += len(matched_x)
                 for k in sorted(matched_x):
                     logger.report(
-                        f"КИЗ {k}: удалён из {A} → {B}, "
-                        f"добавлен в {A} → {X} (ИТОГ у {X})"
+                        f"КИЗ {k}: удалён из {from_name} → {to_name}, "
+                        f"добавлен в {from_name} → {X} (ИТОГ у {X})"
                     )
 
             logger.report(
@@ -724,6 +724,7 @@ class SalesAccumulatorService:
                     to_seller_inn=to_seller.inn,
                     product_name=item["product_name"],
                     raw_kiz=item["kiz"],
+                    from_seller_tax = item["tax"]
                 )
             except Exception as e:
                 logger.critical(
@@ -791,7 +792,7 @@ class SalesAccumulatorService:
 
         return verify_stats
 
-    def _load_itog_set(self, chz_folder, seller_name, date_str,
+    def _load_itog_set(self, chz_folder, seller, date_str,
                        cache, logger) -> set | None:
         """Ленивая загрузка КИЗов из ИТОГ-файла продавца.
 
@@ -816,26 +817,26 @@ class SalesAccumulatorService:
             требует заполненные столбцы kiz и owner_company;
             строки без owner пропускаются.
         """
-        if seller_name in cache:
-            return cache[seller_name]
+        if seller.name in cache:
+            return cache[seller.name]
 
         itog_name = FilenameUtils.format_with_extension(
-            f"ИТОГ {seller_name} {{date}}", date_str,
+            f"ИТОГ {seller.name} {{date}}", date_str,
         )
         itog_path = chz_folder / itog_name
 
         if not itog_path.is_file():
-            logger.report(f"ИТОГ {seller_name}: файл не найден")
-            cache[seller_name] = None
+            logger.report(f"ИТОГ {seller.name}: файл не найден")
+            cache[seller.name] = None
             return None
 
         wb = WorkbookOpener.open(
             itog_path, logger=logger, read_only=True,
-            description=f"ИТОГ {seller_name}",
+            description=f"ИТОГ {seller.name}",
         )
         if wb is None:
-            logger.report(f"ИТОГ {seller_name}: файл не открылся")
-            cache[seller_name] = None
+            logger.report(f"ИТОГ {seller.name}: файл не открылся")
+            cache[seller.name] = None
             return None
 
         kiz_set: set = set()
@@ -857,7 +858,7 @@ class SalesAccumulatorService:
                 pass
 
         logger.report(
-            f"ИТОГ {seller_name}: загружено {len(kiz_set)} КИЗов"
+            f"ИТОГ {seller.name}: загружено {len(kiz_set)} КИЗов"
         )
-        cache[seller_name] = kiz_set
+        cache[seller.name] = kiz_set
         return kiz_set

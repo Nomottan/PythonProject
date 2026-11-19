@@ -693,6 +693,7 @@ class KizTransferService:
                 to_seller_inn=transfer.to_seller_inn,
                 product_name=transfer.product_name,
                 raw_kiz=transfer.raw_kiz,
+                from_seller_tax=transfer.from_seller_tax,
                 owner_company=transfer.owner_company_str,
                 brand=transfer.brand,
             )

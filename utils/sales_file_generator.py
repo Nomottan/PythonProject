@@ -50,6 +50,7 @@ class SalesFileGenerator:
                      from_seller_name: str,
                      to_seller_name: str,
                      to_seller_inn: str,
+                     from_seller_tax: int,
                      product_name: str,
                      raw_kiz: str,
                      brand: Optional[str] = None,
@@ -94,10 +95,12 @@ class SalesFileGenerator:
         safe_to = TextUtils.sanitize_filename(to_seller_name)
         file_name = f"{safe_from} - {safe_to} _ {to_seller_inn}.xlsx"
         file_path = self.work_folder / file_name
-
+        if from_seller_tax is None:
+            from_seller_tax = 5
+        tax = from_seller_tax
         for kiz_short in storage_list:
             gtin = KizUtils.extract_gtin(kiz_short)
-            row_data = [product_name, kiz_short, gtin, "5%"]
+            row_data = [product_name, kiz_short, gtin, f"{tax}%"]
 
             ok = WorkbookWriter.append(
                 file_path, row_data,

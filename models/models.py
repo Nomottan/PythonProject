@@ -1,4 +1,57 @@
 from typing import Optional, Set
+from dataclasses import dataclass, field
+
+@dataclass
+class AddressModel:
+    index: str = ""
+    region_code: str = ""
+    region_name: str = ""
+    city: str = ""
+    settlement: str = ""
+    street: str = ""
+    house: str = ""
+    building: str = ""
+
+    def __str__(self) -> str:
+        parts = [self.index, self.region_name, self.city,
+                 self.settlement, self.street, self.house, self.building]
+        return ", ".join(p for p in parts if p)
+
+    def is_empty(self) -> bool:
+        """Проверяет, пусты ли все поля адреса."""
+        return not any([
+            self.index, self.region_code, self.region_name,
+            self.city, self.settlement, self.street,
+            self.house, self.building
+        ])
+
+    def to_dict(self) -> dict:
+        """Сериализует модель в словарь для JSON (только непустые поля)."""
+        data = {}
+        if self.index: data["index"] = self.index
+        if self.region_code: data["region_code"] = self.region_code
+        if self.region_name: data["region_name"] = self.region_name
+        if self.city: data["city"] = self.city
+        if self.settlement: data["settlement"] = self.settlement
+        if self.street: data["street"] = self.street
+        if self.house: data["house"] = self.house
+        if self.building: data["building"] = self.building
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "AddressModel":
+        """Десериализует модель из словаря JSON."""
+        raw = raw or {}
+        return cls(
+            index=raw.get("index", ""),
+            region_code=raw.get("region_code", ""),
+            region_name=raw.get("region_name", ""),
+            city=raw.get("city", ""),
+            settlement=raw.get("settlement", ""),
+            street=raw.get("street", ""),
+            house=raw.get("house", ""),
+            building=raw.get("building", ""),
+        )
 
 class Brand:
     """Модель бренда."""
@@ -79,6 +132,7 @@ class Brand:
     def __repr__(self):
         return f"<Brand: {self.name}>"
 
+
 class Seller:
     """Модель продавца.
 
@@ -88,6 +142,9 @@ class Seller:
         keys — ключи для распознавания.
         brands — связанные объекты Brand.
         company — юр. лицо.
+        tax - налоговая ставка
+        phone, mail, edo_id, ogrn, kpp - текстовые реквизиты
+        address - адрес в виде объекта
         priority — приоритет при разрешении конфликтов КИЗов:
                    1 — низкий, 2 — средний (дефолт), 3 — высокий.
                    Существующие записи без priority получают 2.
@@ -114,14 +171,24 @@ class Seller:
         return p
 
     def __init__(self, name: str, inn: str = "", keys: list = None,
-                 brands: list = None, company: str = "",
-                 priority: int = 2):
+                 brands: list = None, company: str = "", tax: int = 5,
+                 priority: int = 2, phone: str = "", mail: str = "",
+                 address: AddressModel = None, edo_id: str = "",
+                 ogrn: str = "", kpp: str = "",):
         self.name = name
         self.inn = inn
         self.company = company
+        self.tax = tax
         self.keys = keys if keys is not None else []
         self.brands = brands if brands is not None else []
         self.priority = priority
+        self.phone = phone
+        self.mail = mail
+        self.address = address if address is not None else AddressModel()
+        self.edo_id = edo_id
+        self.ogrn = ogrn
+        self.kpp = kpp
+
 
     def add_brand(self, brand: Brand):
         """Добавляет бренд и синхронизирует обратную сторону.
@@ -149,7 +216,7 @@ class Seller:
     def get_brand_keys(self) -> list[str]:
         keys = []
         for brand in self.brands:
-            keys.extend(brand.keys)
+            keys.extend(brand.get_all_keys())
         return keys
 
     def has_key(self, key: str) -> bool:
@@ -157,37 +224,62 @@ class Seller:
         return key in self.keys
 
     def to_dict(self) -> dict:
-        """Сериализация для сохранения в JSON (бренды сохраняются как имена)."""
-        return {
-            "name": self.name,
-            "inn": self.inn,
-            "company": self.company,
-            "keys": self.keys,
-            "brands": [b.name for b in self.brands],
-            "priority": self.priority,
-        }
+        """Сериализация для JSON.
+
+        Правило:
+          - name — всегда (обязательное);
+          - пустые строки/коллекции/адрес — опускаем (нет данных);
+          - tax, priority — всегда (бизнес-числа, дефолт может эволюционировать);
+          - keys/brands — копии, не ссылки.
+        """
+        data = {"name": self.name}
+
+        # Опциональные строковые идентификаторы: только непустые
+        for key in ("inn", "company", "phone", "mail", "edo_id", "ogrn", "kpp"):
+            value = getattr(self, key, "")
+            if value and value.strip():
+                data[key] = value
+
+        if self.tax != 5:
+            data["tax"] = self.tax
+        if self.priority !=2 :
+            data["priority"] = self.priority
+
+        # Коллекции: только непустые, копии
+        if self.keys:
+            data["keys"] = list(self.keys)
+        if self.brands:
+            data["brands"] = [b.name for b in self.brands]
+
+        # Адрес: только непустой, как dict
+        if self.address is not None and not self.address.is_empty():
+            data["address"] = self.address.to_dict()
+
+        return data
 
     @classmethod
     def from_dict(cls, data: dict, brands_by_name: dict[str, Brand] = None) -> 'Seller':
-        """
-        Создание объекта из словаря с возможностью восстановления связей.
-        Если передан brands_by_name, то поле brands заполняется объектами Brand.
-        priority читается через Seller._safe_priority: битый JSON → 2.
-        """
-        seller = cls(name=data["name"],
-                     inn=data.get("inn", ""),
-                     company=data.get("company", ""),
-                     keys=data.get("keys", []),
-                     priority=cls._safe_priority(data.get("priority", 2)))
+        data = data or {}
+        seller = cls(
+            name=data["name"],
+            inn=data.get("inn", ""),
+            company=data.get("company", ""),
+            tax=data.get("tax", 5),
+            keys=data.get("keys", []),
+            priority=cls._safe_priority(data.get("priority", 2)),
+            phone=data.get("phone", ""),
+            mail=data.get("mail", ""),
+            address=AddressModel.from_dict(data.get("address") or {}),
+            edo_id=data.get("edo_id", ""),
+            ogrn=data.get("ogrn", ""),
+            kpp=data.get("kpp", ""),
+        )
         if brands_by_name:
             for brand_name in data.get("brands", []):
                 brand = brands_by_name.get(brand_name)
                 if brand:
                     seller.add_brand(brand)
         return seller
-
-    def __repr__(self):
-        return f"<Seller: {self.name}>"
 
 class SupplyItem:
     """Товар из листа поставки."""

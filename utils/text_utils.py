@@ -213,3 +213,32 @@ class TextUtils:
         if not text:
             return text
         return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    @staticmethod
+    def sanitize_fio_part(text: str) -> str:
+        """Приводит часть ФИО к формату с заглавной буквы."""
+        if not text:
+            return ""
+        text = " ".join(text.strip().split())
+        words = text.split("-")
+        res = []
+        for w in words:
+            w = w.strip()
+            parts = w.split("'")
+            parts[0] = parts[0].capitalize()
+            res.append("'".join(parts))
+        return "-".join(res)
+
+    @staticmethod
+    def strip_quotes(text: str) -> str:
+        """Снимает обрамляющие парные кавычки."""
+        if not text:
+            return ""
+        t = text.strip()
+        if len(t) >= 2:
+            if (t.startswith('"') and t.endswith('"')) or \
+                    (t.startswith('«') and t.endswith('»')) or \
+                    (t.startswith("'") and t.endswith("'")):
+                return t[1:-1].strip()
+        return t
+

@@ -1797,7 +1797,7 @@ class FinalProcessingService:
                 continue
 
             files_found += 1
-            logger.status(f"Обработка файла: {file_path.name}")
+            logger.status(f"Обработка файла: {seller.name}.xlsx")
             logger.report(
                 f"Обработка КИЗов файла продавца: {seller.name}"
             )
@@ -1953,6 +1953,7 @@ class FinalProcessingService:
                         to_seller_inn=seller.inn,
                         product_name=parsed.product_name,
                         raw_kiz=parsed.kiz,
+                        from_seller_tax = owner_seller.tax,
                         owner_company=parsed.owner_company,
                         brand=parsed.brand,
                     )

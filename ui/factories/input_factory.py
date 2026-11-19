@@ -64,6 +64,16 @@ class InputWidgetFactory:
     """
 
     @staticmethod
+    def set_error_state(widget, is_error: bool) -> None:
+        """Переключает визуальное состояние ошибки, не теряя исходную стилизацию."""
+        if not hasattr(widget, "_style_kwargs"):
+            return
+        kwargs = dict(widget._style_kwargs)
+        kwargs["error_state"] = is_error
+        WidgetStyle.apply_line_edit(widget, **kwargs)
+        widget._style_kwargs = kwargs
+
+    @staticmethod
     def create_line_edit(parent, text="", placeholder="",
                          bg_color=(60, 50, 70, 0.9), text_color=None,
                          border="1px solid #5a4a5c", border_radius=3,

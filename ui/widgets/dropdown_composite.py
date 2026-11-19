@@ -11,11 +11,13 @@ from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer
 from PySide6.QtGui import QGuiApplication, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QApplication,
-    QSpacerItem, QSizePolicy, QGraphicsDropShadowEffect, QLayoutItem
+    QSpacerItem, QSizePolicy, QGraphicsDropShadowEffect, QLayoutItem,
+    QLineEdit, QCompleter,
 )
 
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, LayoutFactory, ListWidgetFactory,
+    InputWidgetFactory,
 )
 from ui.styles import (
     WidgetStyle, ColorCalculator, IconRenderer,
@@ -80,6 +82,8 @@ class DropdownComposite(QWidget):
     selection_changed = Signal(object)
     item_clicked = Signal(int)
     opened = Signal()
+    edit_text_changed = Signal(str)
+    editing_finished = Signal()
 
     _DEFAULT_SETTINGS = {
         "multi_select": False,
@@ -103,7 +107,12 @@ class DropdownComposite(QWidget):
         "preferred_direction": "auto",
         "sync_checkboxes": False,
         "is_category": False,
+        "sync_checkboxes": False,
+        "is_category": False,
         "debug": False,
+        "editable": False,
+        "completer_case_sensitive": False,
+        "completer_filter_mode": "contains",
     }
 
     def __init__(self, parent, config: dict = None, **kwargs):
@@ -201,10 +210,23 @@ class DropdownComposite(QWidget):
                         )
                         stretch_factors.append(0)
         else:
-            self._text_label = LabelFactory.create_label(
-                None, text=self.settings["placeholder"], bg_color=(0, 0, 0, 0)
-            )
-            self._text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            if self.settings.get("editable", False):
+                self._text_label = InputWidgetFactory.create_line_edit(
+                    None,
+                    text="",
+                    placeholder=self.settings["placeholder"],
+                    bg_color=(0, 0, 0, 0),
+                    border="none",
+                    border_radius=0,
+                    padding="0px",
+                )
+                self._text_label.textEdited.connect(self.edit_text_changed.emit)
+                self._text_label.editingFinished.connect(self.editing_finished.emit)
+            else:
+                self._text_label = LabelFactory.create_label(
+                    None, text=self.settings["placeholder"], bg_color=(0, 0, 0, 0)
+                )
+                self._text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             trigger_widgets.append(self._text_label)
             stretch_factors.append(1)
 
@@ -307,6 +329,9 @@ class DropdownComposite(QWidget):
         self._row_disabled.append(config.get("disabled", False))
         self._row_is_separator.append(is_sep)
 
+        if self.settings.get("editable", False):
+            self._sync_completer()
+
         if (index == 0
                 and self.settings["auto_select_first"]
                 and not self.settings["multi_select"]
@@ -359,7 +384,12 @@ class DropdownComposite(QWidget):
         self._selected_indices.clear()
         self._current_index = -1
         if self.settings["auto_update_button"] and hasattr(self, "_text_label"):
-            self._text_label.setText(self.settings["placeholder"])
+            if self.settings.get("editable", False) and isinstance(self._text_label, QLineEdit):
+                self._text_label.setText("")
+            else:
+                self._text_label.setText(self.settings["placeholder"])
+        if self.settings.get("editable", False):
+            self._sync_completer()
 
     def set_current_index(self, index: int) -> None:
         """Программный выбор строки по её индексу."""
@@ -483,7 +513,10 @@ class DropdownComposite(QWidget):
     def set_placeholder(self, text: str) -> None:
         """Динамически меняет placeholder."""
         self.settings["placeholder"] = text
-        if not self._selected_indices and self.settings["auto_update_button"] and hasattr(self, "_text_label"):
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText(text)
+        elif not self._selected_indices and self.settings["auto_update_button"] and hasattr(self, "_text_label"):
             self._text_label.setText(text)
 
         if self.settings.get("debug"):
@@ -542,6 +575,151 @@ class DropdownComposite(QWidget):
             # Задержка, чтобы Qt.Popup успел обработать текущий клик
             QTimer.singleShot(0, self.open)
 
+    # ---------- Editable-режим (ленивая настройка) ----------
+
+    def lineEdit(self):
+        """Возвращает QLineEdit editable-режима или None.
+
+        Выход: QLineEdit, если editable=True и триггер собран как
+               стандартный; иначе None.
+
+        Роль:
+            Аналог QComboBox.lineEdit(). Нужен для set_error_state
+            и для ручной работы с полем ввода из вызывающего кода.
+        """
+        if not self.settings.get("editable", False):
+            return None
+        if not hasattr(self, "_text_label"):
+            return None
+        if isinstance(self._text_label, QLineEdit):
+            return self._text_label
+        return None
+
+    def completer(self):
+        """Возвращает QCompleter editable-режима или None.
+
+        Выход: QCompleter, если editable=True и completer уже создан
+               (после первого add_item); иначе None.
+
+        Роль:
+            Аналог QComboBox.completer(). Ленивое создание: пока не
+            добавлен ни один элемент, completer ещё не существует.
+        """
+        return getattr(self, "_completer", None)
+
+    def currentText(self) -> str:
+        """Возвращает текущий текст поля (editable) или выбранной строки.
+
+        Выход: строка. Пустая, если ничего не выбрано и поле пустое.
+
+        Роль:
+            Аналог QComboBox.currentText(). В editable-режиме
+            читает QLineEdit (включая ручной ввод), иначе — текст
+            выбранной строки по _current_index.
+        """
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            return line_edit.text()
+        if 0 <= self._current_index < len(self._row_texts):
+            return self._row_texts[self._current_index]
+        return ""
+
+    def setCurrentText(self, text: str) -> None:
+        """Устанавливает текст поля (editable) или выбирает строку по тексту.
+
+        Вход: text — строка.
+
+        Роль:
+            Аналог QComboBox.setCurrentText(). В editable-режиме
+            пишет текст в QLineEdit (без эмита edit_text_changed,
+            потому что QLineEdit.setText не даёт textEdited).
+            Если text совпал с одной из строк — выделяет её через
+            set_current_index (эмитит selection_changed). Пустая
+            строка сбрасывает выбор (_current_index = -1).
+        """
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setText(text)
+
+        if text == "":
+            self._selected_indices.clear()
+            self._current_index = -1
+            self._update_row_styles()
+            return
+
+        if text in self._row_texts:
+            idx = self._row_texts.index(text)
+            self.set_current_index(idx)
+
+    def set_error_state(self, is_error: bool) -> None:
+        """Подсвечивает поле ввода (editable) при ошибке.
+
+        Вход: is_error — bool.
+
+        Роль:
+            В editable-режиме передаёт сигнал в
+            InputWidgetFactory.set_error_state для QLineEdit.
+            В остальных режимах — no-op: у триггера нет _style_kwargs.
+        """
+        line_edit = self.lineEdit()
+        if line_edit is None:
+            return
+        InputWidgetFactory.set_error_state(line_edit, is_error)
+
+    def _sync_completer(self) -> None:
+        """Лениво создаёт и обновляет completer для editable-режима.
+
+        Роль:
+            Вызывается при изменении списка (add_item, clear_items).
+            При первом вызове создаёт QCompleter, привязывает его к
+            QLineEdit и настраивает caseSensitivity / filterMode /
+            completionMode по settings. При последующих — только
+            обновляет список строк модели completer'а.
+            Если editable=False или _text_label не QLineEdit — no-op.
+        """
+        line_edit = self.lineEdit()
+        if line_edit is None:
+            return
+
+        if not hasattr(self, "_completer"):
+            self._completer = QCompleter(line_edit)
+            if self.settings.get("completer_case_sensitive", False):
+                self._completer.setCaseSensitivity(Qt.CaseSensitive)
+            else:
+                self._completer.setCaseSensitivity(Qt.CaseInsensitive)
+
+            mode = self.settings.get("completer_filter_mode", "contains")
+            if mode == "starts_with":
+                self._completer.setFilterMode(Qt.MatchStartsWith)
+            elif mode == "exact":
+                self._completer.setFilterMode(Qt.MatchExactly)
+            else:
+                self._completer.setFilterMode(Qt.MatchContains)
+
+            self._completer.setCompletionMode(QCompleter.PopupCompletion)
+            self._completer.activated.connect(self._on_completer_activated)
+            line_edit.setCompleter(self._completer)
+
+        self._completer.model().setStringList(list(self._row_texts))
+
+    def _on_completer_activated(self, text: str) -> None:
+        """Слот completer.activated — выбирает строку по тексту из completer.
+
+        Вход: text — выбранная в completer строка.
+
+        Роль:
+            Синхронизирует выбор из completer с внутренним состоянием
+            (_current_index, _selected_indices, стили строк). Эмитит
+            editing_finished, чтобы вызывающий код (например,
+            AddressDialog) среагировал так же, как на потерю фокуса.
+        """
+        if text not in self._row_texts:
+            return
+        idx = self._row_texts.index(text)
+        self.set_current_index(idx)
+        self.editing_finished.emit()
+        if self.settings.get("close_on_select", True) and self._popup and self._popup.isVisible():
+            self.close()
     # ---------- Внутренние методы ----------
 
     def _build_row(self, config: dict, index: int) -> tuple:
@@ -897,7 +1075,16 @@ class DropdownComposite(QWidget):
         if not hasattr(self, "_text_label"):
             return
 
+        is_editable = (
+            self.settings.get("editable", False)
+            and isinstance(self._text_label, QLineEdit)
+        )
+
         if not self._selected_indices:
+            if is_editable:
+                # В editable-режиме placeholder — это placeholderText QLineEdit.
+                # Текст не трогаем: пользователь мог ввести его вручную.
+                return
             if self.settings.get("placeholder") is not None:
                 self._text_label.setText(self.settings["placeholder"])
             elif self._rows:
@@ -911,6 +1098,10 @@ class DropdownComposite(QWidget):
         else:
             idx = self._current_index
             text = self._row_texts[idx] if idx >= 0 and idx < len(self._row_texts) else ""
+            if is_editable:
+                if text:
+                    self._text_label.setText(text)
+                return
             self._text_label.setText(text if text else self.settings["placeholder"])
 
     def _update_row_styles(self) -> None:
