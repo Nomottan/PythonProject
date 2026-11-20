@@ -72,6 +72,8 @@ class SizingCalculator:
 class GeometryCalculator:
     """Калькулятор геометрии и координат."""
 
+    # Смещения для каждого направления: (dx, dy, direction_name)
+
     @staticmethod
     def clamp_to_screen(x: int, y: int, width: int, height: int, screen=None) -> tuple[int, int]:
         """Ограничивает координаты виджета доступной областью экрана."""
@@ -89,74 +91,54 @@ class GeometryCalculator:
                                  trigger_w: int = 0, screen=None, preferred_dir: str = "auto") -> tuple[int, int, str]:
         """Вычисляет позицию выпадающего списка и направление открытия."""
         x, y = trigger_global.x(), trigger_global.y()
+        if preferred_dir == "auto":
+            preferred_dir = "down"
+        if screen is None:
+            screen = QGuiApplication.screenAt(trigger_global) or QGuiApplication.primaryScreen()
 
-        match preferred_dir:
-            case "right":
-                x = trigger_global.x() + trigger_w
-                y = trigger_global.y()
-                direction = "right"
-            case "left":
-                x = trigger_global.x() - popup_w
-                y = trigger_global.y()
-                direction = "left"
-            case "down":
-                x = trigger_global.x()
-                y = trigger_global.y() + trigger_h
-                direction = "down"
-            case "up":
-                x = trigger_global.x()
-                y = trigger_global.y() - popup_h
-                direction = "up"
-            case _:
-                # AUTO LOGIC (старая логика, на случай если понадобится)
-                direction = "down"
-                if screen is None:
-                    screen = QGuiApplication.screenAt(trigger_global) or QGuiApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            _BASE = {"right": (trigger_w, 0),
+                     "left": (-popup_w, 0),
+                     "down": (0, trigger_h),
+                     "up": (0, -popup_h)}
+            _OPPOSITES = {"down": ("up", 0, -popup_h),
+                          "up": ("down", 0, trigger_h),
+                          "right": ("left", -popup_w, 0),
+                          "left": ("right", trigger_w, 0)}
+            _CHECKS = {"down": y + popup_h > geo.bottom(),
+                       "up": y < geo.top(),
+                       "right": x + popup_w > geo.right(),
+                       "left": x < geo.left()}
 
-                if screen:
-                    geo = screen.availableGeometry()
-                    if y + trigger_h + popup_h <= geo.bottom():
-                        y = trigger_global.y() + trigger_h
-                        direction = "down"
-                    elif y - popup_h >= geo.top():
-                        y = trigger_global.y() - popup_h
-                        direction = "up"
-                    elif x + trigger_w + popup_w <= geo.right():
-                        x = trigger_global.x() + trigger_w
-                        y = trigger_global.y()
-                        direction = "right"
-                    else:
-                        x = trigger_global.x() - popup_w
-                        y = trigger_global.y()
-                        direction = "left"
+            match preferred_dir:
+                case "right" | "left" | "down" | "up":
+                    dx, dy = _BASE[preferred_dir]
+                    x += dx
+                    y += dy
+                    if _CHECKS[preferred_dir]:
+                        new_dir, opp_dx, opp_dy = _OPPOSITES[preferred_dir]
+                        x = trigger_global.x() + opp_dx
+                        y = trigger_global.y() + opp_dy
+                        preferred_dir = new_dir
+                case _:
+                    print(f"НЕИЗВЕСТНОЕ НАПРАВЛЕНИЕ: {preferred_dir}")
 
         clamped_x, clamped_y = GeometryCalculator.clamp_to_screen(x, y, popup_w, popup_h, screen)
-        return clamped_x, clamped_y, direction
+        return clamped_x, clamped_y, preferred_dir
 
     @staticmethod
     def calculate_max_popup_length(trigger_global: QPoint, trigger_w: int, trigger_h: int, preferred_dir: str,
                                    window_rect: 'QRect', max_length: int | None) -> int:
-        """Вычисляет максимальную длину попапа с учетом границ окна.
-
-        Если max_length не задан, берет расстояние от края триггера
-        до края ОКНА в сторону открытия (минус 5 px).
-        """
+        """Вычисляет максимальную длину попапа с учетом границ окна."""
         if not window_rect:
             return max_length if max_length else 600
+        if preferred_dir == "auto":
+            preferred_dir = "down"
+        _AVAIL = {"right": window_rect.right() - trigger_global.x() - trigger_w - 5,
+                  "left": trigger_global.x() - window_rect.left() - 5,
+                  "down": window_rect.bottom() - trigger_global.y() - trigger_h - 5,
+                  "up": trigger_global.y() - window_rect.top() - 5}
 
-        if preferred_dir == "right":
-            avail = window_rect.right() - (trigger_global.x() + trigger_w) - 5
-        elif preferred_dir == "left":
-            avail = trigger_global.x() - window_rect.left() - 5
-        elif preferred_dir == "down":
-            avail = window_rect.bottom() - (trigger_global.y() + trigger_h) - 5
-        elif preferred_dir == "up":
-            avail = trigger_global.y() - window_rect.top() - 5
-        else:
-            avail = max_length if max_length else 600
-
-        # Если max_length передан, берем минимум из переданного и доступного (чтобы не вылезти за окно)
-        if max_length is not None:
-            return min(max_length, max(50, avail))
-        # Если не передан — чисто динамический расчет
-        return max(50, avail)
+        avail = _AVAIL.get(preferred_dir, max_length if max_length else 600)
+        return min(max_length, max(50, avail)) if max_length is not None else max(50, avail)

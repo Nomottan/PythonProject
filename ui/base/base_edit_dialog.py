@@ -93,16 +93,49 @@ class BaseEditDialog(QDialog, DialogSetupMixin):
 
         self._build_content(content_layout)
 
-        # Регистрируем в WindowManager (если есть родитель с менеджером)
+        # Регистрируем в WindowManager (если есть родитель с менеджером).
+        # Разделяем два якоря:
+        #   qt_parent      — реальный родитель (например, RequisitesDialog).
+        #                    От него WM считает window_level и прячет
+        #                    close_on_click_outside у родителя.
+        #   visual_anchor  — предок, у которого есть window_manager
+        #                    (обычно MainWindow). От него WM считает
+        #                    геометрию (центровку, сдвиг +30, клэмп).
         if parent is not None:
             anchor = parent
+            level = 0
             while (anchor is not None
                    and not hasattr(anchor, "window_manager")):
+                if self.logger:
+                    self.logger.debug(
+                        f"BaseEditDialog: Level {level}: "
+                        f"{type(anchor).__name__} — нет window_manager"
+                    )
                 anchor = anchor.parent()
+                level += 1
+
             if anchor is not None:
+                if self.logger:
+                    self.logger.debug(
+                        f"BaseEditDialog: window_manager найден в "
+                        f"{type(anchor).__name__}; регистрация "
+                        f"{type(self).__name__} "
+                        f"(qt_parent={type(parent).__name__}, "
+                        f"visual_anchor={type(anchor).__name__})"
+                    )
                 anchor.window_manager.register_window(
-                    self, parent=anchor, fill_parent=False, modal=modal,
+                    self,
+                    parent=parent,
+                    fill_parent=False,
+                    modal=modal,
+                    visual_parent=anchor,
                 )
+            else:
+                if self.logger:
+                    self.logger.debug(
+                        f"BaseEditDialog: window_manager не найден для "
+                        f"{type(self).__name__}, регистрация пропущена"
+                    )
 
     # ---------- Публичный API ----------
 

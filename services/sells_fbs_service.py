@@ -116,38 +116,39 @@ class PreparationService:
                 seller.name, seller.name,
                 TextUtils.sanitize_filename(seller.name), None,
             )
-
         if decision is None:
             safe_name = TextUtils.sanitize_filename(src_path.stem)
             logger.warning(f"\n{src_path.name}: продавец не определён")
             logger.report(" Продавец не определён")
             return src_path.stem, None, safe_name, None
-        elif decision[0] == "seller":
-            target = decision[1]
-            logger.report(f"  Продавец (по решению): {target}")
-            return target, target, TextUtils.sanitize_filename(target), None
-        elif decision[0] == "garbage":
-            logger.report("  Мусор (по решению)")
-            return "", None, "", {"status": "garbage", "type": file_type}
-        elif decision[0] == "unknown":
-            safe_stem = TextUtils.sanitize_filename(src_path.stem)
-            new_name = FilenameUtils.format_with_extension(
-                f"Неопознанный отчёт {safe_stem} {{date}}",
-                ctx.date_str,
-            )
-            dst = ctx.reports_dir / new_name
-            result = FileHelper.copy_file_with_log(
-                src_path, dst, logger,
-                description="неопознанный отчёт", overwrite=False,
-            )
-            return "", None, "", {
-                "status": result["status"],
-                "type": "unknown",
-                "seller_name": None,
-                "dst_name": new_name,
-            }
-        else:
-            return "", None, "", {"status": "error", "type": file_type}
+
+        match decision[0]:
+            case "seller":
+                target = decision[1]
+                logger.report(f"  Продавец (по решению): {target}")
+                return target, target, TextUtils.sanitize_filename(target), None
+            case"garbage":
+                logger.report("  Мусор (по решению)")
+                return "", None, "", {"status": "garbage", "type": file_type}
+            case "unknown":
+                safe_stem = TextUtils.sanitize_filename(src_path.stem)
+                new_name = FilenameUtils.format_with_extension(
+                    f"Неопознанный отчёт {safe_stem} {{date}}",
+                    ctx.date_str,
+                )
+                dst = ctx.reports_dir / new_name
+                result = FileHelper.copy_file_with_log(
+                    src_path, dst, logger,
+                    description="неопознанный отчёт", overwrite=False,
+                )
+                return "", None, "", {
+                    "status": result["status"],
+                    "type": "unknown",
+                    "seller_name": None,
+                    "dst_name": new_name,
+                }
+            case _:
+                return "", None, "", {"status": "error", "type": file_type}
 
     def _process_returns_decision(self, src_path, ctx, returns_txt_path,
                                   sheet_name, col_index, logger) -> None:

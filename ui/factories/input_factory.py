@@ -67,6 +67,22 @@ class InputWidgetFactory:
     def set_error_state(widget, is_error: bool) -> None:
         """Переключает визуальное состояние ошибки, не теряя исходную стилизацию."""
         if not hasattr(widget, "_style_kwargs"):
+            # Fallback: прямая установка стиля ошибки
+            if is_error:
+                widget.setStyleSheet("QLineEdit { border: 2px solid #e74c3c; border-radius: 3px; padding: 3px; background: transparent; }")
+            else:
+                widget.setStyleSheet("QLineEdit { border: 1px solid #5a4a5c; border-radius: 3px; padding: 3px; background: transparent; }")
+            # Устанавливаем _style_kwargs для будущих вызовов
+            widget._style_kwargs = {
+                "bg_color": (60, 50, 70, 0.9),
+                "text_color": None,
+                "border": "1px solid #5a4a5c",
+                "border_radius": 3,
+                "padding": "3px",
+                "font_size": None,
+                "font_family": None,
+                "extra_style": "",
+            }
             return
         kwargs = dict(widget._style_kwargs)
         kwargs["error_state"] = is_error
@@ -125,6 +141,16 @@ class InputWidgetFactory:
             line_edit, bg_color, text_color, border, border_radius,
             padding, font_size, font_family, extra_style,
         )
+        line_edit._style_kwargs = {
+            "bg_color": bg_color,
+            "text_color": text_color,
+            "border": border,
+            "border_radius": border_radius,
+            "padding": padding,
+            "font_size": font_size,
+            "font_family": font_family,
+            "extra_style": extra_style,
+        }
         return line_edit
 
     @staticmethod

@@ -11,7 +11,7 @@
     parent.sellers_brands_service.
 """
 
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QDialog
 from PySide6.QtCore import Qt
 from ui.windows.address_dialog import AddressDialog
 from utils.log_tools.decorators import log_button_action
@@ -318,9 +318,19 @@ class CompanyDialog(BaseEditDialog):
             seller — Seller, чью компанию редактируем.
         """
         self.seller = seller
+
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: int(r * 1.5),
+            g_fn=lambda g: int(g * 0.8),
+            b_fn=lambda b: int(b * 1.2),
+            alpha=0.95,
+        )
+
         super().__init__(
             parent=parent, title="Компания",
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=self.bg_color,
             close_button=False, ok_cancel=False,
             draggable=False, close_on_click_outside=True,
             modal=True, center=True,
@@ -528,14 +538,24 @@ class RequisitesDialog(BaseEditDialog):
             log_manager_v2 — LogManagerV2 или None.
         """
         self.seller = seller
+
+        parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: int(r * 0.95),
+            g_fn=lambda g: int(g * 1.15),
+            b_fn=lambda b: int(b * 1.15),
+            alpha=0.95,
+        )
+
         super().__init__(
             parent=parent, title="Реквизиты",
-            bg_color=(40, 30, 50, 0.95),
+            bg_color=self.bg_color,
             close_button=False, ok_cancel=False,
             draggable=False, close_on_click_outside=True,
             modal=True, center=True,
             on_close=self._save_and_close,
-            width=300, height=350,
+            width=300, height=265,
             log_manager_v2=log_manager_v2,
         )
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -605,29 +625,25 @@ class RequisitesDialog(BaseEditDialog):
         )
         layout.addWidget(form_container)
 
-        self.address_label = LabelFactory.create_label(
-            self, str(self.seller.address),
-            bg_color=(0, 0, 0, 0), text_color=None,
+        self.address_field = InputWidgetFactory.create_default_line_edit(
+            self, text=str(self.seller.address),
         )
-        self.address_edit_btn = ButtonFactory.create_button(
-            self, "Изменить", (80, 100, 120, 0.7), fixed_size=(100, 30),
-        )
-        self.address_edit_btn.clicked.connect(self._on_edit_address)
+        self.address_field.setReadOnly(True)
+        self.address_field.setFocusPolicy(Qt.NoFocus)
 
-        address_field = LayoutFactory.create_row(
-            self, self.address_edit_btn, self.address_label,
-            alignment=Qt.AlignLeft | Qt.AlignVCenter, spacing=6,
+        self.address_btn = ButtonFactory.create_button(
+            self, "Адрес:", (80, 100, 120, 0.7),
+            padding="6px 16px",
         )
+        self.address_btn.setFixedHeight(
+            self.address_field.sizeHint().height()
+        )
+        self.address_btn.clicked.connect(self._on_edit_address)
+
         address_form = LayoutFactory.create_form(
             self,
             rows=[
-                (
-                    LabelFactory.create_label(
-                        self, "Адрес:",
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                    ),
-                    address_field,
-                ),
+                (self.address_btn, self.address_field),
             ],
             alignment=Qt.AlignLeft,
             spacing=10,
@@ -649,10 +665,15 @@ class RequisitesDialog(BaseEditDialog):
             с кнопкой обновляется. При отмене — ничего не меняется.
         """
         dialog = AddressDialog(self, model=self.seller.address)
-        if dialog.exec() == dialog.Accepted:
-            new_address = dialog.get_result()
-            self.seller.address = new_address
-            self.address_label.setText(str(new_address))
+        dialog.accepted.connect(self._on_address_accepted)
+        dialog.show()
+
+    def _on_address_accepted(self) -> None:
+        """Вызывается при подтверждении AddressDialog."""
+        dialog = self.sender()
+        new_address = dialog.get_result()
+        self.seller.address = new_address
+        self.address_field.setText(str(new_address))
 
     def _save_and_close(self) -> None:
         """Переносит валидные поля в модель Seller.

@@ -47,8 +47,8 @@ from utils.path_manager import PathManager
 INPUT_FILENAME = "кизы.txt"
 OUTPUT_FILENAME = "used_kiz.json"
 
-SOLD_DATE = "10-11-2026"
-RETURNED_DATE_START = "11-11-2026"
+SOLD_DATE = "19-11-2026"
+RETURNED_DATE_START = "20-11-2026"
 RETURNED_DATE_STEP_DAYS = 0  # 0 — всем одна дата; 1 — +1 день каждому
 
 
@@ -89,7 +89,7 @@ class KizsSeeder:
             raise FileNotFoundError(
                 f"Входной файл не найден: {self._input_path}"
             )
-
+        print("файл найден")
         storage = KizStorage(self._storage_path)
         raw_lines = self._read_input()
         new_kizs = self._collect_new(storage, raw_lines)
@@ -140,6 +140,8 @@ class KizsSeeder:
                 if kiz in cleaned_seen:
                     continue
                 cleaned_seen.add(kiz)
+                print("Киз", kiz, )
+                new_kizs.append(kiz)
                 if storage.get(kiz) is not None:
                     continue
                 new_kizs.append(kiz)
@@ -163,6 +165,7 @@ class KizsSeeder:
         """
         with storage.batch():
             for idx, kiz in enumerate(new_kizs):
+                print("Добавлен КИЗ: ", kiz, " с датой продажи: ", "SOLD_DATE", " и датой возврата: ", self._return_date_for(idx))
                 storage.add_or_update(
                     kiz,
                     sold_date=SOLD_DATE,

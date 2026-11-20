@@ -42,7 +42,7 @@ class AddressDialog(BaseEditDialog):
 
         super().__init__(
             parent=parent, title=title, bg_color=bg_color,
-            width=460, height=520, ok_cancel=False, modal=True,
+            width=420, height=500, ok_cancel=False, modal=True,
             log_manager_v2=log_manager_v2,
         )
         self._populate_from_model()
@@ -88,6 +88,7 @@ class AddressDialog(BaseEditDialog):
             config={
                 "items": region_items,
                 "settings": {
+                    "max_length": 800,
                     "editable": True,
                     "auto_select_first": False,
                     "completer_filter_mode": "contains",

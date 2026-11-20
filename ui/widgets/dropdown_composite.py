@@ -7,7 +7,7 @@
 позиции происходит только по границам экрана.
 """
 
-from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer
+from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer, QStringListModel
 from PySide6.QtGui import QGuiApplication, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QApplication,
@@ -107,8 +107,6 @@ class DropdownComposite(QWidget):
         "preferred_direction": "auto",
         "sync_checkboxes": False,
         "is_category": False,
-        "sync_checkboxes": False,
-        "is_category": False,
         "debug": False,
         "editable": False,
         "completer_case_sensitive": False,
@@ -135,12 +133,6 @@ class DropdownComposite(QWidget):
                 break
             p = p.parent()
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/__init__]"
-            print(f"\n{prefix} === СОЗДАНИЕ {id(self)} ===")
-            print(f"{prefix}   config: {config}")
-            print(f"{prefix}   kwargs: {kwargs}")
-
         if self.settings["close_on_select"] is None:
             self.settings["close_on_select"] = not self.settings["multi_select"]
 
@@ -163,12 +155,7 @@ class DropdownComposite(QWidget):
         else:
             self._popup_bg = self.settings["popup_bg_color"]
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/__init__]"
-            print(f"{prefix}   Итоговые настройки:")
-            for k, v in self.settings.items():
-                print(f"{prefix}     {k} = {v}")
-            print(f"{prefix}   Фон попапа: {self._popup_bg}")
+
 
         # Сборка триггера (ВСЕГДА)
         self._build_trigger()
@@ -181,12 +168,6 @@ class DropdownComposite(QWidget):
 
     def _build_trigger(self) -> None:
         """Собирает кнопку-триггер (стандартную или кастомную)."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_trigger]"
-            print(f"\n{prefix} Старт")
-            print(f"{prefix}   trigger_items: {self.settings.get('trigger_items')}")
-            print(f"{prefix}   arrow_position: {self.settings.get('arrow_position')}")
-
         trigger_widgets = []
         stretch_factors = []
 
@@ -197,7 +178,11 @@ class DropdownComposite(QWidget):
                         trigger_widgets.append(w)
                         stretch_factors.append(0)
                     case {"label": text}:
-                        lbl = LabelFactory.create_label(None, text, bg_color=(0, 0, 0, 0))
+                        lbl = LabelFactory.create_label(
+                            None, text,
+                            bg_color=(0, 0, 0, 0),
+                            text_color=ColorCalculator.text_for(self._popup_bg),
+                        )
                         trigger_widgets.append(lbl)
                         stretch_factors.append(1)
                     case {"button": btn_text, **kw}:
@@ -211,20 +196,34 @@ class DropdownComposite(QWidget):
                         stretch_factors.append(0)
         else:
             if self.settings.get("editable", False):
+                _trigger_text_color = ColorCalculator.text_for(self._popup_bg)
                 self._text_label = InputWidgetFactory.create_line_edit(
                     None,
                     text="",
                     placeholder=self.settings["placeholder"],
                     bg_color=(0, 0, 0, 0),
+                    text_color=_trigger_text_color,
                     border="none",
                     border_radius=0,
                     padding="0px",
                 )
+                self._text_label._style_kwargs = {
+                    "bg_color": (0, 0, 0, 0),
+                    "text_color": _trigger_text_color,
+                    "border": "none",
+                    "border_radius": 0,
+                    "padding": "0px",
+                    "font_size": None,
+                    "font_family": None,
+                    "extra_style": "",
+                }
                 self._text_label.textEdited.connect(self.edit_text_changed.emit)
                 self._text_label.editingFinished.connect(self.editing_finished.emit)
             else:
                 self._text_label = LabelFactory.create_label(
-                    None, text=self.settings["placeholder"], bg_color=(0, 0, 0, 0)
+                    None, text=self.settings["placeholder"],
+                    bg_color=(0, 0, 0, 0),
+                    text_color=ColorCalculator.text_for(self._popup_bg),
                 )
                 self._text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             trigger_widgets.append(self._text_label)
@@ -265,10 +264,6 @@ class DropdownComposite(QWidget):
 
         self._update_button_icon()
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_trigger]"
-            print(f"{prefix} Конец. Виджетов в триггере: {len(trigger_widgets)}")
-
     def _update_trigger_style(self):
         """Меняет фон триггера при открытии/закрытии."""
         is_open = self._popup and self._popup.isVisible()
@@ -304,23 +299,15 @@ class DropdownComposite(QWidget):
             IconRenderer.make_arrow(direction, self._arrow_btn, bg_color=self._popup_bg)
         )
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_update_button_icon]"
-            print(f"{prefix} is_open={is_open}, direction={direction}")
 
     # ---------- Публичный API ----------
 
     def add_item(self, config: dict) -> int:
         """Добавляет новую строку в выпадающий список."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/add_item]"
-            print(f"\n{prefix} Вход: {config}")
 
         index = len(self._rows)
         row_widget, data, text, is_sep = self._build_row(config, index)
         if row_widget is None:
-            if self.settings.get("debug"):
-                print(f"{prefix} Выход: -1 (виджет не собран)")
             return -1
 
         self._rows.append(row_widget)
@@ -340,10 +327,6 @@ class DropdownComposite(QWidget):
         else:
             self._update_button_text()
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/add_item]"
-            print(f"{prefix} Выход: index={index}, data={data}, text='{text}', is_separator={is_sep}")
-
         return index
 
     def add_separator(self) -> int:
@@ -361,17 +344,13 @@ class DropdownComposite(QWidget):
         self._row_disabled.append(True)
         self._row_is_separator.append(True)
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/add_separator]"
-            print(f"{prefix} Добавлен разделитель с индексом {index}")
+
 
         return index
 
     def clear_items(self) -> None:
         """Очищает список полностью."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/clear_items]"
-            print(f"{prefix} Очистка. Было строк: {len(self._rows)}")
+
 
         if self._popup:
             self._popup.deleteLater()
@@ -393,9 +372,7 @@ class DropdownComposite(QWidget):
 
     def set_current_index(self, index: int) -> None:
         """Программный выбор строки по её индексу."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_index]"
-            print(f"{prefix} Вход: index={index}, всего строк={len(self._rows)}")
+
 
         if 0 <= index < len(self._rows) and not self._row_disabled[index] and not self._row_is_separator[index]:
             if not self.settings["multi_select"]:
@@ -403,36 +380,23 @@ class DropdownComposite(QWidget):
             self._selected_indices.add(index)
             self._current_index = index
             self._update_row_styles()
-            self._emit_selection()
             if self.settings["auto_update_button"]:
                 self._update_button_text()
+            self._emit_selection()
 
-            if self.settings.get("debug"):
-                prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_index]"
-                print(f"{prefix} Выбор установлен. selected_indices={self._selected_indices}")
 
     def current_index(self) -> int:
         """Возвращает индекс текущей выбранной строки."""
         result = self._current_index
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/current_index]"
-            print(f"{prefix} Выход: {result}")
         return result
 
     def set_current_data(self, data) -> None:
         """Программный выбор строки по связанным с ней данным."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_data]"
-            print(f"{prefix} Вход: data={data}")
 
         for i, d in enumerate(self._row_datas):
             if d == data:
                 self.set_current_index(i)
                 return
-
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_current_data]"
-            print(f"{prefix} data не найдена в списке")
 
     def _get_child_dropdowns(self) -> list:
         """Возвращает список вложенных DropdownComposite."""
@@ -448,10 +412,6 @@ class DropdownComposite(QWidget):
         if not self.settings["multi_select"]:
             return
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/select_all]"
-            print(f"{prefix} Старт. Всего строк: {len(self._rows)}")
-
         self._selected_indices.clear()
         for i in range(len(self._rows)):
             if not self._row_disabled[i] and not self._row_is_separator[i]:
@@ -466,22 +426,14 @@ class DropdownComposite(QWidget):
             for child in self._child_dropdowns:
                 child.select_all()
 
-        self._emit_selection()
         if self.settings["auto_update_button"]:
             self._update_button_text()
-
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/select_all]"
-            print(f"{prefix} Конец. Выбрано индексов: {len(self._selected_indices)}")
+        self._emit_selection()
 
     def clear_selection(self) -> None:
         """Снимает выбор со всех элементов."""
         if not self.settings["multi_select"]:
             return
-
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/clear_selection]"
-            print(f"{prefix} Старт")
 
         self._selected_indices.clear()
         self._current_index = -1
@@ -491,9 +443,9 @@ class DropdownComposite(QWidget):
             for child in self._child_dropdowns:
                 child.clear_selection()
 
-        self._emit_selection()
         if self.settings["auto_update_button"]:
             self._update_button_text()
+        self._emit_selection()
 
     def current_data(self):
         """Возвращает данные выбранных строк."""
@@ -503,10 +455,6 @@ class DropdownComposite(QWidget):
             result = self._row_datas[self._current_index]
         else:
             result = None
-
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/current_data]"
-            print(f"{prefix} Выход: {result}")
 
         return result
 
@@ -519,19 +467,10 @@ class DropdownComposite(QWidget):
         elif not self._selected_indices and self.settings["auto_update_button"] and hasattr(self, "_text_label"):
             self._text_label.setText(text)
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/set_placeholder]"
-            print(f"{prefix} Новый placeholder: '{text}'")
-
     def open(self) -> None:
         """Открывает выпадающий список."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/open]"
-            print(f"\n{prefix} Старт. Строк: {len(self._rows)}")
 
         if not self._rows:
-            if self.settings.get("debug"):
-                print(f"{prefix} Список пуст, отмена")
             return
 
         if self._popup is None:
@@ -550,10 +489,6 @@ class DropdownComposite(QWidget):
 
     def close(self) -> None:
         """Закрывает выпадающий список."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/close]"
-            print(f"{prefix} Вызов close()")
-
         # Принудительно закрываем дочерние попапы
         if hasattr(self, "_child_dropdowns"):
             for child in self._child_dropdowns:
@@ -657,9 +592,8 @@ class DropdownComposite(QWidget):
         Вход: is_error — bool.
 
         Роль:
-            В editable-режиме передаёт сигнал в
-            InputWidgetFactory.set_error_state для QLineEdit.
-            В остальных режимах — no-op: у триггера нет _style_kwargs.
+            В editable-режиме вызывает InputWidgetFactory.set_error_state
+            для QLineEdit. В остальных режимах — no-op.
         """
         line_edit = self.lineEdit()
         if line_edit is None:
@@ -679,28 +613,29 @@ class DropdownComposite(QWidget):
         """
         line_edit = self.lineEdit()
         if line_edit is None:
-            return
+            return  # QLineEdit ещё не создан
 
-        if not hasattr(self, "_completer"):
-            self._completer = QCompleter(line_edit)
+        completer = getattr(self, "_completer", None)
+        if completer is None:
+            completer = QCompleter(line_edit)
             if self.settings.get("completer_case_sensitive", False):
-                self._completer.setCaseSensitivity(Qt.CaseSensitive)
+                completer.setCaseSensitivity(Qt.CaseSensitive)
             else:
-                self._completer.setCaseSensitivity(Qt.CaseInsensitive)
+                completer.setCaseSensitivity(Qt.CaseInsensitive)
 
             mode = self.settings.get("completer_filter_mode", "contains")
-            if mode == "starts_with":
-                self._completer.setFilterMode(Qt.MatchStartsWith)
-            elif mode == "exact":
-                self._completer.setFilterMode(Qt.MatchExactly)
-            else:
-                self._completer.setFilterMode(Qt.MatchContains)
+            _mode_map = {"starts_with": Qt.MatchStartsWith,
+                         "exact": Qt.MatchExactly}
+            completer.setFilterMode(_mode_map.get(mode, Qt.MatchContains))
 
-            self._completer.setCompletionMode(QCompleter.PopupCompletion)
-            self._completer.activated.connect(self._on_completer_activated)
-            line_edit.setCompleter(self._completer)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
+            completer.activated.connect(self._on_completer_activated)
+            line_edit.setCompleter(completer)
+            self._completer = completer
+            self._completer_model = QStringListModel()
+            completer.setModel(self._completer_model)
 
-        self._completer.model().setStringList(list(self._row_texts))
+        self._completer_model.setStringList(list(self._row_texts))
 
     def _on_completer_activated(self, text: str) -> None:
         """Слот completer.activated — выбирает строку по тексту из completer.
@@ -724,10 +659,6 @@ class DropdownComposite(QWidget):
 
     def _build_row(self, config: dict, index: int) -> tuple:
         """Собирает одну строку для popup."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_row]"
-            print(f"\n{prefix} index={index}, config={config}")
-
         is_separator = config.get("separator", False)
         if is_separator:
             line = QFrame()
@@ -838,19 +769,10 @@ class DropdownComposite(QWidget):
 
         row.mousePressEvent = mouse_press
 
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_row]"
-            print(f"{prefix} Выход: data={row_data}, text='{first_text}', disabled={config.get('disabled', False)}")
-
         return row, row_data, first_text, False
 
     def _build_popup(self) -> None:
         """Создает и собирает выпадающее окно."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_build_popup]"
-            print(f"\n{prefix} Старт. Всего строк: {len(self._rows)}")
-            print(f"{prefix}   layout_direction={self.settings.get('layout_direction')}")
-
         self._popup = QWidget(None, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         self._popup.setAttribute(Qt.WA_TranslucentBackground)
         self._popup.setAttribute(Qt.WA_DeleteOnClose, False)
@@ -951,9 +873,6 @@ class DropdownComposite(QWidget):
             self.settings.get("max_length")
         )
 
-        if debug:
-            print(f"{prefix}   [SIZE] Dynamic max_length: {max_len} (set: {self.settings['max_length']})")
-
         if self.settings.get("layout_direction") == "vertical":
             w = max(self._trigger.width(), 100)
             self._popup.setFixedWidth(w)
@@ -972,11 +891,6 @@ class DropdownComposite(QWidget):
             final_h = min(content_h, max_len)
             self._scroll.setFixedHeight(final_h)
 
-            if debug:
-                print(f"\n{prefix} Режим: ВЕРТИКАЛЬНЫЙ")
-                print(f"{prefix}   Ширина попапа = ширине триггера: {w}")
-                print(f"{prefix}   Content height: {content_h}")
-                print(f"{prefix}   Scroll height: {final_h}")
         else:
             # Горизонтальный режим
             scroll_widget = self._scroll.widget()
@@ -1001,13 +915,6 @@ class DropdownComposite(QWidget):
             self._popup.setFixedWidth(w)
             self._scroll.setFixedWidth(w)
 
-            if debug:
-                print(f"\n{prefix} Режим: ГОРИЗОНТАЛЬНЫЙ")
-                print(f"{prefix}   Content width: {content_width}")
-                print(f"{prefix}   Popup width: {w}")
-                print(f"{prefix}   Will scroll: {will_scroll}, hbar_h: {hbar_h}")
-                print(f"{prefix}   Scroll height: {final_h}")
-
         self._popup.layout().activate()
         self._popup.adjustSize()
 
@@ -1018,12 +925,6 @@ class DropdownComposite(QWidget):
         h = self._popup.height()
 
         trigger_global = self._trigger.mapToGlobal(QPoint(0, 0))
-
-        if debug:
-            print(f"{prefix}   [SIZE] Итоговый размер попапа: {w}x{h}")
-            print(f"{prefix}   [POS]  Триггер global: ({trigger_global.x()}, {trigger_global.y()})")
-            print(f"{prefix}   [POS]  Триггер size: {self._trigger.width()}x{self._trigger.height()}")
-
         # 4. Вычисляем координаты и направление
         x, y, direction = GeometryCalculator.calculate_popup_position(
             trigger_global, w, h, self._trigger.height(), self._trigger.width(),
@@ -1031,27 +932,18 @@ class DropdownComposite(QWidget):
         )
         self._popup_direction = direction
 
-        if debug:
-            print(f"{prefix}   [POS]  Направление: {direction}")
-            print(f"{prefix}   [POS]  Сырые координаты: x={x}, y={y}")
-
         # 5. Применяем тень
         margin = 10 if self.settings["popup_shadow"] else 0
         final_x = x - margin
         final_y = y - margin
 
-        if debug:
-            print(f"{prefix}   [POS]  Margin: {margin}")
-            print(f"{prefix}   [POS]  Финальные координаты: ({final_x}, {final_y})")
 
         # 6. Применяем позицию
         self._popup.move(final_x, final_y)
 
     def _on_row_checkbox_toggled(self, index, checked):
         """Слот для синхронизации чекбоксов в строке."""
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_on_row_checkbox_toggled]"
-            print(f"{prefix} index={index}, checked={checked}, multi_select={self.settings['multi_select']}")
+
 
         if self.settings["multi_select"]:
             if checked:
@@ -1130,9 +1022,6 @@ class DropdownComposite(QWidget):
     def _emit_selection(self) -> None:
         """Генерирует сигнал об изменении выбора."""
         data = self.current_data()
-        if self.settings.get("debug"):
-            prefix = "[DEBUG/ui.widgets.dropdown_composite/DropdownComposite/_emit_selection]"
-            print(f"{prefix} Эмитим selection_changed({data})")
         self.selection_changed.emit(data)
 
     def eventFilter(self, obj, event) -> bool:

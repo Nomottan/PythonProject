@@ -30,6 +30,7 @@ class WindowManager(QObject):
         super().__init__()
         self._main_window = main_window
         self._windows = {}
+        self._parent_close_on_click = {}  # {parent: prev_close_on_click}
         self._logger = None
         if log_manager_v2 is not None:
             self._logger = log_manager_v2.create_logger_v2(
@@ -37,15 +38,25 @@ class WindowManager(QObject):
                 domain="ui",
             )
 
-    def register_window(self, window, parent, fill_parent, modal):
+    def register_window(self, window, parent, fill_parent, modal,
+                        visual_parent=None):
         """Регистрирует окно, настраивает флаги, геометрию и подписки.
 
         Вход:
             window — QDialog или QMainWindow.
-            parent — родительское окно.
+            parent — qt_parent. Реальная иерархия: от него считается
+                     window_level, поведение close_on_click_outside
+                     и восстановление при закрытии.
             fill_parent — True, если окно должно занимать всё
                           пространство родителя (с отступами).
             modal — True, если окно должно блокировать родителя.
+            visual_parent — якорь для центровки/клэмпа и для
+                            подписки на resize fill_parent-окон.
+                            По умолчанию равен parent. Для вложенных
+                            диалогов передаётся MainWindow, чтобы
+                            центровка и сдвиг (+30) считались от
+                            главного окна, а поведение — от
+                            реального родителя.
         """
         if parent is None:
             if self._logger:
@@ -57,28 +68,42 @@ class WindowManager(QObject):
                 f"register_window: parent обязателен для {type(window).__name__}"
             )
 
+        if visual_parent is None:
+            visual_parent = parent
+
+        if self._logger:
+            self._logger.debug(
+                f"register_window: {type(window).__name__} "
+                f"parent={type(parent).__name__} "
+                f"visual_parent={type(visual_parent).__name__} "
+                f"fill_parent={fill_parent} modal={modal}"
+            )
+
         window.window_level = getattr(parent, "window_level", 0) + 1
 
         # Флаги окна (без системной рамки, но как полноценный диалог)
         window.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         window.setAttribute(Qt.WA_TranslucentBackground)
 
-        # Модальность
-        if modal:
+        # Модальность — окна уровня 0 не блокируются модальными окнами
+        parent_level = getattr(parent, "window_level", 0)
+        if modal and parent_level >= 1:
             window.setWindowModality(Qt.WindowModal)
         else:
             window.setWindowModality(Qt.NonModal)
 
-        # Геометрия
+        # Отключаем close_on_click_outside у родителя при открытии дочернего
+        if window.window_level >= 1 and hasattr(parent, "close_on_click_outside"):
+            parent_id = id(parent)
+            if parent_id not in self._parent_close_on_click:
+                self._parent_close_on_click[parent_id] = parent.close_on_click_outside
+            parent.close_on_click_outside = False
+
+        # Геометрия — считается от visual_parent (обычно MainWindow).
         if fill_parent:
-            # Сервисные/псевдосервисные окна занимают область
-            # Qt-родителя с отступами (10, 10, -10, -10).
-            window.setGeometry(*self._calculate_geometry(parent))
+            window.setGeometry(*self._calculate_geometry(visual_parent))
         else:
-            # Диалоги сохраняют свой размер (default_width ×
-            # default_height, выставленный фабрикой). Только
-            # позиционируем: центр Qt-родителя, клэмп в MainWindow.
-            self._position_dialog(window, parent)
+            self._position_dialog(window, visual_parent)
 
         # window_manager на самом окне — чтобы вложенные диалоги
         # (Level 2+) нашли менеджер через hasattr(parent, ...).
@@ -89,16 +114,19 @@ class WindowManager(QObject):
         self._windows[id(window)] = {
             "window": window,
             "parent": parent,
+            "visual_parent": visual_parent,
             "fill_parent": fill_parent,
         }
 
         # Подписки
         window.installEventFilter(self)
         if fill_parent:
-            parent.installEventFilter(self)
+            # Ресайз/перемещение отслеживаем у visual_parent
+            # (MainWindow/SellersWindow), а не у реального родителя.
+            visual_parent.installEventFilter(self)
         window_id = id(window)
         window.destroyed.connect(
-            lambda: self._on_destroyed_by_id(window_id)
+            lambda wid=window_id: self._on_destroyed_by_id(wid)
         )
 
         if fill_parent and hasattr(self._main_window, "active_child"):
@@ -108,16 +136,18 @@ class WindowManager(QObject):
             self._logger.debug(
                 f"WindowManager: зарегистрировано {type(window).__name__} "
                 f"(Level {window.window_level}), "
+                f"parent={type(parent).__name__}, "
+                f"visual_parent={type(visual_parent).__name__}, "
                 f"fill_parent={fill_parent}, modal={modal}"
             )
 
     def _calculate_geometry(self, parent):
-        """Вычисляет геометрию окна.
+        """Вычисляет геометрию окна от visual_parent.
 
-        Сдвиг +30 по Y применяется только если родитель — это
+        Сдвиг +30 по Y применяется только если якорь — это
         MainWindow (компенсация его верхней панели/заголовка).
-        Для вложенных окон (Level 1+) сдвиг не нужен, они
-        выравниваются ровно по границам родителя.
+        Для вложенных якорей сдвиг не нужен — выравнивание
+        ровно по границам.
         """
         offset_y = 30 if parent is self._main_window else 0
         return (
@@ -132,7 +162,8 @@ class WindowManager(QObject):
         Вход:
             window — QDialog с уже выставленным размером
                      (resize(default_width, default_height) из фабрики).
-            parent — Qt-родитель (окно или другой диалог).
+            parent — visual_parent (MainWindow или другой якорь).
+                     От него считается центр; клэмп — в MainWindow.
 
         Роль: центрирует диалог в Qt-родителе (fallback — MainWindow)
               и клэмпит в MainWindow с отступом (10, 10). Размер
@@ -165,6 +196,11 @@ class WindowManager(QObject):
 
     def unregister_window(self, window):
         """Снимает окно с регистрации и каскадно закрывает дочерние."""
+        if self._logger:
+            self._logger.debug(
+                f"unregister_window: {type(window).__name__} id={id(window)}"
+            )
+
         # Каскадное закрытие дочерних окон
         for entry in list(self._windows.values()):
             if entry["parent"] is window:
@@ -178,19 +214,92 @@ class WindowManager(QObject):
         except RuntimeError:
             pass
 
-        parent = self._windows.get(id(window), {}).get("parent")
-        if parent is not None:
+        entry = self._windows.get(id(window), {})
+        parent = entry.get("parent")
+        visual_parent = entry.get("visual_parent", parent)
+
+        removed_anchors = []
+        for anchor in (parent, visual_parent):
+            if anchor is None:
+                continue
+            if any(anchor is a for a in removed_anchors):
+                continue
             try:
-                parent.removeEventFilter(self)
+                anchor.removeEventFilter(self)
             except RuntimeError:
                 pass
+            removed_anchors.append(anchor)
 
         self._windows.pop(id(window), None)
 
-        if self._logger:
-            self._logger.debug(
-                f"WindowManager: {type(window).__name__} снят с регистрации"
-            )
+        if parent is not None:
+            self._restore_parent_close_on_click(parent)
+
+            if self._logger:
+                self._logger.debug(
+                    f"WindowManager: {type(window).__name__} снят с регистрации"
+                )
+
+    def _restore_parent_close_on_click(self, parent):
+        """Возвращает родителю close_on_click_outside, когда у него
+        не осталось зарегистрированных дочерних окон.
+
+        Вход:
+            parent — родительское окно (может быть уже уничтоженным).
+
+        Роль:
+            Парная операция к сохранению в register_window. Если
+            родитель ещё имеет других зарегистрированных детей —
+            флаг остаётся False. Если это последний ребёнок —
+            исходное значение из self._parent_close_on_click
+            возвращается родителю, запись из словаря удаляется.
+
+            Исходное значение сохраняется один раз (при первом
+            ребёнке) и не перезаписывается при каждом новом —
+            иначе вложенные открытия фиксировали бы уже
+            сброшенный False.
+
+            Если родитель уже уничтожен (RuntimeError при записи
+            атрибута) — запись всё равно удаляется из словаря,
+            восстанавливать некуда.
+        """
+        parent_id = id(parent)
+        if parent_id not in self._parent_close_on_click:
+            return
+
+        has_children = any(
+            entry["parent"] is parent for entry in self._windows.values()
+        )
+        if has_children:
+            return
+
+        saved = self._parent_close_on_click.pop(parent_id)
+        try:
+            parent.close_on_click_outside = saved
+        except RuntimeError:
+            pass
+
+    def has_live_children(self, window) -> bool:
+        """True, если у окна есть зарегистрированные дочерние окна.
+
+        Вход:
+            window — любое окно (может быть вне регистрации).
+
+        Выход:
+            True — есть хотя бы один живой зарегистрированный ребёнок.
+
+        Роль:
+            Публичный API для внешних механизмов (например,
+            ExtendedWindowFactory._setup_click_outside_close),
+            которым перед закрытием окна нужно узнать — не
+            закрывают ли они окно с открытым диалогом. Позволяет
+            сохранить состояние «не закрывать родителя при клике
+            вне, если у него открыт дочерний диалог» без
+            завязки на флаг close_on_click_outside.
+        """
+        return any(
+            entry["parent"] is window for entry in self._windows.values()
+        )
 
     def _on_destroyed(self, window):
         """Слот сигнала destroyed — для защиты от двойного удаления."""

@@ -290,6 +290,7 @@ class SalesAccumulatorService:
                     f"— пропущено"
                 )
                 continue
+
             if p.name == chz_name:
                 sources.append((p, "ЧЗ_МП", 0))
             elif p.name == returns_name:

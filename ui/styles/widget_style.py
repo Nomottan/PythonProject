@@ -230,10 +230,11 @@ class WidgetStyle:
     @staticmethod
     def apply_line_edit(edit, bg_color, text_color=None, border="none",
                         border_radius=3, padding="3px", font_size=None,
-                        font_family=None, extra_style="") -> None:
+                        font_family=None, extra_style="", error_state=False) -> None:
         """QSS для QLineEdit.
 
         Вход: edit — QLineEdit; остальные параметры — стиль.
+              error_state — True для подсветки ошибки (красная рамка).
 
         Выход: нет.
         Роль: единая сборка QSS поля ввода.
@@ -244,7 +245,7 @@ class WidgetStyle:
             selector,
             bg_color=bg_color,
             text_color=text_c,
-            border=border,
+            border="2px solid #e74c3c" if error_state else border,
             border_radius=border_radius,
             padding=padding,
             font_size=font_size,

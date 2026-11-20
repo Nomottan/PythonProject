@@ -340,10 +340,20 @@ class ExtendedWindowFactory(WindowFactory):
             if QApplication.activePopupWidget() is not None:
                 return False
 
-
             local_pos = window.mapFromGlobal(event.globalPosition().toPoint())
             if window.rect().contains(local_pos):
                 return False
+
+            # Клик по другому зарегистрированному окну-ребёнку
+            # (например, по AddressDialog, открытому поверх
+            # RequisitesDialog) не должен закрывать это окно.
+            # Проверяем через WindowManager — он владеет
+            # реестром иерархии окон. Если ребёнок есть —
+            # отдаём клик ему, не закрываем родителя.
+            wm = getattr(window, "window_manager", None)
+            if wm is not None and hasattr(wm, "has_live_children"):
+                if wm.has_live_children(window):
+                    return False
 
             window._cancel_on_close = True
             window.close()
