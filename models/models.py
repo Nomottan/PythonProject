@@ -143,7 +143,7 @@ class Seller:
         brands — связанные объекты Brand.
         company — юр. лицо.
         tax - налоговая ставка
-        phone, mail, edo_id, ogrn, kpp - текстовые реквизиты
+        phone, mail, edo_id, ogrn, kpp, director - текстовые реквизиты
         address - адрес в виде объекта
         priority — приоритет при разрешении конфликтов КИЗов:
                    1 — низкий, 2 — средний (дефолт), 3 — высокий.
@@ -174,7 +174,7 @@ class Seller:
                  brands: list = None, company: str = "", tax: int = 5,
                  priority: int = 2, phone: str = "", mail: str = "",
                  address: AddressModel = None, edo_id: str = "",
-                 ogrn: str = "", kpp: str = "",):
+                 ogrn: str = "", kpp: str = "", director: str = "",):
         self.name = name
         self.inn = inn
         self.company = company
@@ -188,6 +188,7 @@ class Seller:
         self.edo_id = edo_id
         self.ogrn = ogrn
         self.kpp = kpp
+        self.director = director
 
 
     def add_brand(self, brand: Brand):
@@ -235,7 +236,8 @@ class Seller:
         data = {"name": self.name}
 
         # Опциональные строковые идентификаторы: только непустые
-        for key in ("inn", "company", "phone", "mail", "edo_id", "ogrn", "kpp"):
+        for key in ("inn", "company", "phone", "mail",
+                    "edo_id", "ogrn", "kpp", "director"):
             value = getattr(self, key, "")
             if value and value.strip():
                 data[key] = value
@@ -273,6 +275,7 @@ class Seller:
             edo_id=data.get("edo_id", ""),
             ogrn=data.get("ogrn", ""),
             kpp=data.get("kpp", ""),
+            director=data.get("director", ""),
         )
         if brands_by_name:
             for brand_name in data.get("brands", []):

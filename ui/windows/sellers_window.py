@@ -519,9 +519,10 @@ class RequisitesDialog(BaseEditDialog):
     """Диалог редактирования реквизитов продавца.
 
     Назначение:
-        Поля: телефон, почта, ЭДО ID, ОГРН, КПП, адрес.
-        Кнопка «Готово» закрывает диалог, closeEvent вызывает
-        _save_and_close.
+        Поля: телефон, почта, ЭДО ID, ОГРН, адрес.
+        КПП и Директор — только если seller.company начинается
+        на «ООО». Кнопка «Готово» закрывает диалог, closeEvent
+        вызывает _save_and_close.
 
     Роль в программе:
         Открывается из SellersWindow по кнопке «Реквизиты».
@@ -538,13 +539,16 @@ class RequisitesDialog(BaseEditDialog):
             log_manager_v2 — LogManagerV2 или None.
         """
         self.seller = seller
-
+        # ООО — показываем КПП и Директора, иначе — скрываем.
+        self._is_ooo = seller.company.strip().upper().startswith("ООО")
+        _height = 280 if self._is_ooo else 220
+        print(f"[REQ] _is_ooo={self._is_ooo}, _height={_height}, company={self.seller.company!r}")
         parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
         self.bg_color = ColorCalculator.derive(
             parent_bg,
             r_fn=lambda r: int(r * 0.95),
-            g_fn=lambda g: int(g * 1.15),
-            b_fn=lambda b: int(b * 1.15),
+            g_fn=lambda g: int(g * 1.5),
+            b_fn=lambda b: int(b * 1.5),
             alpha=0.95,
         )
 
@@ -555,7 +559,7 @@ class RequisitesDialog(BaseEditDialog):
             draggable=False, close_on_click_outside=True,
             modal=True, center=True,
             on_close=self._save_and_close,
-            width=300, height=265,
+            width=300, height=_height,
             log_manager_v2=log_manager_v2,
         )
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -577,49 +581,66 @@ class RequisitesDialog(BaseEditDialog):
         self.ogrn_edit = InputWidgetFactory.create_default_line_edit(
             self, text=self.seller.ogrn,
         )
-        self.kpp_edit = InputWidgetFactory.create_default_line_edit(
-            self, text=self.seller.kpp,
-        )
+
+        rows = [
+            (
+                LabelFactory.create_label(
+                    self, "Телефон:",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                ),
+                self.phone_edit,
+            ),
+            (
+                LabelFactory.create_label(
+                    self, "Почта:",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                ),
+                self.mail_edit,
+            ),
+            (
+                LabelFactory.create_label(
+                    self, "ЭДО ID:",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                ),
+                self.edo_id_edit,
+            ),
+            (
+                LabelFactory.create_label(
+                    self, "ОГРН:",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                ),
+                self.ogrn_edit,
+            ),
+        ]
+
+        # КПП и Директор — только для ООО.
+        self.kpp_edit = None
+        self.director_edit = None
+        if self._is_ooo:
+            self.kpp_edit = InputWidgetFactory.create_default_line_edit(
+                self, text=self.seller.kpp,
+            )
+            self.director_edit = InputWidgetFactory.create_default_line_edit(
+                self, text=self.seller.director,
+            )
+            rows.append((
+                LabelFactory.create_label(
+                    self, "КПП:",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                ),
+                self.kpp_edit,
+            ))
+            rows.append((
+                LabelFactory.create_label(
+                    self, "Директор:",
+                    bg_color=(0, 0, 0, 0), text_color=None,
+                ),
+                self.director_edit,
+            ))
 
         form_container = LayoutFactory.create_form(
             self,
-            rows=[
-                (
-                    LabelFactory.create_label(
-                        self, "Телефон:",
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                    ),
-                    self.phone_edit,
-                ),
-                (
-                    LabelFactory.create_label(
-                        self, "Почта:",
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                    ),
-                    self.mail_edit,
-                ),
-                (
-                    LabelFactory.create_label(
-                        self, "ЭДО ID:",
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                    ),
-                    self.edo_id_edit,
-                ),
-                (
-                    LabelFactory.create_label(
-                        self, "ОГРН:",
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                    ),
-                    self.ogrn_edit,
-                ),
-                (
-                    LabelFactory.create_label(
-                        self, "КПП:",
-                        bg_color=(0, 0, 0, 0), text_color=None,
-                    ),
-                    self.kpp_edit,
-                ),
-            ],
+            rows=rows,
             alignment=Qt.AlignLeft,
             spacing=10,
         )
@@ -700,14 +721,20 @@ class RequisitesDialog(BaseEditDialog):
         if mail_ok:
             self.seller.mail = mail
 
-        kpp = self.kpp_edit.text().strip()
-        kpp_ok = (kpp == "") or (kpp.isdigit() and len(kpp) == 9)
-        InputWidgetFactory.set_error_state(self.kpp_edit, not kpp_ok)
-        if kpp_ok:
-            self.seller.kpp = kpp
-
         ogrn = self.ogrn_edit.text().strip()
         ogrn_ok = (ogrn == "") or (ogrn.isdigit() and len(ogrn) in (13, 15))
         InputWidgetFactory.set_error_state(self.ogrn_edit, not ogrn_ok)
         if ogrn_ok:
             self.seller.ogrn = ogrn
+
+        kpp_edit = getattr(self, "kpp_edit", None)
+        if kpp_edit is not None:
+            kpp = kpp_edit.text().strip()
+            kpp_ok = (kpp == "") or (kpp.isdigit() and len(kpp) == 9)
+            InputWidgetFactory.set_error_state(kpp_edit, not kpp_ok)
+            if kpp_ok:
+                self.seller.kpp = kpp
+
+        director_edit = getattr(self, "director_edit", None)
+        if director_edit is not None:
+            self.seller.director = director_edit.text().strip()
