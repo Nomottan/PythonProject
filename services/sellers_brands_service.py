@@ -10,7 +10,7 @@ Brand.sellers), дедупликации — это и делает сервис
     SellersBrandsService — знает про Seller и Brand.
 """
 
-from models.models import Seller, Brand
+from models.models import Seller, Brand, Signer
 from storage.main_config import MainConfig
 from utils.text_utils import TextUtils
 
@@ -26,7 +26,8 @@ class SellersBrandsService:
 
     Публичный API: get_sellers_objects, set_sellers_objects,
     get_sellers_with_brands, get_brands_objects, set_brands_objects,
-    get_brands_dict, add_key_to_brand, create_brand.
+    get_brands_dict, add_key_to_brand, create_brand,
+    get_signers_objects, set_signers_objects.
     """
 
     def __init__(self, main_config: MainConfig,
@@ -268,6 +269,86 @@ class SellersBrandsService:
 
         target.keys.append(key)
         return self._save_brands(brands)
+
+    # ---------- Signers ----------
+
+    def get_signers_objects(self) -> list:
+        """Возвращает список Signer.
+
+        Выход: list[Signer].
+
+        Роль: читает список dict-ов из конфига по ключу "signers",
+              конвертирует через Signer.from_dict. Восстановление
+              связей не требуется — у подписантов их нет,
+              в отличие от Seller/Brand.
+
+        Логирование:
+            warning — если корень «signers» не список или элемент
+                      не dict (битый конфиг).
+            debug — количество прочитанных подписантов.
+        """
+        raw_list = self._config.get("signers", [])
+        if not isinstance(raw_list, list):
+            if self._logger is not None:
+                self._logger.warning(
+                    "config.json: ключ 'signers' должен быть списком, "
+                    f"получен {type(raw_list).__name__}. Возвращаю []."
+                )
+            return []
+
+        signers = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                if self._logger is not None:
+                    self._logger.warning(
+                        "config.json: элемент списка 'signers' не "
+                        f"является словарём ({type(item).__name__}), "
+                        "пропущен."
+                    )
+                continue
+            signers.append(Signer.from_dict(item))
+
+        if self._logger is not None:
+            self._logger.debug(
+                f"get_signers_objects: прочитано {len(signers)} "
+                f"подписантов"
+            )
+        return signers
+
+    def set_signers_objects(self, signers: list) -> bool:
+        """Сохраняет список Signer в конфиг.
+
+        Вход: signers — list[Signer].
+        Выход: True — сериализация и запись прошли; False —
+               исключение перехвачено и залогировано через
+               critical(can_influence=False).
+
+        Роль: сериализует через to_dict, пишет в MainConfig по
+              ключу "signers". MainConfig сам вызывает save().
+              Возвращает bool (по образцу _save_brands), чтобы
+              StaffWindow мог отреагировать на сбой записи.
+
+        Логирование:
+            debug — количество сохранённых подписантов.
+            critical — если сериализация или запись упали.
+        """
+        try:
+            serialized = [s.to_dict() for s in signers]
+            self._config.set("signers", serialized)
+            if self._logger is not None:
+                self._logger.debug(
+                    f"set_signers_objects: сохранено {len(serialized)} "
+                    f"подписантов"
+                )
+            return True
+        except Exception as e:
+            if self._logger is not None:
+                self._logger.critical(
+                    f"Ошибка сохранения подписантов: {e}",
+                    can_influence=False,
+                )
+            return False
+
 
     def add_key_to_seller(self, seller_name: str, key: str) -> bool:
         """Добавляет сырой ключ key в seller.keys продавца seller_name.

@@ -19,7 +19,9 @@ class TextUtils:
         '.': '/', ',': '?', '/': '|',
         '"': '@', '№': '#', ';': '$', '?': '&', ':': '^'
     }
-
+    _KEYBOARD_MAP_REVERSE = dict(
+        zip(_KEYBOARD_MAP.values(), _KEYBOARD_MAP.keys())
+    )
     @staticmethod
     def is_cyrillic(text: str) -> bool:
         if not isinstance(text, str):
@@ -33,6 +35,46 @@ class TextUtils:
         for ch in text:
             result.append(TextUtils._KEYBOARD_MAP.get(ch, ch))
         return ''.join(result)
+
+    @staticmethod
+    def is_latinic(text: str) -> bool:
+        """Проверяет, есть ли в строке латинские буквы.
+
+        Вход: text — любая строка.
+        Выход: True, если найден хотя бы один латинский символ
+               (a–z, A–Z); иначе False. Не-строки → False.
+
+        Роль: зеркало is_cyrillic. Нужен, чтобы отличить
+              «набрано в английской раскладке» от «набрано
+              по-русски» и включить автоперевод раскладки.
+        """
+        if not isinstance(text, str):
+            return False
+        latin_chars = set('abcdefghijklmnopqrstuvwxyz')
+        return any(char.lower() in latin_chars for char in text)
+
+    @staticmethod
+    def to_cyrillic(text: str) -> str:
+        """Переводит символы английской раскладки в кириллицу.
+
+        Вход: text — строка, набранная в английской раскладке
+              («ghbdtn» вместо «привет»).
+        Выход: строка, где символы, совпавшие с обратной картой
+               клавиатуры, заменены кириллицей; остальные
+               (цифры, пробелы, знаки вне карты) — как есть.
+
+        Роль: обратное к keyboard_translit. Нужен для сценария
+              «пользователь забыл переключить раскладку»:
+              латиница → кириллица по физическим клавишам.
+              Карта _KEYBOARD_MAP_REVERSE собирается в конце
+              модуля (в теле класса dict-comprehension не видит
+              _KEYBOARD_MAP из-за области видимости).
+        """
+        if not isinstance(text, str):
+            return text
+        return ''.join(
+            TextUtils._KEYBOARD_MAP_REVERSE.get(ch, ch) for ch in text
+        )
 
     @staticmethod
     def trim_to_31(value) -> str:
@@ -213,6 +255,38 @@ class TextUtils:
         if not text:
             return text
         return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    @staticmethod
+    def split_fio(text: str) -> list[str]:
+        """Делит ФИО на слова.
+
+        Вход: text — строка вида «  Иванов   Иван  Иванович ».
+        Выход: список слов без пустых элементов. Пустая строка
+               или None → [].
+
+        Роль: единая точка разбора ФИО для валидации (подсчёт
+              слов) и для санитайзинга. Множественные пробелы
+              схлопываются.
+        """
+        if not text:
+            return []
+        return str(text).split()
+
+    @staticmethod
+    def sanitize_fio(text: str) -> str:
+        """Приводит ФИО к формату «Первая заглавная, остальные строчные».
+
+        Вход: text — ФИО одной строкой.
+        Выход: нормализованная строка: каждое слово обработано
+               sanitize_fio_part (капитализация, дефисы,
+               апострофы), склейка через один пробел.
+
+        Роль: вызывается перед сохранением Signer, чтобы в
+              config.json попадал единый формат независимо от
+              того, как пользователь набрал текст.
+        """
+        parts = TextUtils.split_fio(text)
+        return " ".join(TextUtils.sanitize_fio_part(p) for p in parts)
 
     @staticmethod
     def sanitize_fio_part(text: str) -> str:

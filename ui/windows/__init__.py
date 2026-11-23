@@ -11,3 +11,4 @@ from .planner_window import PlannerWindow
 from .planner_archive_window import PlannerArchiveWindow
 from .kiz_by_sellers_window import KizBySellersWindow
 from .kiz_by_sellers_dialogs import KizBySellersDialog
+from .staff_dialogs import StaffWindow

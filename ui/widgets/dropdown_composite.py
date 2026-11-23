@@ -148,7 +148,11 @@ class DropdownComposite(QWidget):
         self._popup_direction = "down"
 
         if self.settings["popup_bg_color"] is None:
-            parent_bg = BackgroundResolver.resolve_bg_color(self, None)
+            parent_bg = BackgroundResolver.resolve_parent_bg(
+                self.parent(), None,
+            )
+            if parent_bg is None:
+                parent_bg = BackgroundResolver.resolve_bg_color(self, None)
             if parent_bg is None:
                 parent_bg = (63, 63, 63, 1.0)
             self._popup_bg = ColorCalculator.element_bg_for(parent_bg)
@@ -702,6 +706,7 @@ class DropdownComposite(QWidget):
                             None, lbl_text, bg_color=(0, 0, 0, 0),
                             text_color=text_color, padding="4px 8px", border_radius=0
                         )
+                    lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                     widgets.append(lbl)
                     if not first_text:
                         first_text = lbl_text

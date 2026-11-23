@@ -105,6 +105,8 @@ class ButtonFactory:
         Выход: QPushButton с QSS.
         """
         btn = QPushButton(text, parent)
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
         if object_name:
             btn.setObjectName(object_name)
         if cursor_shape:

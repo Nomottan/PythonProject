@@ -21,11 +21,17 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
 from PySide6.QtCore import QTimer, Qt
 
 from ui.windows import (
-    SellsFBSWindow, SellersWindow, BrandsWindow, ReturnsWindow, CompareWindow,
-    StringListDialog, PlannerWindow, KizBySellersWindow
+    SellsFBSWindow,
+    SellersWindow,
+    BrandsWindow,
+    ReturnsWindow,
+    CompareWindow,
+    PlannerWindow,
+    KizBySellersWindow,
+    StaffWindow,
 )
 from ui.managers.window_manager import WindowManager
-from ui.factories.factories import ButtonFactory, LayoutFactory
+from ui.factories.factories import ButtonFactory, LayoutFactory, DroplistFactory
 from ui.widgets.planner_quick_view import PlannerQuickView
 from utils.datetime_utils import DateTimeUtils
 from utils.path_manager import PathManager
@@ -173,8 +179,6 @@ class MainWindow(QMainWindow):
         # 2. ИНИЦИАЛИЗАЦИЯ ЭЛЕМЕНТОВ
         # ============================================================
         _main_button_configs = [
-            ("btn_sellers", "Продавцы", (80, 100, 130), "8px 16px", None),
-            ("btn_brands", "Бренды", (80, 100, 130), "8px 16px", None),
             ("btn_chz_mp", "Подготовка к списанию кодов по отчётам", (70, 90, 100, 0.8), "8px 16px", None),
             ("btn_returns", "Подготовка к возврату в оборот", (70, 90, 100, 0.8), "8px 16px", None),
             ("btn_kiz_by_sellers", "Продажи КИЗов", (70, 90, 100, 0.8), "8px 16px", None),
@@ -182,8 +186,6 @@ class MainWindow(QMainWindow):
         ]
 
         _main_handlers = {
-            "btn_sellers": "open_sellers_window",
-            "btn_brands": "open_brands_window",
             "btn_chz_mp": "open_sells_fbs_window",
             "btn_returns": "open_returns_window",
             "btn_kiz_by_sellers": "open_kiz_by_sellers_window",
@@ -191,7 +193,23 @@ class MainWindow(QMainWindow):
         }
 
         ButtonFactory.create_buttons_from_config(self, _main_button_configs, _main_handlers)
-
+        self.directories_dropdown = DroplistFactory.create_dropdown(
+            self,
+            config={
+                "settings": {
+                    "auto_select_first": False,
+                    "trigger_items": [{"label": "Справочники"}],
+                },
+                "items": [
+                    {"interactive": True, "items": [{"label": "Продавцы"}]},
+                    {"interactive": True, "items": [{"label": "Бренды"}]},
+                    {"interactive": True, "items": [{"label": "Сотрудники"}]},
+                ],
+            },
+        )
+        self.directories_dropdown.item_clicked.connect(
+            self._on_directory_selected
+        )
         # Кнопка даты/времени (правая верхняя)
         self.datetime_btn = ButtonFactory.create_datetime_button(self, self.open_datetime_window)
 
@@ -205,17 +223,9 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
-        left_col = LayoutFactory.create_column(
-            self,
-            self.btn_sellers,
-            self.btn_brands,
-            alignment=Qt.AlignLeft | Qt.AlignTop,
-            spacing=5
-        )
-
         top_area = QHBoxLayout()
         top_area.setAlignment(Qt.AlignTop)
-        top_area.addWidget(left_col)
+        top_area.addWidget(self.directories_dropdown, alignment=Qt.AlignTop)
         top_area.addStretch(1)
         top_area.addWidget(self.datetime_btn, alignment=Qt.AlignTop)
 
@@ -351,6 +361,47 @@ class MainWindow(QMainWindow):
         self.logger.debug("open_brands_window: окно создано заново")
 
     @log_button_action(
+        "open_staff_window",
+        "Ошибка при открытии окна 'Сотрудники': {e}",
+    )
+    def open_staff_window(self):
+        """Открывает окно «Сотрудники» или активирует уже открытое.
+
+        Роль: та же схема, что у open_sellers_window /
+              open_brands_window — повторное открытие поднимает
+              существующее окно, а не создаёт второе.
+        """
+        existing = self.window_manager.get_window(StaffWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            self.logger.debug("open_staff_window: окно активировано")
+            return
+        window = StaffWindow(self, log_manager_v2=self.log_manager_v2)
+        window.show()
+        self.logger.debug("open_staff_window: окно создано заново")
+
+    def _on_directory_selected(self, index: int) -> None:
+        """Открывает окно по индексу выбранной строки «Справочников».
+
+        Вход: index — 0 «Продавцы», 1 «Бренды», 2 «Сотрудники».
+
+        Роль: клик по строке целиком (лейбл) эмитит item_clicked.
+              Popup закрываем вручную — при interactive=True
+              DropdownComposite не закрывает его сам.
+        """
+        self.directories_dropdown.close()
+        openers = {
+            0: self.open_sellers_window,
+            1: self.open_brands_window,
+            2: self.open_staff_window,
+        }
+        opener = openers.get(index)
+        if opener is None:
+            return
+        QTimer.singleShot(0, opener)
+
+    @log_button_action(
         "open_compare_window",
         "Ошибка при открытии окна 'Сравнение поставок': {e}",
     )
@@ -369,10 +420,6 @@ class MainWindow(QMainWindow):
         window.show()
         self.logger.debug("open_compare_window: окно создано заново")
 
-    @log_button_action(
-        "open_kiz_by_sellers_window",
-        "Ошибка при открытии окна 'Продажи КИЗов': {e}",
-    )
     @log_button_action(
         "open_kiz_by_sellers_window",
         "Ошибка при открытии окна 'Продажи КИЗов': {e}",
@@ -397,10 +444,6 @@ class MainWindow(QMainWindow):
     # ============================================================
     # 6. СОБЫТИЯ ОКНА
     # ============================================================
-    @log_button_action(
-        "open_datetime_window",
-        "Ошибка при открытии окна 'Планировщик': {e}",
-    )
     @log_button_action(
         "open_datetime_window",
         "Ошибка при открытии окна 'Планировщик': {e}",

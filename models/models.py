@@ -283,6 +283,81 @@ class Seller:
                 if brand:
                     seller.add_brand(brand)
         return seller
+class Signer:
+    """Модель подписанта (сотрудника).
+
+    Назначение:
+        Хранит данные сотрудника, который может подписывать
+        документы (УПД): ФИО одной строкой и должность.
+
+    Роль в программе:
+        Чистая модель данных. Читается/пишется через
+        SellersBrandsService (get_signers_objects /
+        set_signers_objects) по ключу "signers" в config.json.
+        Разбиение ФИО на Фамилия/Имя/Отчество и приведение
+        регистра — задача утилит (TextUtils) на стороне
+        генератора УПД, а не модели.
+
+    Поля:
+        name — ФИО одной строкой («Иванов Иван Иванович»).
+        role — должность. По умолчанию «Сотрудник».
+
+    Публичный API:
+        DEFAULT_ROLE — дефолтная должность.
+        to_dict / from_dict — сериализация для JSON.
+    """
+
+    DEFAULT_ROLE = "Сотрудник"
+
+    def __init__(self, name: str = "", role: str = DEFAULT_ROLE) -> None:
+        """Конструктор.
+
+        Вход:
+            name — ФИО одной строкой. Пустая строка допустима:
+                   запись может быть создана до заполнения.
+            role — должность. Пустая строка или None → DEFAULT_ROLE.
+
+        Роль: сохраняет поля как есть. Нормализация регистра
+              и состава ФИО — в утилитах, не в модели.
+        """
+        self.name = name or ""
+        self.role = role or self.DEFAULT_ROLE
+
+    def to_dict(self) -> dict:
+        """Сериализация для JSON.
+
+        Выход: {"name": ..., "role": ...}.
+
+        Роль: пишет оба поля всегда. role имеет семантический
+              дефолт («Сотрудник»), поэтому правило «опускать
+              пустое», как у Seller, здесь не нужно.
+        """
+        return {"name": self.name, "role": self.role}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Signer":
+        """Десериализация из JSON.
+
+        Вход: data — dict из config.json или None.
+        Выход: Signer.
+
+        Роль: защита от битого JSON. Отсутствующий или
+              нестроковый name → ""; отсутствующий, пустой или
+              нестроковый role → DEFAULT_ROLE. Запись не
+              пропускается даже при пустых полях — пользователь
+              поправит вручную.
+        """
+        data = data or {}
+        name = data.get("name", "")
+        role = data.get("role", cls.DEFAULT_ROLE)
+        return cls(
+            name=name if isinstance(name, str) else "",
+            role=role if isinstance(role, str) else cls.DEFAULT_ROLE,
+        )
+
+    def __repr__(self) -> str:
+        """Отладочное представление."""
+        return f"Signer(name={self.name!r}, role={self.role!r})"
 
 class SupplyItem:
     """Товар из листа поставки."""
