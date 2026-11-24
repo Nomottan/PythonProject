@@ -22,8 +22,9 @@
 
 import traceback
 from pathlib import Path
-
+from utils.matchers import Matcher
 from utils.context import TaskContext
+from utils.sales_xml_regenerator import SalesXmlGenerator
 from utils.file_helper import FileHelper, FilenameUtils
 from utils.excel_helper import (
     ExcelHelper, WorkbookWriter, WorkbookOpener,
@@ -33,8 +34,9 @@ from utils.sales_file_generator import (
     SalesFileGenerator,
 )
 from utils.kiz_utils import KizUtils
-from utils.parsers import PreFinalRow
+from utils.parsers import PreFinalRow, FileNameParser
 from utils.text_utils import TextUtils
+
 class SalesAccumulatorService:
     """Сервис аккумуляции продаж.
 
@@ -59,7 +61,8 @@ class SalesAccumulatorService:
         """
         self._log_manager_v2 = log_manager_v2
 
-    def accumulate(self, target_dir: str, sellers=None) -> None:
+    def accumulate(self, target_dir: str, sellers=None,
+                   signers=None) -> None:
         """Аккумулирует файлы продаж из всех источников в одну папку.
 
         Вход:
@@ -68,6 +71,8 @@ class SalesAccumulatorService:
                       сверки аккумулированных продаж с ИТОГ-файлами
                       ЧЗ_МП: без него _verify_against_itogs не
                       сможет разобрать имена файлов продаж.
+            signers — список Signer для XML. None или пусто →
+                      XML не создаются, продажи собираются как обычно.
 
         Выход: нет.
 
@@ -244,6 +249,14 @@ class SalesAccumulatorService:
                         )
             logger.info("\n".join(lines))
 
+        # ---- XML-филлеры по готовым файлам продаж ----
+        # sales_folder — та же папка, куда писала аккумуляция
+        # и переоформления из _verify_against_itogs.
+        logger.status("Формирование XML по файлам продаж")
+        logger.report("=== XML ПО ФАЙЛАМ ПРОДАЖ ===")
+        SalesXmlGenerator.regenerate(
+            sales_folder, sellers, signers, logger,
+        )
 
         logger.status("Аккумуляция завершена")
         logger.report("\n=== АККУМУЛЯЦИЯ ЗАВЕРШЕНА ===")
@@ -574,16 +587,24 @@ class SalesAccumulatorService:
         )
 
         for file_path in sales_files:
-            parsed_names = TextUtils.parse_sales_filename(
-                file_path.name, sellers,
+            parsed_from, parsed_to, _inn = FileNameParser.parse_sales(
+                file_path.name,
             )
-            if parsed_names is None:
+            from_seller = Matcher.first(
+                sellers, "name", parsed_from,
+                transform=TextUtils.sanitize_filename,
+            )
+            to_seller = Matcher.first(
+                sellers, "name", parsed_to,
+                transform=TextUtils.sanitize_filename,
+            )
+            if (from_seller is None or to_seller is None
+                    or from_seller is to_seller):
                 logger.warning(
                     f"Файл продаж {file_path.name}: имя не распознано "
                     f"— пропущен"
                 )
                 continue
-            from_seller, to_seller = parsed_names
             from_name = from_seller.name
             to_name = to_seller.name
             logger.status(f"Сверка: {file_path.name}")
@@ -615,7 +636,12 @@ class SalesAccumulatorService:
                     if not storage_list:
                         continue
                     k = storage_list[0]
-                    product_name = row[0] if row else ""
+                    product_col = (
+                        SalesFileKizReader.PRODUCT_COLUMN_INDEX
+                    )
+                    product_name = (
+                        row[product_col] if len(row) > product_col else ""
+                    )
                     sales_data[k] = product_name
             finally:
                 try:

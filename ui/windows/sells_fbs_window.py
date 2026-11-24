@@ -253,11 +253,18 @@ class SellsFBSWindow(BaseServiceWindow):
 
     @log_button_action("btn_processing", "Ошибка в on_processing: {e}")
     def on_processing(self) -> None:
-        """Шаг 2: обработка файлов + формирование продаж + дубли."""
+        """Шаг 2: обработка файлов + продажи + дубли + XML."""
         if not self._precheck_target_dir():
             return
 
         saved_prices = self.main_window.main_config.get("seller_prices", {})
+
+        signers = self.main_window.get_signers()
+        if self.logger:
+            self.logger.debug(
+                f"on_processing: подписантов в справочнике: "
+                f"{len(signers)}"
+            )
 
         service = FinalProcessingService(
             self.main_window.kiz_validator,
@@ -274,7 +281,10 @@ class SellsFBSWindow(BaseServiceWindow):
         self._run_async_step(
             service=service,
             target_method=service.completion,
-            kwargs={"saved_prices": saved_prices},
+            kwargs={
+                "saved_prices": saved_prices,
+                "signers": signers,
+            },
             start_message="Обработка файлов...",
             finish_message="Обработка завершена.",
             step_name="on_processing",

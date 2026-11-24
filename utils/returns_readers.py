@@ -379,6 +379,7 @@ class ReturnsTransferRow:
                          бренд).
         to_seller_inn — ИНН получателя.
         product_name — наименование продукта.
+        from_seller_tax — НДС отправителя.
         raw_kiz — полный КИЗ для очистки в SalesFileGenerator.
         brand — бренд товара.
         owner_company_str — исходная строка владельца из файла
@@ -393,6 +394,7 @@ class ReturnsTransferRow:
     from_seller_name: str
     to_seller_name: str
     to_seller_inn: str
+    from_seller_tax:int
     product_name: str
     raw_kiz: str
     brand: str
@@ -612,6 +614,7 @@ class ReturnsTransferReader:
                         from_seller_name=owner_seller.name,
                         to_seller_name="",
                         to_seller_inn="",
+                        from_seller_tax=owner_seller.tax,
                         product_name=parsed.product_name,
                         raw_kiz=parsed.kiz,
                         brand=parsed.brand,
@@ -658,6 +661,7 @@ class ReturnsTransferReader:
                     to_seller_name=seller_brand.name,
                     to_seller_inn=seller_brand.inn,
                     product_name=parsed.product_name,
+                    from_seller_tax=owner_seller.tax,
                     raw_kiz=parsed.kiz,
                     brand=parsed.brand,
                     owner_company_str=parsed.owner_company,

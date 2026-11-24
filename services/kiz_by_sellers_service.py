@@ -2,7 +2,7 @@
 Сервис распределения BestMark-файла по продавцам-владельцам.
 
 Тонкий оркестратор: читает строки BestMark-файла, для каждой
-строки определяет владельца через TextUtils.find_seller_by_company,
+строки определяет владельца через Matcher.first,
 пишет файл продаж через SalesFileGenerator, копирует исходник
 в Отчёты/, ведёт log_распределение_кизов.txt и
 log_kiz_processing.txt.
@@ -15,12 +15,15 @@ log_kiz_processing.txt.
 
 from pathlib import Path
 
+from utils.matchers import Matcher
 from utils.context import TaskContext
 from utils.file_helper import FileHelper
 from utils.excel_helper import WorkbookOpener
 from utils.text_utils import TextUtils
 from utils.kiz_utils import KizUtils
 from utils.parsers import PreFinalRow
+from utils.sales_xml_regenerator import SalesXmlGenerator
+from utils.file_helper import FilenameUtils
 from utils.sales_file_generator import SalesFileGenerator
 
 class KizBySellersService:
@@ -51,7 +54,7 @@ class KizBySellersService:
         self._sellers = sellers
 
     def distribute(self, target_dir: str, source_file: str,
-                   seller) -> dict:
+                   seller, signers=None) -> dict:
         """Распределяет BestMark-файл по продавцам-владельцам.
 
         Вход:
@@ -59,6 +62,8 @@ class KizBySellersService:
             source_file — путь к исходному BestMark-файлу.
             seller — продавец-получатель (владелец продаж).
                      Должен иметь заполненный inn.
+            signers — список Signer для XML. None или пусто →
+                      XML не создаются.
 
         Выход:
             dict со статусом:
@@ -120,9 +125,10 @@ class KizBySellersService:
             }
 
         # W3=b: копия исходника в Отчёты/.
-        copy_name = (
+        copy_name = FilenameUtils.format_with_extension(
             f"Кизы для {TextUtils.sanitize_filename(seller.name)} "
-            f"_{ctx.date_str}.xlsx"
+            f"{{date}}",
+            ctx.date_str,
         )
         copy_path = ctx.reports_dir / copy_name
         copy_result = FileHelper.copy_file_with_log(
@@ -210,8 +216,8 @@ class KizBySellersService:
                     )
                     continue
 
-                owner_seller = TextUtils.find_seller_by_company(
-                    prefinal.owner_company, self._sellers,
+                owner_seller = Matcher.first(self._sellers, "company",
+                    prefinal.owner_company,
                 )
                 if owner_seller is None:
                     logger.warning(
@@ -300,6 +306,13 @@ class KizBySellersService:
         lines.append(f"  Пропущено строк: {skipped}")
         lines.append(f"  Папка: {ctx.sales_dir}")
         logger.info("\n".join(lines))
+
+        # ---- XML-филлеры по готовым файлам продаж ----
+        logger.status("Формирование XML по файлам продаж")
+        logger.report("=== XML ПО ФАЙЛАМ ПРОДАЖ ===")
+        SalesXmlGenerator.regenerate(
+            ctx.sales_dir, self._sellers, signers, logger,
+        )
 
         logger.status("Распределение КИЗов завершено")
         logger.report("\n=== РАСПРЕДЕЛЕНИЕ ЗАВЕРШЕНО ===")

@@ -270,14 +270,18 @@ class ReturnsWindow(BaseServiceWindow):
             enable_after=self.btn_prepare_transfer,
         )
 
-    @log_button_action(
-        "btn_prepare_transfer",
-        "Ошибка в on_prepare_transfer: {e}",
-    )
+    @log_button_action("btn_prepare_transfer", "Ошибка в on_prepare_transfer: {e}")
     def on_prepare_transfer(self) -> None:
-        """Шаг 3: подготовка КИЗов для передачи между продавцами."""
+        """Подготовка передач КИЗов между продавцами + XML."""
         if not self._precheck_target_dir():
             return
+
+        signers = self.main_window.get_signers()
+        if self.logger:
+            self.logger.debug(
+                f"on_prepare_transfer: подписантов в справочнике: "
+                f"{len(signers)}"
+            )
 
         service = KizTransferService(
             self.log_manager_v2,
@@ -291,11 +295,12 @@ class ReturnsWindow(BaseServiceWindow):
         self._run_async_step(
             service=service,
             target_method=service.prepare_transfer,
-            kwargs={},
-            start_message="Подготовка передач КИЗов...",
-            finish_message="Подготовка передач КИЗов завершена.",
+            kwargs={"signers": signers},
+            start_message="Подготовка передач...",
+            finish_message="Подготовка передач завершена.",
             step_name="on_prepare_transfer",
             enable_after=None,
+            on_success=None,
         )
 
     # ============================================================

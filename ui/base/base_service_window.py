@@ -556,9 +556,8 @@ class BaseServiceWindow(QMainWindow):
 
         Роль: единая обвязка для всех трёх окон. Проверяет
               target_dir, создаёт SalesAccumulatorService с
-              log_manager_v2 и запускает accumulate с target_dir
-              и текущими sellers. sellers нужны для этапа сверки
-              аккумулированных продаж с ИТОГ-файлами ЧЗ_МП.
+              log_manager_v2 и запускает accumulate с target_dir,
+              текущими sellers и подписантами для XML.
         """
         if not self.target_dir:
             self.set_status("Сначала выберите целевую папку")
@@ -567,9 +566,12 @@ class BaseServiceWindow(QMainWindow):
         self.set_status("Аккумуляция продаж...")
         self.set_info("Аккумуляция продаж...")
         service = SalesAccumulatorService(self.log_manager_v2)
+
+        signers = self.main_window.get_signers()
         if self.logger:
             self.logger.debug(
-                "on_accumulate_sales: SalesAccumulatorService создан"
+                f"on_accumulate_sales: SalesAccumulatorService создан, "
+                f"подписантов: {len(signers)}"
             )
 
         def on_finished(_result=None):
@@ -591,7 +593,11 @@ class BaseServiceWindow(QMainWindow):
 
         ThreadFactory.run_in_thread(
             target_func=service.accumulate,
-            args=(self.target_dir, self._current_sellers()),
+            args=(
+                self.target_dir,
+                self._current_sellers(),
+                signers,
+            ),
             on_finished=on_finished,
             error_callback=on_error,
         )

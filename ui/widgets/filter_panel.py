@@ -55,6 +55,7 @@ class FilterPanel(QWidget):
                 "popup_bg_color": self._popup_bg_color,
                 "layout_direction": "horizontal",
                 "preferred_direction": "right",
+                "clamp_to": "window",
             }
         })
         # Фиксируем ширину кнопки (чтобы она не растягивалась)
@@ -108,9 +109,9 @@ class FilterPanel(QWidget):
                     {"label": field_def.label}
                 ],
                 "layout_direction": "vertical",
+                "max_length": 500,
             }
         }
-
         category = DroplistFactory.create_dropdown(parent, config=dropdown_config)
         category.selection_changed.connect(
             lambda data, name=field_def.name: self._on_category_changed(name, data)

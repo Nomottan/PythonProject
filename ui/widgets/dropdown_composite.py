@@ -90,12 +90,12 @@ class DropdownComposite(QWidget):
         "close_on_select": None,
         "placeholder": "Выберите...",
         "auto_update_button": True,
-        "allow_multiple_open": False,
         "close_on_scroll": True,
         "select_on_interactive_click": False,
         "popup_bg_color": None,
         "popup_border": "none",
         "popup_border_radius": 6,
+
         "popup_shadow": False,
         "max_length": None,
         "row_style": "default",
@@ -105,6 +105,7 @@ class DropdownComposite(QWidget):
         "trigger_items": None,
         "layout_direction": "vertical",
         "preferred_direction": "auto",
+        "clamp_to": "screen",
         "sync_checkboxes": False,
         "is_category": False,
         "debug": False,
@@ -314,6 +315,12 @@ class DropdownComposite(QWidget):
         if row_widget is None:
             return -1
 
+        if self._popup is not None:
+            if self._popup.isVisible():
+                self.close()
+            self._popup.deleteLater()
+            self._popup = None
+
         self._rows.append(row_widget)
         self._row_datas.append(data)
         self._row_texts.append(text)
@@ -402,15 +409,6 @@ class DropdownComposite(QWidget):
                 self.set_current_index(i)
                 return
 
-    def _get_child_dropdowns(self) -> list:
-        """Возвращает список вложенных DropdownComposite."""
-        children = []
-        for row in self._rows:
-            for child in row.findChildren(DropdownComposite):
-                if child is not self and child not in children:
-                    children.append(child)
-        return children
-
     def select_all(self) -> None:
         """Выбирает все элементы. Только для multi_select=True."""
         if not self.settings["multi_select"]:
@@ -490,6 +488,9 @@ class DropdownComposite(QWidget):
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
+        window = self.window()
+        if window is not None:
+            window.installEventFilter(self)
 
     def close(self) -> None:
         """Закрывает выпадающий список."""
@@ -505,6 +506,9 @@ class DropdownComposite(QWidget):
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
+        window = self.window()
+        if window is not None:
+            window.removeEventFilter(self)
 
     def toggle(self) -> None:
         """Переключает состояние списка."""
@@ -865,9 +869,18 @@ class DropdownComposite(QWidget):
 
         # 1. Получаем координаты триггера и вычисляем динамический max_length
         trigger_global = self._trigger.mapToGlobal(QPoint(0, 0))
-        window = self.window()
-        win_rect = window.geometry() if window else None
+
+        # Направление: в горизонтальном режиме попап растёт вбок,
+        # поэтому "auto" и вертикальные значения приводим к "right".
         preferred_dir = self.settings.get("preferred_direction", "auto")
+        if self.settings.get("layout_direction") == "horizontal":
+            if preferred_dir in ("auto", "down", "up"):
+                preferred_dir = "right"
+
+        window = self.window()
+        win_rect = window.geometry() if window is not None else None
+
+        clamp_to = self.settings.get("clamp_to", "screen")
 
         max_len = GeometryCalculator.calculate_max_popup_length(
             trigger_global,
@@ -875,23 +888,39 @@ class DropdownComposite(QWidget):
             self._trigger.height(),
             preferred_dir,
             win_rect,
-            self.settings.get("max_length")
+            self.settings.get("max_length"),
+            clamp_to,
         )
 
         if self.settings.get("layout_direction") == "vertical":
-            w = max(self._trigger.width(), 100)
-            self._popup.setFixedWidth(w)
-            self._scroll.setMaximumHeight(max_len)
-            self._scroll.setMinimumHeight(0)
-            self._scroll.setFixedWidth(w)  # <--- фиксируем ширину скролла тоже
-
-            # Вычисляем реальную высоту контента
+            # Контент: ширина по самой широкой строке, высота — по сумме.
             scroll_widget = self._scroll.widget()
             if scroll_widget and scroll_widget.layout():
-                scroll_widget.layout().activate()
-                content_h = scroll_widget.layout().sizeHint().height()
+                content_layout = scroll_widget.layout()
+                content_layout.activate()
+                content_w = content_layout.sizeHint().width()
+                content_h = content_layout.sizeHint().height()
             else:
+                content_w = self._trigger.width()
                 content_h = 100
+
+            # Ширина: не уже триггера и не уже контента.
+            w = max(self._trigger.width(), content_w, 100)
+
+            # Ограничение ширины — по той же настройке, что и длина.
+            if clamp_to == "window" and win_rect is not None:
+                w = min(w, max(win_rect.width() - 10, 120))
+            else:
+                screen = self.screen() or QGuiApplication.primaryScreen()
+                screen_w = (
+                    screen.availableGeometry().width() if screen else 1000
+                )
+                w = min(w, max(screen_w - 40, 120))
+
+            self._popup.setFixedWidth(w)
+            self._scroll.setFixedWidth(w)
+            self._scroll.setMaximumHeight(max_len)
+            self._scroll.setMinimumHeight(0)
 
             final_h = min(content_h, max_len)
             self._scroll.setFixedHeight(final_h)
@@ -932,8 +961,9 @@ class DropdownComposite(QWidget):
         trigger_global = self._trigger.mapToGlobal(QPoint(0, 0))
         # 4. Вычисляем координаты и направление
         x, y, direction = GeometryCalculator.calculate_popup_position(
-            trigger_global, w, h, self._trigger.height(), self._trigger.width(),
-            preferred_dir=self.settings.get("preferred_direction", "auto")
+            trigger_global, w, h,
+            self._trigger.height(), self._trigger.width(),
+            preferred_dir=preferred_dir,
         )
         self._popup_direction = direction
 
@@ -1029,8 +1059,32 @@ class DropdownComposite(QWidget):
         data = self.current_data()
         self.selection_changed.emit(data)
 
+    def moveEvent(self, event) -> None:
+        """Закрывает попап, если триггер уехал внутри родителя.
+
+        Роль:
+            Ловит перемещение самого DropdownComposite (скролл
+            страницы, перестроение раскладки), которое не даёт
+            QEvent.Move окна.
+        """
+        if self._popup is not None and self._popup.isVisible():
+            QTimer.singleShot(0, self.close)
+        super().moveEvent(event)
+
     def eventFilter(self, obj, event) -> bool:
-        """Закрывает popup при клике вне его границ."""
+        """Закрывает popup при клике вне его границ и при
+        изменении геометрии окна.
+        """
+        # Окно растянули или сдвинули — попап потерял привязку
+        # к триггеру. Закрываем отложенно: removeEventFilter
+        # внутри самого eventFilter нежелателен.
+        if (self._popup is not None
+                and self._popup.isVisible()
+                and obj is self.window()
+                and event.type() in (QEvent.Resize, QEvent.Move)):
+            QTimer.singleShot(0, self.close)
+            return False
+
         if event.type() == QEvent.MouseButtonPress and self._popup and self._popup.isVisible():
             pos = event.globalPosition().toPoint()
 

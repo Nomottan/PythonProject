@@ -547,3 +547,46 @@ class ProductNameParser(BaseParser):
 
         return ProductFeatures(keywords=keywords, brand=brand, count=count)
 
+class FileNameParser(BaseParser):
+    """Разбор имён файлов.
+
+    Роль: строка имени файла → кортеж строк. Поиск сущностей
+          по полученным частям — Matcher.
+    """
+
+    @staticmethod
+    def parse_sales(filename) -> tuple:
+        """Разбирает имя файла продаж на составные части.
+
+        Вход:
+            filename — «{от} - {кому} _ {ИНН}.xlsx»
+                       или то же без расширения.
+
+        Выход: (from_name, to_name, inn).
+               Пустые строки, если разделителей нет.
+
+        Роль: чистое преобразование строки в кортеж строк.
+              Формат задаёт SalesFileGenerator:
+              sanitize(name_a) - sanitize(name_b) _ inn_b .xlsx
+
+        Ограничение: разделители « - » и « _ » не должны
+              встречаться внутри имён. sanitize_filename их
+              допускает, поэтому имена с такими
+              последовательностями разберутся неверно.
+        """
+        text = str(filename or "").strip()
+        if text.lower().endswith(".xlsx"):
+            text = text[:-5]
+
+        left = text
+        inn = ""
+        if " _ " in text:
+            left, inn = text.rsplit(" _ ", 1)
+
+        if " - " in left:
+            from_name, to_name = left.split(" - ", 1)
+        else:
+            from_name, to_name = left, ""
+
+        return from_name.strip(), to_name.strip(), inn.strip()
+

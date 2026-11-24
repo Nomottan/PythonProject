@@ -1,9 +1,9 @@
 from pathlib import Path
 from utils.context import TaskContext
-from utils.excel_helper import ExcelHelper
+from utils.matchers import Matcher
 from utils.excel_helper import WorkbookWriter
 from utils.txt_helper import TextFileWriter
-from utils.text_utils import TextUtils
+from utils.sales_xml_regenerator import SalesXmlGenerator
 from utils.file_helper import FileHelper, FilenameUtils
 from utils.sales_file_generator import SalesFileGenerator
 from utils.returns_readers import (
@@ -148,7 +148,7 @@ class ReturnsPreparationService:
             f"размер={len(existing_kiz_set)}"
         )
 
-        allowed_companies = TextUtils.get_allowed_companies(sellers)
+        allowed_companies = Matcher.keys(sellers, "company")
         data = ReturnsSourceReportReader.read(
             source_path, allowed_companies, logger
         )
@@ -583,12 +583,15 @@ class KizTransferService:
         self._log_manager_v2 = log_manager_v2
         self._priority_resolver = priority_resolver
 
-    def prepare_transfer(self, target_dir, sellers) -> None:
+    def prepare_transfer(self, target_dir, sellers,
+                         signers=None) -> None:
         """Запускает подготовку передач КИЗов.
 
         Вход:
             target_dir — корневая папка задачи.
             sellers — список Seller.
+            signers — список Signer. Первый идёт в XML как подписант.
+                      None или пусто → XML не создаются.
 
         Выход: нет.
 
@@ -637,6 +640,7 @@ class KizTransferService:
         data = ReturnsTransferReader.read(source_file, sellers, logger)
         all_rows = list(data.rows)
 
+        resolution = None
         if data.conflicts:
             logger.status("Разрешение конфликтов брендов")
             if self._priority_resolver is None:
@@ -691,9 +695,9 @@ class KizTransferService:
                 from_seller_name=transfer.from_seller_name,
                 to_seller_name=transfer.to_seller_name,
                 to_seller_inn=transfer.to_seller_inn,
+                from_seller_tax=transfer.from_seller_tax,
                 product_name=transfer.product_name,
                 raw_kiz=transfer.raw_kiz,
-                from_seller_tax=transfer.from_seller_tax,
                 owner_company=transfer.owner_company_str,
                 brand=transfer.brand,
             )
@@ -722,21 +726,23 @@ class KizTransferService:
             logger.report("  Нет строк для передачи между продавцами")
         if data.conflicts:
             total_c = len(data.conflicts)
-            if self._priority_resolver is not None:
-                resolved_c = 0
-                if isinstance(locals().get("resolution"), dict):
-                    resolved_c = len(resolution)
-            else:
-                resolved_c = 0
-            skipped_c = total_c - resolved_c
-            if skipped_c < 0:
-                skipped_c = 0
+            resolved_c = (
+                len(resolution) if isinstance(resolution, dict) else 0
+            )
+            skipped_c = max(total_c - resolved_c, 0)
             logger.info(
                 f"\nКонфликты брендов:\n"
                 f"  Всего: {total_c}\n"
                 f"  Разрешено: {resolved_c}\n"
                 f"  Пропущено: {skipped_c}"
             )
+
+        # ---- XML-филлеры по готовым файлам продаж ----
+        logger.status("Формирование XML по файлам продаж")
+        logger.report("=== XML ПО ФАЙЛАМ ПРОДАЖ ===")
+        SalesXmlGenerator.regenerate(
+            ctx.sales_dir, sellers, signers, logger,
+        )
 
         logger.report("Подготовка передач завершена.\n")
         logger.status("Подготовка передач завершена")

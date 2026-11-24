@@ -21,6 +21,7 @@ from utils.context import TaskContext
 from utils.excel_helper import (
     ExcelHelper, WorkbookOpener, WorkbookWriter,
 )
+from utils.matchers import Matcher
 from utils.txt_helper import TextFileWriter
 from utils.text_utils import TextUtils
 from utils.file_helper import FileHelper, FilenameUtils
@@ -36,6 +37,7 @@ from utils.path_manager import PathManager
 from utils.sales_file_generator import (
     SalesFileGenerator, SalesDuplicatesResolver,
 )
+from utils.sales_xml_regenerator import SalesXmlGenerator
 from utils.fbs_buferprices import FbsBufferPrices
 from utils.kiz_utils import KizUtils
 from services.kiz_validator import KizValidator
@@ -106,8 +108,8 @@ class PreparationService:
         Если early_result не None — это статус для раннего выхода
         (garbage, unknown, error). Иначе — просто параметры.
         """
-        found = TextUtils.find_seller_by_file_name(
-            src_path.stem.lower(), sellers,
+        found = Matcher.many(
+            sellers, "keys", src_path.stem.lower()
         )
         if len(found) == 1:
             seller = found[0]
@@ -401,8 +403,8 @@ class PreparationService:
             if file_type not in ("wb", "ozon"):
                 continue
             src_path = Path(src)
-            found = TextUtils.find_seller_by_file_name(
-                src_path.stem.lower(), sellers,
+            found = Matcher.many(
+                sellers, "keys", src_path.stem.lower()
             )
             if len(found) != 1:
                 nk = TextUtils.normalize(src_path.stem)
@@ -1691,13 +1693,17 @@ class FinalProcessingService:
             )
         return data
 
-    def completion(self, target_dir, sellers, saved_prices=None) -> dict:
+    def completion(self, target_dir, sellers, saved_prices=None,
+                   signers=None) -> dict:
         """Обработка файлов и формирование продаж с установкой цен.
 
         Вход:
             target_dir — корень рабочей папки.
             sellers — список Seller с восстановленными .brands.
             saved_prices — dict {seller_name: средняя}, может быть пуст.
+            signers — список Signer. Первый идёт в XML как подписант.
+                      None или пусто → XML-файлы не создаются,
+                      Excel формируется как обычно.
 
         Выход:
             Обновлённый saved_prices (та же ссылка, что и входная,
@@ -1760,7 +1766,7 @@ class FinalProcessingService:
                 "будут взяты из сохранённых или запрошены"
             )
 
-        allowed_companies = TextUtils.get_allowed_companies(sellers)
+        allowed_companies = Matcher.keys(sellers, "company")
         sales_gen = SalesFileGenerator(ctx.sales_dir, logger=logger)
 
         # ============================================================
@@ -1931,8 +1937,8 @@ class FinalProcessingService:
                         parsed.brand,
                     )
 
-                owner_seller = TextUtils.find_seller_by_company(
-                    parsed.owner_company, sellers
+                owner_seller = Matcher.first(sellers, "company",
+                    parsed.owner_company
                 )
                 if owner_seller is None:
                     unknown_owner_count += 1
@@ -2222,6 +2228,47 @@ class FinalProcessingService:
         if lines:
             lines.insert(0, "\nСозданы файлы продаж:")
             logger.info("\n".join(lines))
+
+            # ============================================================
+            # Фаза 5.1. XML-филлеры по готовым файлам продаж.
+            # ============================================================
+            # Дубли уже разрешены в Фазе 4 — в ctx.sales_dir лежат
+            # финальные .xlsx. XML строится ровно из них.
+        logger.status("Формирование XML по файлам продаж")
+        logger.report("=== XML ПО ФАЙЛАМ ПРОДАЖ ===")
+
+        try:
+            xml_stats = SalesXmlGenerator.regenerate(
+                ctx.sales_dir, sellers, signers, logger,
+            )
+        except Exception as e:
+            logger.critical(
+                f"Ошибка формирования XML: {e}",
+                can_influence=False,
+            )
+            xml_stats = None
+
+        if xml_stats is not None:
+            if xml_stats["no_signer"]:
+                logger.warning(
+                    "XML-файлы не созданы: в справочнике сотрудников "
+                    "нет подписанта"
+                )
+            else:
+                lines = ["\nXML по файлам продаж:"]
+                lines.append(
+                    f"  Файлов .xlsx: {xml_stats['files_total']}"
+                )
+                lines.append(
+                    f"  Создано .xml: {xml_stats['files_created']}"
+                )
+                lines.append(
+                    f"  Пропущено: {xml_stats['files_skipped']}"
+                )
+                lines.append(
+                    f"  Позиций всего: {xml_stats['items_total']}"
+                )
+                logger.info("\n".join(lines))
 
         # ============================================================
         # Фаза 6. Установка цен и финализация.

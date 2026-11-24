@@ -128,17 +128,60 @@ class GeometryCalculator:
         return clamped_x, clamped_y, preferred_dir
 
     @staticmethod
-    def calculate_max_popup_length(trigger_global: QPoint, trigger_w: int, trigger_h: int, preferred_dir: str,
-                                   window_rect: 'QRect', max_length: int | None) -> int:
-        """Вычисляет максимальную длину попапа с учетом границ окна."""
-        if not window_rect:
-            return max_length if max_length else 600
-        if preferred_dir == "auto":
-            preferred_dir = "down"
-        _AVAIL = {"right": window_rect.right() - trigger_global.x() - trigger_w - 5,
-                  "left": trigger_global.x() - window_rect.left() - 5,
-                  "down": window_rect.bottom() - trigger_global.y() - trigger_h - 5,
-                  "up": trigger_global.y() - window_rect.top() - 5}
+    def calculate_max_popup_length(trigger_global: QPoint, trigger_w: int,
+                                   trigger_h: int, preferred_dir: str,
+                                   window_rect=None,
+                                   max_length: int | None = None,
+                                   clamp_to: str = "screen") -> int:
+        """Вычисляет максимально доступную длину попапа.
 
-        avail = _AVAIL.get(preferred_dir, max_length if max_length else 600)
-        return min(max_length, max(50, avail)) if max_length is not None else max(50, avail)
+        Вход:
+            trigger_global — глобальные координаты триггера.
+            trigger_w, trigger_h — размеры триггера.
+            preferred_dir — "down" / "up" / "right" / "left" /
+                            "auto". "auto" считается как вертикаль.
+            window_rect — глобальный прямоугольник окна (QRect).
+                          Используется только при
+                          clamp_to_window=True.
+            max_length — жёсткий предел от вызывающего кода
+                         или None. Применяется поверх любого
+                         ограничения.
+            clamp_to — "screen" — резать по availableGeometry
+                       экрана (по умолчанию);
+                       "window" — резать по window_rect.
+
+        Выход: максимальная длина попапа в пикселях.
+
+        Роль:
+            Единая точка предела длины попапа.
+            Без ограничений — возвращается max_length или
+            QWIDGETSIZE_MAX, и попап подстраивается под контент.
+            С ограничением — режется свободным местом в прямом и
+            обратном направлении: если calculate_popup_position
+            перевернёт попап, длина останется достаточной.
+        """
+        if clamp_to == "window" and window_rect is not None:
+            rect = window_rect
+        else:
+            screen = (
+                    QGuiApplication.screenAt(trigger_global)
+                    or QGuiApplication.primaryScreen()
+            )
+            if screen is None:
+                return max_length if max_length is not None else 600
+            rect = screen.availableGeometry()
+
+        below = rect.bottom() - trigger_global.y() - trigger_h - 5
+        above = trigger_global.y() - rect.top() - 5
+        right = rect.right() - trigger_global.x() - trigger_w - 5
+        left = trigger_global.x() - rect.left() - 5
+
+        if preferred_dir in ("right", "left"):
+            avail = max(right, left)
+        else:
+            avail = max(below, above)
+
+        avail = max(50, avail)
+        if max_length is not None:
+            return min(max_length, avail)
+        return avail

@@ -195,7 +195,9 @@ class SalesFileKizReader:
     # Индекс столбца с КИЗом (0-based): [Наименование, КИЗ, GTIN, Цена].
     # Единственный источник для всех потребителей, включая
     # SalesAccumulatorService и SalesFileRowsReader.
+    PRODUCT_COLUMN_INDEX = 0
     KIZ_COLUMN_INDEX = 1
+    GTIN_COLUMN_INDEX = 2
 
     @staticmethod
     def read(file_path) -> set:

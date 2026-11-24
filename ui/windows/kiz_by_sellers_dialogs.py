@@ -12,7 +12,7 @@
 """
 
 from pathlib import Path
-
+from utils.log_tools.decorators import log_button_action
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout
 
@@ -145,7 +145,7 @@ class KizBySellersDialog(BaseEditDialog):
         self._btn_distribute = ButtonFactory.create_button(
             self, "Распределить продажи", element_bg,
         )
-        self._btn_distribute.clicked.connect(self._on_distribute)
+        self._btn_distribute.clicked.connect(self.on_distribute)
         self._btn_distribute.setEnabled(False)
         layout.addWidget(self._btn_distribute)
 
@@ -207,30 +207,58 @@ class KizBySellersDialog(BaseEditDialog):
                 f"Кнопка 'Распределить' → {enabled}"
             )
 
-    def _on_distribute(self) -> None:
-        """Запускает сервис распределения в фоновом потоке.
+    @log_button_action("btn_distribute", "Ошибка в on_distribute: {e}")
+    def on_distribute(self) -> None:
+        """Распределение BestMark-файла по продавцам + XML.
 
-        Роль: блокирует кнопку, создаёт KizBySellersService,
-              делегирует запуск в ThreadFactory.run_in_thread.
-              target_dir берётся у родительского окна.
+        Роль:
+            Проверяет выбор файла и продавца, берёт target_dir у
+            родительского окна, получает подписантов через
+            MainWindow.get_signers, создаёт KizBySellersService
+            с signers в конструкторе и запускает distribute в
+            фоновом потоке. Результат — в _on_finished.
         """
         if not self._source_file or self._selected_seller is None:
+            self._update_button_state()
             return
+
         parent_win = self.parent()
-        target_dir = parent_win.target_dir
+        target_dir = getattr(parent_win, "target_dir", None)
+        if not target_dir:
+            NotificationDialog.notify(
+                parent=parent_win,
+                text=(
+                    "Сначала выберите целевую папку в окне "
+                    "«Продажи КИЗов»."
+                ),
+                bg_color=self.bg_color,
+                title_text="Нет целевой папки",
+            )
+            return
+
+        main_window = getattr(parent_win, "main_window", None)
+        signers = main_window.get_signers() if main_window else []
+
         if self.logger:
             self.logger.debug(
-                f"_on_distribute: старт, "
-                f"seller={self._selected_seller.name}, "
-                f"target_dir={target_dir}"
+                f"on_distribute: продавцов {len(self._sellers)}, "
+                f"подписантов {len(signers)}"
             )
+
         service = KizBySellersService(
             self._log_manager_v2, self._sellers,
+            signers=signers,
         )
+
         self._btn_distribute.setEnabled(False)
+
         ThreadFactory.run_in_thread(
             target_func=service.distribute,
-            args=(target_dir, self._source_file, self._selected_seller),
+            args=(
+                target_dir,
+                self._source_file,
+                self._selected_seller,
+            ),
             on_finished=self._on_finished,
             error_callback=self._on_error,
         )
