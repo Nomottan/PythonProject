@@ -24,11 +24,13 @@
 
 Выход:
     Data/used_kiz.json — тот же файл, что пишет KizStorage.
-    Формат записи совпадает с program-овским: compact JSON,
-    ключи отсортированы, поля sold_date / returned_date
-    в формате "DD-MM-YYYY".
+    Формат записи: {GTIN: {ID: {"sold": "DD-MM-YYYY",
+    "return": "DD-MM-YYYY"}}}, compact JSON, ключи отсортированы.
 
-Логирования нет: при отсутствии входного файла кидается
+Отчёт — в консоль: сколько строк прочитано, сколько уникальных
+КИЗов после очистки, сколько добавлено, сколько уже было,
+сколько отброшено. Логирования через LoggerV2 нет: это разовый
+инструмент. При отсутствии входного файла кидается
 FileNotFoundError, чтобы прогон не завершался молчаливым
 успехом. Остальные ошибки (IO, JSON) пробрасываются наверх —
 их видно в трассировке.
@@ -83,17 +85,25 @@ class KizsSeeder:
         Роль:
             Проверяет наличие входного файла, читает used_kiz.json
             через KizStorage, собирает новые КИЗы (с дедупликацией
-            и пропуском существующих), пишет в хранилище.
+            и пропуском существующих), пишет в хранилище и печатает
+            короткий отчёт.
         """
         if not self._input_path.is_file():
             raise FileNotFoundError(
                 f"Входной файл не найден: {self._input_path}"
             )
-        print("файл найден")
         storage = KizStorage(self._storage_path)
         raw_lines = self._read_input()
-        new_kizs = self._collect_new(storage, raw_lines)
+        KizUtils.start_stats()
+        new_kizs, unique_cleaned, existing_count = self._collect_new(
+            storage, raw_lines,
+        )
+        stats = KizUtils.pop_stats()
         self._write(storage, new_kizs)
+        self._print_summary(
+            len(raw_lines), unique_cleaned, len(new_kizs),
+            existing_count, stats,
+        )
 
     # ---------- Приватные методы ----------
 
@@ -113,7 +123,7 @@ class KizsSeeder:
         return [line.strip() for line in text.splitlines() if line.strip()]
 
     def _collect_new(self, storage: KizStorage,
-                     raw_lines: list[str]) -> list[str]:
+                     raw_lines: list[str]) -> tuple[list[str], int, int]:
         """Собирает очищенные КИЗы, которых ещё нет в хранилище.
 
         Вход:
@@ -121,9 +131,13 @@ class KizsSeeder:
             raw_lines — строки из входного файла.
 
         Выход:
-            list[str] — 31-символьные КИЗы в порядке первого
-            появления во входном файле. Без дублей и без тех,
-            что уже есть в storage.
+            (new_kizs, unique_cleaned, existing_count):
+                new_kizs — 31-символьные КИЗы в порядке первого
+                    появления, без дублей и без тех, что уже есть
+                    в storage.
+                unique_cleaned — сколько уникальных КИЗов получилось
+                    после очистки.
+                existing_count — сколько из них уже было в storage.
 
         Роль:
             Прогоняет каждую строку через KizUtils.clean_kiz_for_storage
@@ -135,17 +149,17 @@ class KizsSeeder:
         """
         cleaned_seen: set[str] = set()
         new_kizs: list[str] = []
+        existing_count = 0
         for raw in raw_lines:
             for kiz in KizUtils.clean_kiz_for_storage(raw, logger=None):
                 if kiz in cleaned_seen:
                     continue
                 cleaned_seen.add(kiz)
-                print("Киз", kiz, )
-                new_kizs.append(kiz)
                 if storage.get(kiz) is not None:
+                    existing_count += 1
                     continue
                 new_kizs.append(kiz)
-        return new_kizs
+        return new_kizs, len(cleaned_seen), existing_count
 
     def _write(self, storage: KizStorage, new_kizs: list[str]) -> None:
         """Дописывает новые КИЗы в хранилище и сохраняет файл.
@@ -165,12 +179,44 @@ class KizsSeeder:
         """
         with storage.batch():
             for idx, kiz in enumerate(new_kizs):
-                print("Добавлен КИЗ: ", kiz, " с датой продажи: ", "SOLD_DATE", " и датой возврата: ", self._return_date_for(idx))
                 storage.add_or_update(
                     kiz,
                     sold_date=SOLD_DATE,
                     returned_date=self._return_date_for(idx),
                 )
+
+    @staticmethod
+    def _print_summary(raw_count: int, unique_count: int,
+                       added_count: int, existing_count: int,
+                       stats: dict) -> None:
+        """Печатает короткий отчёт о прогоне.
+
+        Вход:
+            raw_count — сколько строк прочитано из входного файла.
+            unique_count — сколько уникальных КИЗов после очистки.
+            added_count — сколько добавлено в used_kiz.json.
+            existing_count — сколько уже было в used_kiz.json.
+            stats — статистика KizUtils (dropped_short,
+                    dropped_no_01, dropped_mask, transliterated,
+                    processed).
+
+        Выход: нет.
+
+        Роль:
+            Разовый скрипт отчитывается в консоль. Никакого
+            LoggerV2 здесь нет.
+        """
+        print("Готово.")
+        print(f"  Прочитано строк: {raw_count}")
+        print(f"  Уникальных КИЗов после очистки: {unique_count}")
+        print(f"  Добавлено: {added_count}")
+        print(f"  Уже было в базе: {existing_count}")
+        print(
+            f"  Отброшено: коротких {stats.get('dropped_short', 0)}, "
+            f"без '01' {stats.get('dropped_no_01', 0)}, "
+            f"по маске {stats.get('dropped_mask', 0)}, "
+            f"транслитерировано {stats.get('transliterated', 0)}"
+        )
 
     @staticmethod
     def _return_date_for(index: int) -> str:

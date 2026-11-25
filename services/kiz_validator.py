@@ -4,13 +4,12 @@
 Реализует бизнес-логику для Отчётов МП, ЧЗ МП и Возвратов поверх
 KizStorage. Собственного состояния не хранит — вся память в storage.
 
-Логирование — через публичные каналы storage (report/ warning / error),
-которые транслируются в LoggerV2. Отдельного лог-файла
-kiz_validation.log больше нет: сообщения идут в errors.txt и UI-канал.
+Логирование — через публичные каналы storage (report/warning/info),
+которые транслируются в LoggerV2.
 """
 
+from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
@@ -21,7 +20,8 @@ from utils.parsers import DateParser
 class ValidationResult(Enum):
     """Результат валидации КИЗа для продажи.
 
-    ADDED — КИЗ прошёл валидацию и записан в used_kiz.json.
+    ADDED — КИЗ прошёл валидацию; при apply_sale будет записан
+            в used_kiz.json.
     SKIPPED_NO_RETURN — КИЗ уже продан и не возвращён → отсев.
     SKIPPED_DATE_BEFORE_RETURN — дата продажи не позже даты возврата → отсев.
     """
@@ -29,14 +29,31 @@ class ValidationResult(Enum):
     SKIPPED_NO_RETURN = "skipped_no_return"
     SKIPPED_DATE_BEFORE_RETURN = "skipped_date_before_return"
 
+@dataclass
+class SaleEvaluation:
+    """Результат оценки КИЗа для продажи.
+
+    Поля:
+        result — ValidationResult решения.
+        sold_date — дата продажи "DD-MM-YYYY", которую нужно
+                    записать при ADDED; иначе None.
+
+    Роль:
+        Возвращается evaluate_for_sale. Позволяет отделить оценку
+        от фактической записи в хранилище.
+    """
+    result: ValidationResult
+    sold_date: Optional[str]
 
 class KizValidator:
     """Валидатор КИЗов.
 
     Роль:
         Единая точка проверки КИЗа перед списанием/возвратом.
-        Использует KizStorage для чтения и записи. Публичные
-        методы возвращают ValidationResult или bool.
+        Использует KizStorage для чтения и записи. Оценка продажи
+        (evaluate_for_sale) не пишет; запись выполняет apply_sale.
+        Публичные методы возвращают SaleEvaluation, ValidationResult
+        или bool.
     """
 
     def __init__(self, storage: KizStorage, dry_run: bool = False,
@@ -45,14 +62,13 @@ class KizValidator:
 
         Вход:
             storage — KizStorage с загруженными данными.
-            dry_run — если True, публичные методы валидации
-                      возвращают результат, но не вызывают
-                      storage.add_or_update. report/warning идут
-                      в storage как обычно.
-            ignore_existing — если True, validate_for_sale ведёт
+            dry_run — если True, apply_sale и validate_for_return
+                      не вызывают storage.add_or_update.
+                      report/warning идут в storage как обычно.
+            ignore_existing — если True, evaluate_for_sale ведёт
                       себя так, будто КИЗа в базе нет (ADDED с
-                      fallback по дате, без записи). Допустим
-                      только при dry_run=True — иначе ValueError.
+                      fallback по дате). Допустим только при
+                      dry_run=True — иначе ValueError.
                       Смысл: DataVerificationService считает
                       «что было бы в чистой базе», не завися от
                       истории списаний.
@@ -119,10 +135,10 @@ class KizValidator:
 
     # ---------- Валидация для продаж (Отчёты МП и ЧЗ МП) ----------
 
-    def validate_for_sale(self, kiz: str,
+    def evaluate_for_sale(self, kiz: str,
                           sale_date_str: Optional[str] = None
-                          ) -> ValidationResult:
-        """Проверяет КИЗ для списания (продажа).
+                          ) -> SaleEvaluation:
+        """Оценивает КИЗ для списания, не записывая в хранилище.
 
         Вход:
             kiz — 31-символьный КИЗ.
@@ -130,22 +146,26 @@ class KizValidator:
                             ("HH:MM:SS DD.MM.YYYY" или "DD.MM.YYYY").
                             None — для ЧЗ_МП.
 
-        Выход: ValidationResult.
+        Выход:
+            SaleEvaluation — результат оценки и дата продажи,
+            которую нужно записать при ADDED.
 
         Роль:
             ЧЗ_МП — всегда ADDED с сегодняшней датой.
             Отчёт МП — правила отсева: продано без возврата, дата
-            продажи раньше возврата. Обновление записи при возврате.
+            продажи раньше возврата. Метод ничего не пишет;
+            фактическую запись выполняет apply_sale.
         """
         # --- ЧЗ_МП: без проверок, всегда списываем ---
         if sale_date_str is None:
             today_str = datetime.now().strftime("%d-%m-%Y")
-            if not self._dry_run:
-                self.storage.add_or_update(kiz, today_str, None)
             self.storage.report(
                 f"Списание (ЧЗ_МП): {kiz} – сегодня {today_str}"
             )
-            return ValidationResult.ADDED
+            return SaleEvaluation(
+                result=ValidationResult.ADDED,
+                sold_date=today_str,
+            )
 
         # --- Отчёт МП: парсим дату ---
         sale_dt = DateParser.parse_any(sale_date_str, DateParser.KIZ_FORMATS)
@@ -162,27 +182,29 @@ class KizValidator:
         else:
             existing = self.storage.get(kiz)
 
-            # 1. Новый КИЗ — списываем.
+        # 1. Новый КИЗ — списываем.
         if existing is None:
-            if not self._dry_run:
-                self.storage.add_or_update(kiz, sale_str, None)
             self.storage.report(
                 f"Списание (новый): {kiz} – продажа {sale_str}"
             )
-            return ValidationResult.ADDED
+            return SaleEvaluation(
+                result=ValidationResult.ADDED,
+                sold_date=sale_str,
+            )
 
-        existing_sold_str = existing.get("sold_date")
-        existing_returned_str = existing.get("returned_date")
+        existing_sold_str = existing.get("sold")
+        existing_returned_str = existing.get("return")
 
         # 2. Аномалия: нет даты продажи — списываем.
         if existing_sold_str is None:
-            if not self._dry_run:
-                self.storage.add_or_update(kiz, sale_str, None)
             self.storage.warning(
-                f"Списание (аномалия, нет sold_date): {kiz} – "
+                f"Списание (аномалия, нет sold): {kiz} – "
                 f"продажа {sale_str}"
             )
-            return ValidationResult.ADDED
+            return SaleEvaluation(
+                result=ValidationResult.ADDED,
+                sold_date=sale_str,
+            )
 
         # 3. Продано без возврата — отсев.
         if existing_returned_str is None:
@@ -190,7 +212,10 @@ class KizValidator:
                 f"Отсев (продано без возврата): {kiz}, "
                 f"продажа {existing_sold_str}"
             )
-            return ValidationResult.SKIPPED_NO_RETURN
+            return SaleEvaluation(
+                result=ValidationResult.SKIPPED_NO_RETURN,
+                sold_date=None,
+            )
 
         # 4. Есть и продажа, и возврат — сравниваем даты.
         existing_returned_dt = DateParser.parse_any(
@@ -200,21 +225,47 @@ class KizValidator:
             self.storage.warning(
                 f"Отсев (битая дата возврата): {kiz}"
             )
-            return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
+            return SaleEvaluation(
+                result=ValidationResult.SKIPPED_DATE_BEFORE_RETURN,
+                sold_date=None,
+            )
 
         if sale_dt > existing_returned_dt:
-            if not self._dry_run:
-                self.storage.add_or_update(kiz, sale_str, None)
             self.storage.report(
                 f"Списание (возврат был раньше): {kiz}, "
                 f"продажа {sale_str}"
             )
-            return ValidationResult.ADDED
+            return SaleEvaluation(
+                result=ValidationResult.ADDED,
+                sold_date=sale_str,
+            )
         else:
             self.storage.report(
                 f"Отсев (дата продажи раньше возврата): {kiz}"
             )
-            return ValidationResult.SKIPPED_DATE_BEFORE_RETURN
+            return SaleEvaluation(
+                result=ValidationResult.SKIPPED_DATE_BEFORE_RETURN,
+                sold_date=None,
+            )
+
+    def apply_sale(self, kiz: str, sold_date: str) -> None:
+        """Записывает решение о продаже в хранилище.
+
+        Вход:
+            kiz — 31-символьный КИЗ.
+            sold_date — дата продажи "DD-MM-YYYY".
+
+        Выход: нет.
+
+        Роль:
+            Единственная точка фактической записи продажи. При
+            dry_run=True ничего не делает. Вызывается либо из
+            validate_for_sale (совместимость), либо из completion
+            после создания ИТОГ.
+        """
+        if self._dry_run:
+            return
+        self.storage.add_or_update(kiz, sold_date, None)
 
     # ---------- Валидация для возвратов ----------
 
@@ -242,7 +293,7 @@ class KizValidator:
         return_date = datetime.now().strftime("%d-%m-%Y")
         if not self._dry_run:
             self.storage.add_or_update(
-                kiz, existing["sold_date"], return_date,
+                kiz, existing["sold"], return_date,
             )
         self.storage.report(
             f"Возврат: для КИЗа {kiz} установлена дата возврата "

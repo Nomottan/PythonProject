@@ -52,6 +52,9 @@ class MpReportData:
                     нормализованная к "%d.%m.%Y". None, если исходную
                     дату не удалось распарсить. Fallback (сегодняшняя
                     дата) НЕ применяется — значение либо дата, либо None.
+        sold_records — {full_kiz: "DD-MM-YYYY"} — дата продажи,
+                       которую нужно записать в used_kiz.json после
+                       ИТОГ. Ключ — полный КИЗ, как в full_kizs.
     """
     seller: "Seller"
     added: int
@@ -63,6 +66,7 @@ class MpReportData:
     total_unique: int
     skipped_by_type: dict
     kiz_dates: dict
+    sold_records: dict
 
 @dataclass
 class MpReadResult:
@@ -372,7 +376,7 @@ class BaseMpReportReader:
             dict с ключами:
                 added, skipped_dup, skipped_no_return,
                 skipped_date_before_return, prices, full_kizs,
-                total_unique.
+                total_unique, kiz_dates, sold_records.
         """
         added = 0
         skipped_dup = 0
@@ -381,6 +385,7 @@ class BaseMpReportReader:
         prices: dict = {}
         full_kizs: set = set()
         kiz_dates: dict = {}
+        sold_records: dict = {}
 
         for storage_kiz, _entries in occurrences.items():
             def key_func(entry):
@@ -396,9 +401,10 @@ class BaseMpReportReader:
             if sale_date_str is None:
                 sale_date_str = datetime.now().strftime("%d-%m-%Y")
 
-            result = kiz_validator.validate_for_sale(
+            evaluation = kiz_validator.evaluate_for_sale(
                 storage_kiz, sale_date_str,
             )
+            result = evaluation.result
 
             if result == ValidationResult.ADDED:
                 full_kizs.add(chosen.full_kiz)
@@ -410,6 +416,8 @@ class BaseMpReportReader:
                         chosen.sale_date_str
                     )
                 )
+                if evaluation.sold_date is not None:
+                    sold_records[chosen.full_kiz] = evaluation.sold_date
             elif result == ValidationResult.SKIPPED_NO_RETURN:
                 skipped_no_return += 1
             elif result == ValidationResult.SKIPPED_DATE_BEFORE_RETURN:
@@ -434,6 +442,7 @@ class BaseMpReportReader:
             "full_kizs": full_kizs,
             "total_unique": total_unique,
             "kiz_dates": kiz_dates,
+            "sold_records": sold_records,
         }
 
     @classmethod
@@ -475,6 +484,7 @@ class BaseMpReportReader:
             total_unique=result_dict["total_unique"],
             skipped_by_type=skipped_by_type,
             kiz_dates=result_dict["kiz_dates"],
+            sold_records=result_dict["sold_records"],
         )
 
     @classmethod
@@ -868,8 +878,6 @@ class ReturnsTxtWriter:
 
         return written
 
-
-
 class WBReportReader(BaseMpReportReader):
     """Читатель WB-отчётов МП.
 
@@ -976,7 +984,6 @@ class WBReportReader(BaseMpReportReader):
         """Ключ сортировки — дата из task_to_date по task_num."""
         date_str = dates.get(entry[1])
         return DateParser.parse_any(date_str, DateParser.KIZ_FORMATS)
-
 
 class OZONReportReader(BaseMpReportReader):
     """Читатель Ozon-отчётов «Продажи маркированных товаров».

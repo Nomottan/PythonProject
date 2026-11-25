@@ -1,39 +1,42 @@
 """
 Хранилище КИЗов FBS.
 
-Переработка utils/kiz_storage.py на DictJsonStorage + Batcher.
-Публичный API сохранён без изменений — вся прикладная семантика
-(полная перезапись записи, формат дат, логика очистки) воспроизведена
-один в один.
+Формат хранения: {GTIN: {ID: {"sold": "DD-MM-YYYY", "return": "DD-MM-YYYY"}}}.
+Поля ленивые: отсутствующий ключ означает None.
+Публичный API: get, add_or_update, remove_many, clear, batch, save,
+clean_old_entries, count, full_kizs, info, report, warning.
 
-Логирование — через LoggerV2. Публичные каналы debug/info/warning/error
+Логирование — через LoggerV2. Публичные каналы info/report/warning
 оставлены для KizValidator: он транслирует свои сообщения в хранилище.
 """
 
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
 
 from utils.batcher import Batcher
+from utils.kiz_utils import KizUtils
 from storage.base_json_storage import DictJsonStorage
 
 
 class KizStorage(DictJsonStorage):
     """Хранилище КИЗов в JSON-файле.
 
-    Формат: {КИЗ: {"sold_date": "DD-MM-YYYY", "returned_date": "DD-MM-YYYY"}}.
-    Ключ — КИЗ, уже прошедший очистку снаружи (KizUtils.clean_kiz_for_storage).
-    Хранилище НЕ чистит КИЗ повторно.
+    Формат: {GTIN: {ID: {"sold": "DD-MM-YYYY", "return": "DD-MM-YYYY"}}}.
+    Ключи GTIN и ID извлекаются из 31-символьного КИЗа.
+    Хранилище НЕ чистит КИЗ повторно: на вход ожидается КИЗ,
+    уже прошедший KizUtils.clean_kiz_for_storage.
 
     Не потокобезопасен: при использовании из нескольких потоков
     одновременно возможны гонки при изменении _data и счётчиков батча.
 
     Поля:
-        _data: dict[str, dict] — данные в памяти.
+        _data: dict[str, dict[str, dict]] — данные в памяти.
         _batcher: Batcher — менеджер отложенной записи.
 
-    Публичный API: get, get_all, add_or_update, clear, batch, save,
-    clean_old_entries, debug, info, warning, error.
+    Публичный API: get, add_or_update, remove_many, clear, batch, save,
+    clean_old_entries, count, full_kizs, info, report, warning.
+    get_all() унаследован от DictJsonStorage и возвращает вложенное
+    представление; для плоского множества КИЗов — full_kizs().
     """
 
     # Порог промежуточного сохранения внутри батча. При долгом прогоне
@@ -52,11 +55,6 @@ class KizStorage(DictJsonStorage):
 
         Роль: сохраняет путь, создаёт Batcher поверх _do_save,
               загружает файл через базовый класс.
-
-        REPLACE: было log_manager (V1) + log_callback + _log_path.
-                 Стало log_manager_v2 (V2). Легаси-каналы удалены —
-                 они не нужны, LoggerV2 сам распределяет по errors.txt
-                 и UI.
         """
         super().__init__(
             file_path, log_manager_v2,
@@ -78,15 +76,6 @@ class KizStorage(DictJsonStorage):
         return self._data
 
     # ---------- Публичные каналы логирования ----------
-
-    def debug(self, message: str) -> None:
-        """Отладочное сообщение.
-
-        Вход: message — текст.
-        Роль: канал для KizValidator. При отсутствии логгера — no-op.
-        """
-        if self._logger is not None:
-            self._logger.debug(message)
 
     def info(self, message: str) -> None:
         """Информационное сообщение.
@@ -118,29 +107,72 @@ class KizStorage(DictJsonStorage):
         if self._logger is not None:
             self._logger.warning(message)
 
-    def error(self, message: str) -> None:
-        """Ошибка.
+    # ---------- Приватные помощники ----------
 
-        Вход: message — текст.
-        Роль: канал для KizValidator.
+    def _get_bucket(self, gtin: str) -> dict:
+        """Возвращает GTIN-бакет, создавая его при необходимости.
 
-        REPLACE: было self._logger.error(message) — стало
-        critical(can_influence=False). В V2 error-канала нет:
-        «критично, пользователь не может повлиять» — это
-        NotificationDialog + errors.txt.
+        Вход:
+            gtin — 14-символьный GTIN.
+
+        Выход:
+            dict — словарь {ID: запись} внутри self._data.
+
+        Роль:
+            Единая точка ленивого создания бакета. Используется
+            add_or_update; чтение (get) обходится без создания.
         """
-        if self._logger is not None:
-            self._logger.critical(message, can_influence=False)
+        return self._data.setdefault(gtin, {})
+
+    def _drop_empty_bucket(self, gtin: str) -> None:
+        """Удаляет GTIN-бакет, если он опустел.
+
+        Вход:
+            gtin — 14-символьный GTIN.
+
+        Выход: нет.
+
+        Роль:
+            После удаления последней записи бакет не должен
+            оставаться в файле пустым словарём.
+        """
+        bucket = self._data.get(gtin)
+        if bucket is not None and not bucket:
+            del self._data[gtin]
+
+    @staticmethod
+    def _set_field(record: dict, key: str, value: Optional[str]) -> None:
+        """Устанавливает или удаляет ленивое поле записи.
+
+        Вход:
+            record — словарь записи {"sold": ..., "return": ...}.
+            key — имя поля ("sold" или "return").
+            value — строка даты или None.
+
+        Выход: нет.
+
+        Роль:
+            None означает «поля нет»: ключ удаляется. Не-None —
+            значение записывается. Так работает ленивая схема.
+        """
+        if value is None:
+            record.pop(key, None)
+        else:
+            record[key] = value
 
     # ---------- Батчинг ----------
 
     def batch(self):
         """Открывает контекст отложенной записи.
 
-        Выход: контекст-менеджер. При `with ... as s` s == self (storage),
-               как в оригинале.
+        Выход: контекст-менеджер Batcher.
+
+        Роль:
+            Прокси к Batcher.batch(). `as` в `with storage.batch()`
+            больше не возвращает storage — ни один вызывающий код
+            этим не пользуется.
         """
-        return _BatchContext(self)
+        return self._batcher.batch()
 
     def _do_save(self) -> None:
         """Callback для Batcher: реальная запись на диск.
@@ -163,53 +195,98 @@ class KizStorage(DictJsonStorage):
     # ---------- Операции ----------
 
     def get(self, kiz: str) -> Optional[dict]:
-        """Возвращает запись по КИЗу или None."""
-        return self._data.get(kiz)
+        """Возвращает копию записи по КИЗу или None.
+
+        Вход:
+            kiz — 31-символьный КИЗ.
+
+        Выход:
+            dict {"sold": ..., "return": ...} с только присутствующими
+            полями или None, если записи нет.
+
+        Роль:
+            Единая точка чтения. Разбирает КИЗ на GTIN и ID через
+            KizUtils.parse_storage_kiz; невалидный КИЗ даёт None.
+            Возвращает копию, чтобы вызывающий код не мог случайно
+            изменить внутреннее состояние хранилища.
+        """
+        parsed = KizUtils.parse_storage_kiz(kiz)
+        if parsed is None:
+            return None
+        gtin, identifier = parsed
+        bucket = self._data.get(gtin)
+        if not bucket:
+            return None
+        record = bucket.get(identifier)
+        if record is None:
+            return None
+        return dict(record)
 
     def add_or_update(self, kiz, sold_date,
                       returned_date=None) -> None:
         """Добавляет или обновляет запись КИЗа.
 
         Вход:
-            kiz — строка КИЗа (уже очищенная снаружи).
+            kiz — 31-символьный КИЗ (уже очищенный снаружи).
             sold_date — дата продажи (строка "DD-MM-YYYY" или None).
             returned_date — дата возврата (строка "DD-MM-YYYY" или None).
 
         Выход: нет.
 
-        Роль: единственная точка изменения _data. Семантика —
-              ПОЛНАЯ ПЕРЕЗАПИСЬ: оба поля всегда устанавливаются
-              из аргументов, включая None. Это нужно для повторной
-              продажи — validate_for_sale передаёт returned_date=None
-              и тем самым стирает прежний возврат.
+        Роль:
+            Единственная точка изменения _data. Разбирает КИЗ на
+            GTIN и ID, пишет ленивые поля: None удаляет ключ,
+            не-None записывает. Пустая запись удаляется вместе
+            с опустевшим бакетом. Невалидный КИЗ — warning и
+            пропуск (валидация уже выполнена в clean_kiz_for_storage;
+            это защита от вызова в обход очистки).
         """
-        self._data[kiz] = {
-            "sold_date": sold_date,
-            "returned_date": returned_date,
-        }
+        parsed = KizUtils.parse_storage_kiz(kiz)
+        if parsed is None:
+            self.warning(
+                f"add_or_update: невалидный КИЗ {kiz!r}, "
+                f"запись пропущена"
+            )
+            return
+        gtin, identifier = parsed
+        bucket = self._get_bucket(gtin)
+        record = bucket.setdefault(identifier, {})
+        self._set_field(record, "sold", sold_date)
+        self._set_field(record, "return", returned_date)
+        if not record:
+            bucket.pop(identifier, None)
+            self._drop_empty_bucket(gtin)
         self._batcher.mark_dirty()
 
     def remove_many(self, keys) -> int:
         """Удаляет пачку записей по ключам.
 
         Вход:
-            keys — итерируемое ключей (КИЗов). Пустое → no-op.
+            keys — итерируемое 31-символьных КИЗов. Пустое → no-op.
 
         Выход:
-            int — сколько ключей реально удалено (которых не было
-            в _data, не считаются).
+            int — сколько записей реально удалено (отсутствующие
+            и невалидные ключи не считаются).
 
         Роль:
-            Единая точка массового удаления. Правки — только в
-            памяти и через _batcher.mark_dirty(). save() не
-            вызывается: сохранение на диск делает либо внешний
-            batch(), либо явный flush().
+            Единая точка массового удаления. Разбирает каждый КИЗ
+            на GTIN и ID, удаляет запись и опустевший бакет.
+            Правки — только в памяти и через _batcher.mark_dirty().
+            save() не вызывается: сохранение на диск делает либо
+            внешний batch(), либо явный flush().
         """
         removed = 0
         for kiz in keys:
-            if kiz in self._data:
-                del self._data[kiz]
-                removed += 1
+            parsed = KizUtils.parse_storage_kiz(kiz)
+            if parsed is None:
+                continue
+            gtin, identifier = parsed
+            bucket = self._data.get(gtin)
+            if not bucket or identifier not in bucket:
+                continue
+            del bucket[identifier]
+            removed += 1
+            self._drop_empty_bucket(gtin)
         if removed > 0:
             self._batcher.mark_dirty()
         return removed
@@ -220,9 +297,11 @@ class KizStorage(DictJsonStorage):
         Вход: months — порог в месяцах (1 месяц = 30 дней).
         Выход: количество удалённых записей.
 
-        Роль: используется при подготовке к прогону. Считаем возраст
-              по sold_date формата "%d-%m-%Y". Записи без sold_date
-              или с непарсящейся датой пропускаются.
+        Роль: используется при подготовке к прогону. Обходит
+              вложенную схему GTIN → ID → запись, считает возраст
+              по полю "sold" формата "%d-%m-%Y". Записи без "sold"
+              или с непарсящейся датой пропускаются. После удаления
+              опустевшие бакеты убираются.
         """
         if not self._data:
             self.info("Очистка: нет записей для удаления.")
@@ -230,27 +309,36 @@ class KizStorage(DictJsonStorage):
 
         cutoff = datetime.now() - timedelta(days=months * 30)
         to_delete = []
-        for kiz, record in self._data.items():
-            sold_date_str = record.get("sold_date")
-            if not sold_date_str:
-                continue
-            try:
-                sold_date = datetime.strptime(sold_date_str, "%d-%m-%Y")
-                if sold_date < cutoff:
-                    to_delete.append(kiz)
-            except ValueError:
-                self.info(
-                    f"Очистка: некорректная дата продажи "
-                    f"'{sold_date_str}' для КИЗа {kiz}, запись пропущена"
-                )
-                continue
+        for gtin, bucket in self._data.items():
+            for identifier, record in bucket.items():
+                sold_date_str = record.get("sold")
+                if not sold_date_str:
+                    continue
+                try:
+                    sold_date = datetime.strptime(
+                        sold_date_str, "%d-%m-%Y"
+                    )
+                    if sold_date < cutoff:
+                        to_delete.append((gtin, identifier))
+                except ValueError:
+                    self.info(
+                        f"Очистка: некорректная дата продажи "
+                        f"'{sold_date_str}' для КИЗа "
+                        f"{KizUtils.build_storage_kiz(gtin, identifier)}, "
+                        f"запись пропущена"
+                    )
+                    continue
 
         if not to_delete:
             self.info(f"Очистка: нет записей старше {months} месяца(ев).")
             return 0
 
-        for kiz in to_delete:
-            del self._data[kiz]
+        for gtin, identifier in to_delete:
+            bucket = self._data.get(gtin)
+            if not bucket:
+                continue
+            bucket.pop(identifier, None)
+            self._drop_empty_bucket(gtin)
 
         # Немедленная запись — операция разовая, батчинг не нужен.
         self._batcher.mark_dirty()
@@ -258,46 +346,37 @@ class KizStorage(DictJsonStorage):
         self.info(f"Очистка завершена: удалено {len(to_delete)} записей.")
         return len(to_delete)
 
-    def get_all(self) -> dict:
-        """Возвращает копию словаря записей."""
-        return self._data.copy()
+    def count(self) -> int:
+        """Возвращает количество КИЗов в хранилище.
+
+        Вход: нет.
+        Выход:
+            int — суммарное количество записей во всех GTIN-бакетах.
+
+        Роль:
+            Замена len(get_all()) для счётчиков и проверок
+            «база не пуста». Не собирает полные КИЗы.
+        """
+        return sum(len(bucket) for bucket in self._data.values())
+
+    def full_kizs(self) -> set:
+        """Возвращает множество полных 31-символьных КИЗов.
+
+        Вход: нет.
+        Выход:
+            set[str] — все КИЗы, восстановленные из GTIN и ID.
+
+        Роль:
+            Замена set(get_all().keys()) для сверки и фильтрации.
+        """
+        result = set()
+        for gtin, bucket in self._data.items():
+            for identifier in bucket:
+                result.add(KizUtils.build_storage_kiz(gtin, identifier))
+        return result
 
     def clear(self) -> None:
         """Очищает хранилище и сохраняет пустой файл."""
         self._data.clear()
-        super().save()
+        self.save()
         self.warning("Все записи удалены.")
-
-
-class _BatchContext:
-    """Контекст-менеджер батча для KizStorage.
-
-    Роль: увеличивает глубину вложенности у хранилища. add_or_update
-          внутри батча только помечает dirty. На выходе с внешнего
-          уровня — flush, если были изменения.
-
-    Поля:
-        _storage: KizStorage — родительское хранилище.
-    """
-
-    def __init__(self, storage: "KizStorage") -> None:
-        """Конструктор.
-
-        Вход: storage — хранилище, чей батч открываем.
-        """
-        self._storage = storage
-
-    def __enter__(self) -> "KizStorage":
-        """Вход: увеличиваем глубину. Возвращает сам storage —
-        чтобы `with storage.batch() as s:` работал как раньше."""
-        self._storage._batcher._depth += 1
-        return self._storage
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
-        """Выход: уменьшаем глубину. На внешнем уровне — flush."""
-        self._storage._batcher._depth -= 1
-        if self._storage._batcher._depth == 0 and self._storage._batcher._dirty:
-            self._storage._batcher._flush_callback()
-            self._storage._batcher._dirty = False
-            self._storage._batcher._changes = 0
-        return False

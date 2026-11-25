@@ -20,6 +20,7 @@ class KizUtils:
     _stats_enabled: bool = False
     _stats: dict = {}
     _KIZ_START_PATTERN = re.compile(r'01\d{14}21')
+    _STORAGE_KIZ_PATTERN = re.compile(r'^01\d{14}21[\x20-\x7e]{13}$')
 
     @classmethod
     def start_stats(cls) -> None:
@@ -36,6 +37,7 @@ class KizUtils:
         cls._stats = {
             "dropped_short": 0,
             "dropped_no_01": 0,
+            "dropped_mask": 0,
             "transliterated": 0,
             "processed": 0,
         }
@@ -45,8 +47,8 @@ class KizUtils:
         """Возвращает накопленную статистику и выключает сбор.
 
         Вход: нет.
-        Выход: dict с ключами dropped_short, dropped_no_01, transliterated,
-               processed.
+        Выход: dict с ключами dropped_short, dropped_no_01,
+               dropped_mask, transliterated, processed.
 
         Роль: сервис вызывает после цикла и логирует итог на уровне INFO.
               После вызова счётчики дальше не инкрементятся.
@@ -209,27 +211,96 @@ class KizUtils:
             KizUtils._stats["processed"] += len(result)
 
         return result
+
     @staticmethod
-    def clean_kiz_for_storage(raw: str, logger: Optional[LoggerV2] = None) -> List[str]:
-        """Очищает КИЗ и обрезает до 31 символа.
+    def clean_kiz_for_storage(raw: str,
+                              logger: Optional[LoggerV2] = None) -> List[str]:
+        """Очищает КИЗ, обрезает до 31 символа и проверяет маску.
 
         Вход:
             raw — исходная строка КИЗа.
             logger — опциональный LoggerV2 (прокидывается в clean_kiz_full).
 
-        Выход: список обрезанных КИЗов.
+        Выход: список валидных 31-символьных КИЗов.
 
         Роль: финальная подготовка КИЗа для хранения в used_kiz.json.
-              Вся детальная диагностика и счётчики — в clean_kiz_full.
+              Вся детальная диагностика и счётчики dropped_short /
+              dropped_no_01 / transliterated — в clean_kiz_full.
+              Здесь после обрезки до 31 символа проверяется маска
+              ^01\\d{14}21[\\x20-\\x7e]{13}$; невалидные отбрасываются
+              со счётчиком dropped_mask и debug-сообщением.
         """
         full_list = KizUtils.clean_kiz_full(raw, logger=logger)
         if not full_list:
             return []
         result = []
         for full_kiz in full_list:
-            if len(full_kiz) >= 31:
-                result.append(full_kiz[:31])
+            if len(full_kiz) < 31:
+                continue
+            storage_kiz = full_kiz[:31]
+            if not KizUtils.is_valid_storage_kiz(storage_kiz):
+                if KizUtils._stats_enabled:
+                    KizUtils._stats["dropped_mask"] += 1
+                if logger is not None:
+                    logger.debug(
+                        f"КИЗ отброшен по маске: {storage_kiz}"
+                    )
+                continue
+            result.append(storage_kiz)
         return result
+
+    @staticmethod
+    def is_valid_storage_kiz(kiz: str) -> bool:
+        """Проверяет 31-символьный КИЗ по маске хранения.
+
+        Вход:
+            kiz — строка КИЗа.
+
+        Выход:
+            True — если строка ровно 31 символ и соответствует
+            шаблону: «01» + 14 цифр GTIN + «21» + 13 печатных
+            ASCII-символов.
+
+        Роль: единая точка проверки формата, пригодного для
+              used_kiz.json. Не логирует и не зависит от _stats.
+        """
+        if not kiz:
+            return False
+        return KizUtils._STORAGE_KIZ_PATTERN.match(kiz) is not None
+
+    @staticmethod
+    def parse_storage_kiz(kiz: str) -> Optional[tuple[str, str]]:
+        """Разбирает валидный 31-символьный КИЗ на GTIN и ID.
+
+        Вход:
+            kiz — строка КИЗа.
+
+        Выход:
+            (gtin, identifier) — 14-символьный GTIN и 13-символьный
+            идентификатор; None, если КИЗ не проходит маску.
+
+        Роль: единая точка разбора для новой схемы хранения
+              {GTIN: {ID: запись}}.
+        """
+        if not KizUtils.is_valid_storage_kiz(kiz):
+            return None
+        return kiz[2:16], kiz[18:31]
+
+    @staticmethod
+    def build_storage_kiz(gtin: str, identifier: str) -> str:
+        """Собирает 31-символьный КИЗ из GTIN и ID.
+
+        Вход:
+            gtin — 14-символьный GTIN.
+            identifier — 13-символьный идентификатор.
+
+        Выход:
+            строка «01» + gtin + «21» + identifier.
+
+        Роль: обратная операция к parse_storage_kiz. Проверку
+              длины и допустимых символов выполняет вызывающий код.
+        """
+        return f"01{gtin}21{identifier}"
 
     @staticmethod
     def extract_gtin(kiz: str) -> str:
@@ -587,5 +658,4 @@ class KizDuplicatesFinder:
                     f"KizDuplicatesFinder: {kiz} встречается "
                     f"в {len(paths)} файлах: {names}"
                 )
-
         return intra_file, inter_file

@@ -39,6 +39,7 @@ from utils.sales_file_generator import (
 )
 from utils.sales_xml_regenerator import SalesXmlGenerator
 from utils.fbs_buferprices import FbsBufferPrices
+from utils.fbs_bufferkiz import FbsBufferKiz
 from utils.kiz_utils import KizUtils
 from services.kiz_validator import KizValidator
 
@@ -327,6 +328,12 @@ class PreparationService:
         )
         logger.report(f"Рабочая папка: {ctx.work_folder}")
 
+        # ---------- Фаза 1.1. Очистка буфера и старых записей. ----------
+        FbsBufferKiz(ctx.processing_dir).clear()
+        self.kiz_validator.load()
+        deleted = self.kiz_validator.clean_old_entries(months=1)
+        logger.info(f"Очистка старых записей: удалено {deleted}.")
+
         # ---------- Фаза 2. Опознание. ----------
         logger.report(
             "\n==================== Этап: Опознание файлов ====================\n"
@@ -572,9 +579,9 @@ class PreparationService:
         kiz_by_seller: dict = {s.name: set() for s in sellers}
         prices_by_seller: dict = {s.name: {} for s in sellers}
         kiz_owners: dict = {}
+        sold_records_by_seller: dict = {}
         missed_files: list = []
         wb_sellers_with_kiz: set = set()
-        size_before = len(self.kiz_validator.storage.get_all())
 
         with self.kiz_validator.batch():
             wh_result = self._read_wh_reports(ctx, sellers, logger)
@@ -582,13 +589,16 @@ class PreparationService:
             ozon_result = self._read_ozon_reports(ctx, sellers, logger)
 
             self._merge_read_result(
-                wh_result, kiz_by_seller, prices_by_seller, kiz_owners,
+                wh_result, kiz_by_seller, prices_by_seller,
+                kiz_owners, sold_records_by_seller,
             )
             self._merge_read_result(
-                wb_result, kiz_by_seller, prices_by_seller, kiz_owners,
+                wb_result, kiz_by_seller, prices_by_seller,
+                kiz_owners, sold_records_by_seller,
             )
             self._merge_read_result(
-                ozon_result, kiz_by_seller, prices_by_seller, kiz_owners,
+                ozon_result, kiz_by_seller, prices_by_seller,
+                kiz_owners, sold_records_by_seller,
             )
 
             wb_sellers_with_kiz.update(
@@ -605,7 +615,7 @@ class PreparationService:
         logger.info(
             "\n==================== Этап: Разрешение конфликтов ====================\n"
         )
-        conflict_stats = self._resolve_kiz_conflicts(
+        self._resolve_kiz_conflicts(
             kiz_owners, kiz_by_seller, sellers, logger,
         )
 
@@ -616,19 +626,20 @@ class PreparationService:
         logger.info(
             "\n==================== Этап: Финализация ====================\n"
         )
+        pending_sold = self._build_pending_sold(
+            kiz_by_seller, sold_records_by_seller, logger,
+        )
         self._finalize_reports(
             ctx, logger, sellers, kiz_by_seller, prices_by_seller,
             wb_sellers_with_kiz, missed_files,
-            wh_result, wb_result, ozon_result, size_before,
-            conflict_stats, detected, stats,
+            wh_result, wb_result, ozon_result,
+            pending_sold, bool(sold_records_by_seller),
+            detected, stats,
         )
 
         # ---------- Финал. ----------
         logger.report("Подготовка завершена.")
         logger.status("Подготовка завершена")
-        self.kiz_validator.load()
-        deleted = self.kiz_validator.clean_old_entries(months=1)
-        logger.info(f"Очистка старых записей: удалено {deleted}.")
         logger.info("\n==================================================\n")
 
 
@@ -900,13 +911,17 @@ class PreparationService:
 
     @staticmethod
     def _merge_read_result(result, kiz_by_seller, prices_by_seller,
-                           kiz_owners) -> None:
+                           kiz_owners, sold_records_by_seller) -> None:
         """Мержит результат _read_*_reports в общие структуры.
 
         Вход:
             result — dict от _read_*_reports.
             kiz_by_seller, prices_by_seller, kiz_owners — общие
                 структуры, мутируются на месте.
+            sold_records_by_seller — {seller_name: {full_kiz: date}}.
+                Мутируется: первое вхождение КИЗа у продавца
+                сохраняет дату (как раньше — первый отчёт пишет
+                в БД, второй отсеивается).
         """
         for seller_name, kiz_set in result["kiz_by_seller"].items():
             kiz_by_seller.setdefault(seller_name, set()).update(kiz_set)
@@ -914,6 +929,10 @@ class PreparationService:
             prices_by_seller.setdefault(seller_name, {}).update(prices)
         for kiz, owners in result["kiz_owners"].items():
             kiz_owners.setdefault(kiz, []).extend(owners)
+        for seller_name, records in result.get("sold_records", {}).items():
+            bucket = sold_records_by_seller.setdefault(seller_name, {})
+            for kiz, sold_date in records.items():
+                bucket.setdefault(kiz, sold_date)
 
     # ============================================================
     # Приватные методы: разрешение конфликтов
@@ -1057,12 +1076,56 @@ class PreparationService:
     # Приватные методы: финализация
     # ============================================================
 
+    @staticmethod
+    def _build_pending_sold(kiz_by_seller, sold_records_by_seller,
+                            logger) -> dict:
+        """Собирает отложенные продажи по победителям конфликтов.
+
+        Вход:
+            kiz_by_seller — {seller_name: set(full_kiz)} после
+                разрешения конфликтов.
+            sold_records_by_seller — {seller_name: {full_kiz: date}}.
+            logger — LoggerV2.
+
+        Выход:
+            dict {31-символьный КИЗ: "DD-MM-YYYY"}.
+
+        Роль:
+            Для каждого КИЗа, оставшегося у продавца, берёт дату
+            продажи из отчёта этого продавца, чистит КИЗ до
+            31 символа и складывает в pending. Если даты нет —
+            warning и сегодняшняя дата (как fallback в валидаторе).
+        """
+        pending: dict = {}
+        today = datetime.now().strftime("%d-%m-%Y")
+        for seller_name, kiz_set in kiz_by_seller.items():
+            records = sold_records_by_seller.get(seller_name, {})
+            for full_kiz in kiz_set:
+                sold_date = records.get(full_kiz)
+                if sold_date is None:
+                    logger.warning(
+                        f"Нет даты продажи для КИЗа {full_kiz} "
+                        f"у продавца '{seller_name}', "
+                        f"использую сегодняшнюю"
+                    )
+                    sold_date = today
+                storage_list = KizUtils.clean_kiz_for_storage(
+                    full_kiz, logger=None,
+                )
+                if not storage_list:
+                    logger.warning(
+                        f"КИЗ {full_kiz} не привёлся к 31 символу, "
+                        f"отложенная запись пропущена"
+                    )
+                    continue
+                pending[storage_list[0]] = sold_date
+        return pending
+
     def _finalize_reports(self, ctx, logger, sellers, kiz_by_seller,
                           prices_by_seller, wb_sellers_with_kiz,
                           missed_files, wh_result, wb_result, ozon_result,
-                          size_before, conflict_stats, detected,
-                          stats) -> dict:
-        """Сохранение цен, .txt, сводки, отчёт по базе.
+                          pending_sold, detected, stats) -> dict:
+        """Сохранение цен, буфера, .txt, сводки.
 
         Вход:
             ctx — TaskContext.
@@ -1074,9 +1137,10 @@ class PreparationService:
             wb_sellers_with_kiz — set имён продавцов с WB-КИЗами.
             missed_files — list[(file_name, reason)].
             wh_result, wb_result, ozon_result — результаты чтения.
-            size_before — размер базы до batch.
-            conflict_stats — из _resolve_kiz_conflicts.
+            pending_sold — {31-символьный КИЗ: дата} для отложенной
+                записи после ИТОГ.
             detected — dict от _detect_all (для has_any_files).
+            stats — агрегаты копирования.
 
         Выход:
             dict {"successful_txt": list, "total_prices": int}.
@@ -1114,7 +1178,19 @@ class PreparationService:
                 f"Не удалось сохранить {FbsBufferPrices.FILENAME}: {e}",
                 can_influence=False,
             )
-
+            # 1.1. Сохранение отложенной записи.
+        try:
+            FbsBufferKiz(ctx.processing_dir).save(pending_sold)
+            if pending_sold:
+                logger.report(
+                    f"  Отложенная запись сохранена: "
+                    f"{len(pending_sold)}"
+                )
+        except (IOError, OSError) as e:
+            logger.critical(
+                f"Не удалось сохранить {FbsBufferKiz.FILENAME}: {e}",
+                can_influence=False,
+            )
         # 2. Запись .txt по продавцам.
         logger.report("\n--- СОХРАНЕНИЕ ТЕКСТОВЫХ ФАЙЛОВ ---")
         successful_txt: list = []
@@ -1176,9 +1252,9 @@ class PreparationService:
                     lines.append(f"  {seller.name}: {len(kiz_set)}")
             logger.info("\n".join(lines))
 
-        # 5. Сводка записи в базу КИЗов.
-        size_after = len(self.kiz_validator.storage.get_all())
-        info_lines = ["\nЗапись в базу КИЗов:"]
+        # 5. Сводка собранных к записи КИЗов.
+        total_to_write = len(pending_sold)
+        info_lines = ["\nСобрано к записи в базу КИЗов:"]
         info_lines.append(
             f"  Из отчётов со склада: {wh_result['added']}"
         )
@@ -1186,10 +1262,7 @@ class PreparationService:
         info_lines.append(
             f"  Из отчётов Ozon: {ozon_result['added']}"
         )
-        total_ops = (
-            wh_result["added"] + wb_result["added"] + ozon_result["added"]
-        )
-        info_lines.append(f"  Всего операций записи: {total_ops}")
+        info_lines.append(f"  Всего к записи: {total_to_write}")
         if stats.get("copied_garbage", 0) > 0:
             info_lines.append(
                 f"  Мусор (не скопировано): {stats['copied_garbage']}"
@@ -1199,11 +1272,6 @@ class PreparationService:
                 f"  Возвратов (в returns.txt): "
                 f"{stats['processed_returns']}"
             )
-        delta = size_after - size_before
-        delta_str = f"{'+' if delta >= 0 else ''}{delta}"
-        info_lines.append(
-            f"База КИЗов: {size_before} → {size_after} ({delta_str})"
-        )
         logger.info("\n".join(info_lines))
 
         logger.status(
@@ -1266,7 +1334,7 @@ class DataVerificationService:
         logger.status("Загрузка базы КИЗов для валидации")
         try:
             self.kiz_validator.load()
-            if self.kiz_validator.storage.get_all():
+            if self.kiz_validator.storage.count() > 0:
                 logger.info(
                     "Загружены сохранённые данные по ранее "
                     "списанным КИЗам"
@@ -1737,7 +1805,7 @@ class FinalProcessingService:
         logger.status("Загрузка базы КИЗов для валидации")
         try:
             self.kiz_validator.load()
-            if self.kiz_validator.storage.get_all():
+            if self.kiz_validator.storage.count() > 0:
                 logger.info(
                     "Загружены сохранённые данные по ранее "
                     "списанным КИЗам"
@@ -1752,6 +1820,14 @@ class FinalProcessingService:
                 "Не получилось загрузить данные — валидация "
                 "без сохранённой базы"
             )
+
+        pending_sold = FbsBufferKiz(ctx.processing_dir).load()
+        if pending_sold:
+            logger.info(
+                f"\nОтложенная запись: {len(pending_sold)} КИЗов"
+            )
+        else:
+            logger.info("\nОтложенная запись: буфер пуст")
 
         logger.status("Загрузка цен из отчётов WB")
         all_prices = self._load_prices_from_json(ctx.processing_dir, logger)
@@ -2022,9 +2098,9 @@ class FinalProcessingService:
         # ============================================================
         # Фаза 3. Фильтрация по брендам.
         # ============================================================
-        used_kiz_keys = set(
-            self.kiz_validator.storage.get_all().keys()
-        )
+        base_keys = self.kiz_validator.storage.full_kizs()
+        pending_keys = set(pending_sold)
+        used_kiz_keys = base_keys | pending_keys
         intersection = {
             k: v for k, v in kiz_to_brand_data.items()
             if k in used_kiz_keys
@@ -2055,9 +2131,14 @@ class FinalProcessingService:
             f"Всего уникальных КИЗов в предитоговых файлах "
             f"после фильтрации: {total_in_files}"
         )
-        logger.report(
-            f"Из них есть в used_kiz.json: {stats['total']}"
+        base_in_files = sum(
+            1 for k in kiz_to_brand_data if k in base_keys
         )
+        buffer_in_files = sum(
+            1 for k in kiz_to_brand_data if k in pending_keys
+        )
+        logger.report(f"Из них есть в базе: {base_in_files}")
+        logger.report(f"Из них есть в буфере: {buffer_in_files}")
         logger.report(f"С пустым брендом: {stats['empty_brand']}")
         logger.report(
             f"С неизвестным брендом: {stats['unknown_brand']}"
@@ -2078,9 +2159,8 @@ class FinalProcessingService:
             f"  Всего уникальных КИЗов в предитоговых файлах: "
             f"{total_in_files}"
         )
-        lines.append(
-            f"  Из них есть в used_kiz.json: {stats['total']}"
-        )
+        lines.append(f"  Из них есть в базе: {base_in_files}")
+        lines.append(f"  Из них есть в буфере: {buffer_in_files}")
         lines.append(f"  С пустым брендом: {stats['empty_brand']}")
         lines.append(
             f"  С неизвестным брендом: {stats['unknown_brand']}"
@@ -2135,25 +2215,6 @@ class FinalProcessingService:
                             "\nОбработка неизвестных брендов вернула "
                             "некорректный результат"
                         )
-
-        if to_delete:
-            X = len(used_kiz_keys)
-            logger.status("Удаление записей из базы КИЗов")
-            with self.kiz_validator.batch():
-                deleted = self.kiz_validator.remove_kizs(to_delete)
-            Y = X - deleted
-            if deleted != len(to_delete):
-                logger.warning(
-                    f"remove_kizs: запрошено удалить {len(to_delete)}, "
-                    f"реально удалено {deleted} – расхождение"
-                )
-            lines = [
-                "\nБаза КИЗов:",
-                f"  Было: {X}",
-                f"  Стало: {Y}",
-                f"  Удалено: {deleted}",
-            ]
-            logger.info("\n".join(lines))
 
         if status_counts_agg:
             lines = ["\nУдалено по статусам:"]
@@ -2620,6 +2681,53 @@ class FinalProcessingService:
             lines.append("  По продавцам:")
             lines.extend(per_seller_lines)
         logger.info("\n".join(lines))
+
+        # ============================================================
+        # Фаза 6.1. Отложенная запись в базу КИЗов.
+        # ============================================================
+        written = 0
+        deleted = 0
+        before_db = self.kiz_validator.storage.count()
+
+        if pending_sold:
+            to_write = {
+                k: sold for k, sold in pending_sold.items()
+                if k not in to_delete
+            }
+            if to_write:
+                logger.status("Запись отложенных продаж в базу КИЗов")
+                with self.kiz_validator.batch():
+                    for k, sold in to_write.items():
+                        self.kiz_validator.apply_sale(k, sold)
+                        written += 1
+        FbsBufferKiz(ctx.processing_dir).clear()
+
+        to_delete_base = {k for k in to_delete if k in base_keys}
+        if to_delete_base:
+            logger.status("Удаление записей из базы КИЗов")
+            with self.kiz_validator.batch():
+                deleted = self.kiz_validator.remove_kizs(
+                    to_delete_base,
+                )
+            if deleted != len(to_delete_base):
+                logger.warning(
+                    f"remove_kizs: запрошено удалить "
+                    f"{len(to_delete_base)}, "
+                    f"реально удалено {deleted} – расхождение"
+                )
+
+        if written or deleted:
+            after_db = self.kiz_validator.storage.count()
+            delta = after_db - before_db
+            delta_str = f"{'+' if delta >= 0 else ''}{delta}"
+            lines = ["\nЗапись в базу КИЗов:"]
+            lines.append(f"  Записано: {written}")
+            lines.append(f"  Удалено: {deleted}")
+            lines.append(
+                f"  База КИЗов: {before_db} → {after_db} "
+                f"({delta_str})"
+            )
+            logger.info("\n".join(lines))
 
         logger.report("\n=== ФИНАЛИЗАЦИЯ ЗАВЕРШЕНА ===")
         logger.status(
