@@ -19,17 +19,12 @@ from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
                                QVBoxLayout, QHBoxLayout)
 from PySide6.QtCore import QTimer, Qt
-
-from ui.windows import (
-    SellsFBSWindow,
-    SellersWindow,
-    BrandsWindow,
-    ReturnsWindow,
-    CompareWindow,
-    PlannerWindow,
-    KizBySellersWindow,
-    StaffWindow,
-)
+from ui.windows import SellsFBSWindow
+from ui.windows.compare_windows.compare_window import CompareWindow
+from ui.windows.kiz_by_sellers_windows import KizBySellersWindow
+from ui.windows.returns_windows.returns_window import ReturnsWindow
+from ui.windows.planner_windows import PlannerWindow
+from ui.windows.dict_models_windows import (SellersWindow, BrandsWindow, StaffWindow, CounterpartiesWindow)
 from ui.managers.window_manager import WindowManager
 from ui.factories.factories import ButtonFactory, LayoutFactory, DroplistFactory
 from ui.widgets.planner_quick_view import PlannerQuickView
@@ -38,11 +33,11 @@ from utils.path_manager import PathManager
 from utils.log_tools.decorators import log_button_action
 from services.subservices.logging import LogManagerV2
 from services.kiz_validator import KizValidator
-from services.planner_service import PlannerService
-from services.planner_archive_service import PlannerArchiveService
-from services.planner_recurrence_service import PlannerRecurrenceService
-from services.plannerviewer_service import PlannerQuickViewController
+from services.planner_services import PlannerService, PlannerArchiveService
+from services.planner_services.planner_recurrence_service import PlannerRecurrenceService
+from services.planner_services.plannerviewer_service import PlannerQuickViewController
 from services.sellers_brands_service import SellersBrandsService
+from services.counterparties_service import CounterpartiesService
 from storage import (
     KizStorage,
     MainConfig,
@@ -103,6 +98,9 @@ class MainWindow(QMainWindow):
             self.paths, log_manager_v2=self.log_manager_v2,
         )
         self.sellers_brands_service = SellersBrandsService(
+            self.main_config, log_manager_v2=self.log_manager_v2,
+        )
+        self.counterparties_service = CounterpartiesService(
             self.main_config, log_manager_v2=self.log_manager_v2,
         )
 
@@ -204,6 +202,7 @@ class MainWindow(QMainWindow):
                     {"interactive": True, "items": [{"label": "Продавцы"}]},
                     {"interactive": True, "items": [{"label": "Бренды"}]},
                     {"interactive": True, "items": [{"label": "Сотрудники"}]},
+                    {"interactive": True, "items": [{"label": "Контрагенты"}]},
                 ],
             },
         )
@@ -416,10 +415,32 @@ class MainWindow(QMainWindow):
         window.show()
         self.logger.debug("open_staff_window: окно создано заново")
 
+    @log_button_action(
+        "open_counterparties_window",
+        "Ошибка при открытии окна 'Контрагенты': {e}",
+    )
+    def open_counterparties_window(self):
+        existing = self.window_manager.get_window(CounterpartiesWindow)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            self.logger.debug(
+                "open_counterparties_window: окно активировано"
+            )
+            return
+        window = CounterpartiesWindow(
+            self, log_manager_v2=self.log_manager_v2,
+        )
+        window.show()
+        self.logger.debug(
+            "open_counterparties_window: окно создано заново"
+        )
+
     def _on_directory_selected(self, index: int) -> None:
         """Открывает окно по индексу выбранной строки «Справочников».
 
-        Вход: index — 0 «Продавцы», 1 «Бренды», 2 «Сотрудники».
+        Вход: index — 0 «Продавцы», 1 «Бренды», 2 «Сотрудники»,
+              3 «Контрагенты».
 
         Роль: клик по строке целиком (лейбл) эмитит item_clicked.
               Popup закрываем вручную — при interactive=True
@@ -430,6 +451,7 @@ class MainWindow(QMainWindow):
             0: self.open_sellers_window,
             1: self.open_brands_window,
             2: self.open_staff_window,
+            3: self.open_counterparties_window,
         }
         opener = openers.get(index)
         if opener is None:

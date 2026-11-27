@@ -59,6 +59,7 @@ class WidgetStyle:
             current = widget.styleSheet()
             widget.setStyleSheet(current + extra_style)
 
+
     @staticmethod
     def _effective_text_for(widget, bg_color, forced=None):
         """Возвращает контрастный цвет текста от эффективного фона.
@@ -857,6 +858,49 @@ class WidgetStyle:
         Роль: делегирует в WindowStyle.close_button_qss.
         """
         btn.setStyleSheet(WindowStyle.close_button_qss(color))
+
+    @staticmethod
+    def apply_tooltip(tooltip, bg_color, text_color=None, border="none",
+                      border_radius=4, padding="4px 6px",
+                      font_size=None, extra_style="") -> None:
+        """QSS для QLabel-подсказки.
+
+        Вход:
+            tooltip — QLabel, созданный TooltipFactory.
+            bg_color — фон подсказки.
+            text_color — цвет текста; None → контрастный.
+            border — CSS-рамка.
+            border_radius — радиус скругления.
+            padding — внутренние отступы.
+            font_size — размер шрифта.
+            extra_style — дополнительный CSS.
+
+        Выход: нет.
+
+        Роль:
+            Единственная точка стилизации tooltip-виджета.
+            Не использует глобальный QToolTip и QApplication:
+            стиль ставится на конкретный QLabel через
+            widget.setStyleSheet, как у apply_label/apply_button.
+        """
+        text_c = WidgetStyle._effective_text_for(
+            tooltip, bg_color, text_color,
+        )
+        selector = SelectorBuilder.build(
+            "QLabel", tooltip.objectName() or None,
+        )
+        style = QssBuilder.base_rule(
+            selector,
+            bg_color=bg_color,
+            text_color=text_c,
+            border=border,
+            border_radius=border_radius,
+            padding=padding,
+            font_size=font_size,
+        )
+        if extra_style:
+            style += extra_style
+        tooltip.setStyleSheet(style)
 
     @staticmethod
     def apply_dropdown_separator(widget, bg_color) -> None:

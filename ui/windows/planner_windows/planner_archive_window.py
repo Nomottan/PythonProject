@@ -12,7 +12,7 @@ from ui.factories.element_factory import LabelFactory
 from ui.windows.message_dialog import MessageDialog
 from ui.base.base_planner_window import _BasePlannerListWindow
 from models.planner_task import PlannerTask, TaskStatus, TaskPriority
-from ui.windows.planner_task_dialogs import (
+from .planner_task_dialogs import (
     DeadlineEditDialog, PlannerRecurrenceEditDialog,
 )
 from utils.filter_utils import FieldDef

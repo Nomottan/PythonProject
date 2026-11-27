@@ -28,10 +28,9 @@ from ui.factories.factories import (
     LayoutFactory, FileDialogFactory, WindowBlockFactory,
 )
 from ui.styles import ColorCalculator, WindowStyle
-from ui.windows.mappings_window import BrandMappingsWindow
-from ui.windows.compare_dialogs import (
-    Stage1ReviewDialog, ConfirmMatchDialog, ManualMatchDialog,
-)
+from .mappings_window import BrandMappingsWindow
+from .compare_dialogs import Stage1ReviewDialog, ConfirmMatchDialog, ManualMatchDialog
+
 from utils.log_tools.decorators import log_button_action
 from services.compare_service import CompareService
 

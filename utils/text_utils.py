@@ -22,6 +22,17 @@ class TextUtils:
     _KEYBOARD_MAP_REVERSE = dict(
         zip(_KEYBOARD_MAP.values(), _KEYBOARD_MAP.keys())
     )
+    _ORG_TYPE_TOKENS = {
+        "ООО": {
+            "ооо", "общество", "с", "ограниченной",
+            "ответственностью", "ответственности",
+        },
+        "ИП": {
+            "ип", "индивидуальный", "предприниматель",
+            "индивидуальное", "предпринимательство",
+        },
+    }
+
     @staticmethod
     def is_cyrillic(text: str) -> bool:
         if not isinstance(text, str):
@@ -220,4 +231,149 @@ class TextUtils:
                     (t.startswith("'") and t.endswith("'")):
                 return t[1:-1].strip()
         return t
+
+    @staticmethod
+    def tokenize_legal_name(text: str) -> list[str]:
+        """Разбивает юридическое наименование на токены.
+
+        Вход:
+            text — строка вида 'ООО "Интернет-решения"'.
+
+        Выход:
+            list[str] — токены в исходном регистре, без пустых.
+            Кавычки, точки, запятые и прочая пунктуация (кроме
+            дефиса и апострофа) заменяются пробелами; дефисы и
+            апострофы сохраняются. Латиница не переводится —
+            это делает вызывающий код до валидации.
+
+        Роль:
+            Единая точка токенизации для определения типа
+            организации, разбора наименования ООО и ФИО ИП.
+        """
+        if not text:
+            return []
+        cleaned = re.sub(r"[^\w\s\-']", " ", str(text), flags=re.UNICODE)
+        cleaned = cleaned.replace("_", " ")
+        return [part for part in cleaned.split() if part]
+
+    @staticmethod
+    def strip_org_type_tokens(tokens: list[str],
+                              org_type: str) -> list[str]:
+        """Убирает из токенов слова, относящиеся к типу организации.
+
+        Вход:
+            tokens — токены в исходном регистре.
+            org_type — "ООО", "ИП" или "".
+
+        Выход:
+            list[str] — токены без слов типа организации, порядок
+            сохраняется. Для ООО предлог "с" удаляется только
+            внутри фразы типа, чтобы не потерять название "С".
+
+        Роль:
+            После определения типа организации из наименования
+            нужно оставить только смысловую часть: название ООО
+            или ФИО ИП.
+        """
+        if not tokens:
+            return []
+        remove = TextUtils._ORG_TYPE_TOKENS.get(org_type, set())
+        if not remove:
+            return list(tokens)
+        result = []
+        for index, token in enumerate(tokens):
+            lowered = token.lower()
+            if lowered not in remove:
+                result.append(token)
+                continue
+            if lowered == "с":
+                prev_lower = tokens[index - 1].lower() if index > 0 else ""
+                next_lower = (
+                    tokens[index + 1].lower()
+                    if index + 1 < len(tokens) else ""
+                )
+                if prev_lower != "общество" and next_lower != "ограниченной":
+                    result.append(token)
+        return result
+
+    @staticmethod
+    def compose_legal_name(org_type: str, parts: dict) -> str:
+        """Собирает каноническое наименование юрлица.
+
+        Вход:
+            org_type — "ООО", "ИП" или "".
+            parts — для ООО: {"name": "..."};
+                    для ИП: {"surname": "...", "given_name": "...",
+                             "patronymic": "..."}.
+
+        Выход:
+            "ООО «...»" или "ИП Фамилия Имя Отчество".
+            Пустая строка, если нет обязательных частей.
+
+        Роль:
+            Единая точка сборки name для модели и для обратной
+            связи в диалоге. Для ООО кавычки всегда «ёлочки»,
+            внешние кавычки снимаются. Регистр наименования ООО
+            сохраняется, ФИО капитализируется.
+        """
+        if org_type == "ООО":
+            name = (parts or {}).get("name", "")
+            name = TextUtils.strip_quotes(str(name)).strip()
+            name = " ".join(name.split())
+            if not name:
+                return ""
+            return f"ООО «{name}»"
+        if org_type == "ИП":
+            surname = TextUtils.sanitize_fio_part(
+                (parts or {}).get("surname", "")
+            )
+            given_name = TextUtils.sanitize_fio_part(
+                (parts or {}).get("given_name", "")
+            )
+            patronymic = TextUtils.sanitize_fio_part(
+                (parts or {}).get("patronymic", "")
+            )
+            fio = " ".join(
+                part for part in (surname, given_name, patronymic)
+                if part
+            )
+            if not fio:
+                return ""
+            return f"ИП {fio}"
+        return ""
+
+    @staticmethod
+    def format_short_legal_name(name: str, org_type: str) -> str:
+        """Возвращает сокращённое отображение юрлица для списка.
+
+        Вход:
+            name — полное наименование из модели.
+            org_type — "ООО", "ИП" или "".
+
+        Выход:
+            Для ООО — name как есть.
+            Для ИП — "ИП Фамилия И.О." (отчество при наличии).
+            Иначе — name.
+
+        Роль:
+            Кликабельный лейбл в списке контрагентов показывает
+            ИП с инициалами, а в модели хранится полное ФИО.
+        """
+        if org_type != "ИП" or not name:
+            return name
+        text = name.strip()
+        if text.startswith("ИП "):
+            text = text[3:].strip()
+        words = TextUtils.split_fio(text)
+        if not words:
+            return name
+        surname = TextUtils.sanitize_fio_part(words[0])
+        initials = []
+        for word in words[1:3]:
+            part = TextUtils.sanitize_fio_part(word)
+            if part:
+                initials.append(part[0].upper() + ".")
+        if not initials:
+            return f"ИП {surname}"
+        return f"ИП {surname} {' '.join(initials)}"
 

@@ -633,8 +633,7 @@ class PreparationService:
             ctx, logger, sellers, kiz_by_seller, prices_by_seller,
             wb_sellers_with_kiz, missed_files,
             wh_result, wb_result, ozon_result,
-            pending_sold, bool(sold_records_by_seller),
-            detected, stats,
+            pending_sold, detected, stats,
         )
 
         # ---------- Финал. ----------
@@ -702,6 +701,7 @@ class PreparationService:
             "kiz_by_seller": {},
             "prices_by_seller": {},
             "kiz_owners": {},
+            "sold_records": {},
         }
         today_str = ctx.today.strftime("%d.%m.%Y")
 
@@ -726,6 +726,12 @@ class PreparationService:
                 seller_name = data.seller.name
                 result["kiz_by_seller"].setdefault(seller_name, set())
                 result["kiz_by_seller"][seller_name].update(data.full_kizs)
+
+                sold_bucket = result["sold_records"].setdefault(
+                    seller_name, {},
+                )
+                for full_kiz, sold_date in data.sold_records.items():
+                    sold_bucket.setdefault(full_kiz, sold_date)
 
                 for full_kiz in data.full_kizs:
                     result["kiz_owners"].setdefault(full_kiz, []).append(
@@ -767,6 +773,7 @@ class PreparationService:
                 kiz_by_seller: {seller_name: set(full_kiz)},
                 prices_by_seller: {seller_name: {storage_kiz: price}},
                 kiz_owners: {full_kiz: [(seller, date, src)]},
+                sold_records: {full_kiz: "DD-MM-YYYY"},
             }
             Источник 1 в kiz_owners.
         """
@@ -781,6 +788,7 @@ class PreparationService:
             "kiz_by_seller": {},
             "prices_by_seller": {},
             "kiz_owners": {},
+            "sold_records": {},
         }
 
         for file_path in files:
@@ -808,6 +816,12 @@ class PreparationService:
                 result["prices_by_seller"].setdefault(seller_name, {})
                 result["prices_by_seller"][seller_name].update(data.prices)
                 result["sellers_with_kiz"].add(seller_name)
+
+                sold_bucket = result["sold_records"].setdefault(
+                    seller_name, {},
+                )
+                for full_kiz, sold_date in data.sold_records.items():
+                    sold_bucket.setdefault(full_kiz, sold_date)
 
                 for full_kiz in data.full_kizs:
                     result["kiz_owners"].setdefault(full_kiz, []).append(
@@ -856,6 +870,7 @@ class PreparationService:
             "kiz_by_seller": {},
             "prices_by_seller": {},
             "kiz_owners": {},
+            "sold_records": {},
         }
 
         for file_path in files:
@@ -880,6 +895,12 @@ class PreparationService:
                 seller_name = data.seller.name
                 result["kiz_by_seller"].setdefault(seller_name, set())
                 result["kiz_by_seller"][seller_name].update(data.full_kizs)
+
+                sold_bucket = result["sold_records"].setdefault(
+                    seller_name, {},
+                )
+                for full_kiz, sold_date in data.sold_records.items():
+                    sold_bucket.setdefault(full_kiz, sold_date)
 
                 for full_kiz in data.full_kizs:
                     result["kiz_owners"].setdefault(full_kiz, []).append(

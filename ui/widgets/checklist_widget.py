@@ -273,7 +273,7 @@ class ChecklistWidget(QWidget):
         внутри WindowModal родителя зависает. open() не создаёт
         вложенный event loop.
         """
-        from ui.windows.planner_checklist_dialogs import ChecklistItemDialog
+        from ui.windows.planner_windows.planner_checklist_dialogs import ChecklistItemDialog
 
         dialog = ChecklistItemDialog(parent=self.window(), item=None)
         dialog.finished.connect(
@@ -303,7 +303,7 @@ class ChecklistWidget(QWidget):
 
         REPLACE: exec() → open() + finished.
         """
-        from ui.windows.planner_checklist_dialogs import ChecklistItemDialog
+        from ui.windows.planner_windows.planner_checklist_dialogs import ChecklistItemDialog
         dialog = ChecklistItemDialog(parent=self.window(), item=item)
         dialog.finished.connect(
             lambda code, d=dialog, i=item: self._on_edit_finished(d, i, code)

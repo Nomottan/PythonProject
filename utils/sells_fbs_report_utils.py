@@ -192,7 +192,7 @@ class BaseMpReportReader:
         COLLECT_PRICES — собирать ли цены из отчёта.
         _DESCRIPTION — описание для сообщений WorkbookOpener.
     """
-
+    ALWAYS_ADD = False
     _REQUIRED_SHEETS: tuple = ()
     COLLECT_PRICES: bool = False
     _DESCRIPTION: str = "отчёт МП"
@@ -398,7 +398,7 @@ class BaseMpReportReader:
             skipped_dup += chosen.skipped_dup_count
 
             sale_date_str = chosen.sale_date_str
-            if sale_date_str is None:
+            if sale_date_str is None and not cls.ALWAYS_ADD:
                 sale_date_str = datetime.now().strftime("%d-%m-%Y")
 
             evaluation = kiz_validator.evaluate_for_sale(
@@ -522,6 +522,7 @@ class WarehouseReportReader(BaseMpReportReader):
 
     _REQUIRED_SHEETS = ()
     COLLECT_PRICES = False
+    ALWAYS_ADD = True
     _DESCRIPTION = "отчёт склада"
 
     @classmethod

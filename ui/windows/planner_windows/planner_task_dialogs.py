@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout
 from PySide6.QtCore import Qt
 
 from ui.factories.factories import (
-    ButtonFactory, LabelFactory, InputWidgetFactory, LayoutFactory,
+    LabelFactory, InputWidgetFactory, LayoutFactory,
     DeadlineFieldsWidget, CheckBoxFactory,
 )
 from ui.base.base_edit_dialog import BaseEditDialog

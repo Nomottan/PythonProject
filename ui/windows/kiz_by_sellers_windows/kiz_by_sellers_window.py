@@ -25,7 +25,7 @@ from ui.base.base_service_window import BaseServiceWindow
 from ui.factories.factories import (
     ButtonFactory, LabelFactory, WindowBlockFactory,
 )
-from ui.windows.kiz_by_sellers_dialogs import KizBySellersDialog
+from .kiz_by_sellers_dialogs import KizBySellersDialog
 from utils.log_tools.decorators import log_button_action
 
 

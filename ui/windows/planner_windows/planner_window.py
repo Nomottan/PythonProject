@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from ui.factories.factories import ButtonFactory, ActionButtonType
 from ui.base.base_planner_window import _BasePlannerListWindow
-from ui.windows.planner_themes_dialog import PlannerThemesDialog
-from ui.windows.planner_task_dialogs import NewTaskDialog
+from .planner_task_dialogs import NewTaskDialog
+from .planner_themes_dialog import PlannerThemesDialog
 from utils.log_tools.decorators import log_button_action
 from utils.filter_utils import FieldDef
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus, TaskType
@@ -159,7 +159,7 @@ class PlannerWindow(_BasePlannerListWindow):
         при modal=True в PlannerArchiveWindow). Здесь только
         создание и show().
         """
-        from ui.windows.planner_archive_window import PlannerArchiveWindow
+        from .planner_archive_window import PlannerArchiveWindow
         archive = PlannerArchiveWindow(
             self,
             archive_service=self.archive_service,

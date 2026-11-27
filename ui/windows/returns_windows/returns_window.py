@@ -29,7 +29,7 @@ from services.returns_service import (
     ReturnsPreparationService, KizExportService, KizTransferService,
 )
 from ui.windows.message_dialog import MessageDialog, NotificationDialog
-from ui.windows.returns_dialogs import PriorityResolutionDialog
+from .returns_dialogs import PriorityResolutionDialog
 from utils.log_tools.decorators import log_button_action
 
 

@@ -11,289 +11,151 @@
     parent.sellers_brands_service.
 """
 
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QDialog
 from PySide6.QtCore import Qt
-from ui.windows.address_dialog import AddressDialog
-from utils.log_tools.decorators import log_button_action
+from ui.windows.dict_models_windows.address_dialog import AddressDialog
 from ui.factories.factories import (
-    LabelFactory, InputWidgetFactory, LayoutFactory,
-    ListWidgetFactory, ButtonFactory,
+    LabelFactory, InputWidgetFactory, LayoutFactory, ButtonFactory,
+)
+from services.sellers_brands_service import SellersBrandsService
+from ui.windows.dict_models_windows.counterparties_window import (
+    CounterpartiesWindow,
 )
 from ui.windows.shared_dialogs import StringListDialog
-from ui.factories.window_factories import ExtendedWindowFactory
 from ui.base.base_edit_dialog import BaseEditDialog
 from ui.base.base_checklist_dialog import ChecklistDialog
 from ui.styles import ColorCalculator, WindowStyle
-from models.models import Seller, Brand
+from models.models import Seller
 
 
-class SellersWindow(QMainWindow):
-    """Окно со списком продавцов.
+class SellersWindow(CounterpartiesWindow):
+    """Окно справочника продавцов.
 
     Назначение:
-        Показать список продавцов. Позволяет переименовать, задать
-        компанию, отметить бренды, отредактировать ключи, удалить.
+        Список продавцов: удаление, свободное имя, юр. наименование,
+        «Компания», «Реквизиты», «Доп» с приоритетом, «Бренды».
 
     Роль в программе:
-        Открывается из MainWindow. Список изменяется локально;
-        сохранение в config.json — в save_and_close при закрытии окна.
+        Уровень 1, fill_parent=True. Наследует CounterpartiesWindow.
+        Данные — SellersBrandsService, ключ "sellers".
     """
 
-    LOGGER_SOURCE = "SellersWindow.sellers_window"
-    LOGGER_DOMAIN = "sellers_brands"
+    LOGGER_SOURCE = "SellersWindow.dict_models_windows"
+    LOGGER_DOMAIN = "sellers"
+    WINDOW_TITLE = "Продавцы"
+    WINDOW_NAME = "sellers"
+    objectName = "sellers_window"
 
-    def __init__(self, parent=None, log_manager_v2=None):
-        super().__init__(parent)
-        """Конструктор.
-
-        Вход: parent — MainWindow.
-        """
-
-        self.main_window = parent
-        self.log_manager_v2 = log_manager_v2
-        self.logger = None
-        if log_manager_v2 is not None:
-            self.logger = log_manager_v2.create_logger_v2(
-                source=self.LOGGER_SOURCE,
-                domain=self.LOGGER_DOMAIN,
+    def _resolve_bg_color(self):
+        """Считает фон Seller от MainWindow: -60%, -10%, -10%."""
+        parent = self.main_window
+        if parent is None:
+            parent_bg = (0, 0, 0, 0)
+        else:
+            parent_bg = WindowStyle.resolve_parent_bg(
+                parent, getattr(parent, "bg_color", (0, 0, 0, 0)),
             )
-        # Читаем бренды и продавцов через сервис.
-        self.service_window = self
-        brands = parent.sellers_brands_service.get_brands_objects()
-        brands_dict = {b.name: b for b in brands}
-        self.sellers = parent.sellers_brands_service.get_sellers_objects(brands_dict)
+        self.bg_color = ColorCalculator.derive(
+            parent_bg,
+            r_fn=lambda r: int(r * 0.4),
+            g_fn=lambda g: int(g * 0.9),
+            b_fn=lambda b: int(b * 0.9),
+        )
+        return self.bg_color
 
-        self.bg_color = (10, 40, 50, 0.9)
-        content_layout = ExtendedWindowFactory.setup_window(
-            window=self,
-            parent=parent,
-            title="Список продавцов",
-            bg_color=self.bg_color,
-            close_button=True,
-            draggable=False,
-            close_on_click_outside=False,
-            on_close=self.save_and_close,
-            return_content_layout=True,
-            default_width=580,
-            default_height=450,
+    def _create_service(self):
+        """Создаёт SellersBrandsService."""
+        return SellersBrandsService(
+            self.main_window.main_config,
+            self.log_manager_v2,
         )
 
-        # Регистрация в WindowManager: SellersWindow — псевдосервисное
-        # окно (не модальное, занимает область родителя с отступами).
-        if parent is not None and hasattr(parent, "window_manager"):
-            parent.window_manager.register_window(
-                self, parent=parent, fill_parent=True, modal=False,
-            )
-
-        content_layout.addWidget(LabelFactory.create_header_label(self, "Продавцы"))
-
-        scroll, self.sellers_widget, self.sellers_layout = (
-            ListWidgetFactory.create_scroll_container(
-                self, spacing=2, bg_color=self.bg_color,
-            )
-        )
-        content_layout.addWidget(scroll)
-
-        add_btn = ButtonFactory.create_add_button(self, self._add_new_seller)
-        LayoutFactory.add_centered_widget(content_layout, add_btn)
-
-        for seller in self.sellers:
-            self._add_seller_row(seller)
-
-    # ---------- Строки ----------
-
-    def _add_seller_row(self, seller: Seller) -> None:
-        """Добавляет строку продавца с кнопками действий.
-
-        Вход: seller — Seller.
-        Роль: слева кнопка удаления, затем имя, «Компания», «Бренды»,
-              «Ключи».
-        """
-        # Создание кнопок
-        del_btn = ButtonFactory.create_delete_button(
-            self,
-            callback=lambda: self._remove_seller(row, seller),
-            size=(25, 25),
-        )
-        name_btn = ButtonFactory.create_button(
-            self, seller.name, (30, 50, 90, 0.8),
-            fixed_size=(140, 30),
-        )
-        company_btn = ButtonFactory.create_button(
-            self, "Компания", (80, 100, 120, 0.7),
-            fixed_size=(90, 30),
-        )
-        requisites_btn = ButtonFactory.create_button(
-            self, "Реквизиты", (80, 100, 120, 0.7),
-            fixed_size=(90, 30),
-        )
-        brands_btn = ButtonFactory.create_button(
-            self, "Бренды", (80, 100, 120, 0.7),
-            fixed_size=(90, 30),
-        )
-        keys_btn = ButtonFactory.create_button(
-            self, "Доп", (40, 60, 70, 0.7),
-            fixed_size=(30, 30), padding="8px 1px", font_size="8",
-        )
-
-        # Подключение кнопок
-        name_btn.clicked.connect(
-            lambda checked, b=name_btn, s=seller: self._rename_seller(b, s)
-        )
-        company_btn.clicked.connect(lambda: self._edit_company(seller))
-        requisites_btn.clicked.connect(lambda: self._edit_requisites(seller))
-        brands_btn.clicked.connect(lambda: self._edit_brands(seller))
-        keys_btn.clicked.connect(lambda: self._edit_keys(seller))
-
-        #Макет
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(4)
-        layout.addStretch()
-        layout.addWidget(del_btn)
-        layout.addWidget(name_btn)
-        layout.addWidget(company_btn)
-        layout.addWidget(requisites_btn)
-        layout.addWidget(brands_btn)
-        layout.addWidget(keys_btn)
-        layout.addStretch()
-        self.sellers_layout.addWidget(row)
-
-    # ---------- Действия ----------
-
-    def _add_new_seller(self) -> None:
-        """Создаёт нового пустого продавца и добавляет строку."""
-        new_seller = Seller("Новый продавец")
-        self.sellers.append(new_seller)
-        self._add_seller_row(new_seller)
-
-    def _remove_seller(self, row_widget, seller: Seller) -> None:
-        """Удаляет продавца из списка и удаляет строку.
-
-        Вход: row_widget — виджет строки; seller — Seller.
-        """
-        if seller in self.sellers:
-            self.sellers.remove(seller)
-        self.sellers_layout.removeWidget(row_widget)
-        row_widget.deleteLater()
-
-    def _rename_seller(self, btn, seller: Seller) -> None:
-        """Инлайн-переименование продавца.
-
-        Вход: btn — кнопка с именем; seller — Seller.
-        Роль: подменяет кнопку на QLineEdit, по завершении ввода —
-              возвращает кнопку с новым текстом.
-        """
-        layout = btn.parent().layout()
-        idx = layout.indexOf(btn)
-        line_edit = InputWidgetFactory.create_line_edit(
-            self, text=seller.name,
-            bg_color=(100, 80, 130, 0.9),
-            text_color=None,
-            border_radius=5,
-            padding="5px",
-        )
-        line_edit.setFixedWidth(btn.width())
-        layout.insertWidget(idx, line_edit)
-        btn.hide()
-
-        def finish_edit():
-            new_name = line_edit.text().strip()
-            if new_name:
-                seller.name = new_name
-                btn.setText(new_name)
-            line_edit.deleteLater()
-            btn.show()
-            btn.adjustSize()
-
-        line_edit.editingFinished.connect(finish_edit)
-        line_edit.returnPressed.connect(finish_edit)
-        line_edit.setFocus()
-
-    @log_button_action(
-        "open_edit_company",
-        "Ошибка при открытии окна 'Редактирование данных о компании': {e}",
-    )
-    def _edit_company(self, seller: Seller) -> None:
-        dialog = CompanyDialog(
-            self, seller, log_manager_v2=self.log_manager_v2,
-        )
-        dialog.show()
-
-    @log_button_action(
-        "open_edit_brands",
-        "Ошибка при открытии окна 'Редактирование данных о брендах компании': {e}",
-    )
-    def _edit_brands(self, seller: Seller) -> None:
-        brands = self.main_window.sellers_brands_service.get_brands_objects()
-        dialog = BrandChecklistDialog(
-            self, seller, brands, log_manager_v2=self.log_manager_v2,
-        )
-        dialog.show()
-
-    @log_button_action(
-        "_edit_requisites",
-        "Ошибка при открытии окна 'Редактирование данных реквизитах компании': {e}",
-    )
-    def _edit_requisites(self, seller: Seller) -> None:
-        dialog = RequisitesDialog(
-            self, seller, log_manager_v2=self.log_manager_v2,
-        )
-        dialog.show()
-
-    @log_button_action(
-        "open_edit_keys",
-        "Ошибка при открытии окна 'Редактирование служебных данных': {e}",
-    )
-    def _edit_keys(self, seller: Seller) -> None:
-        """Открывает диалог редактирования ключей продавца.
-
-        Роль: диалог создаётся здесь, а не через MainWindow —
-              это окно знает и про seller, и про log_manager_v2.
-              Пробрасывает seller — диалог покажет приоритет.
-        """
-        if self.logger:
-            self.logger.debug(
-                f"_edit_keys: seller={seller.name}, "
-                f"priority={seller.priority}"
-            )
-        dialog = StringListDialog(
-            parent=self,
-            title=f"Дополнительно — {seller.name}",
-            strings=seller.keys,
-            seller=seller,
-            log_manager_v2=self.log_manager_v2,
-        )
-        dialog.show()
-
-    # ---------- Обновление / сохранение ----------
-
-    def refresh_ui(self) -> None:
-        """Перестраивает UI с текущим составом self.sellers."""
-        self._rebuild_ui()
-
-    def _rebuild_ui(self) -> None:
-        """Очищает и заново строит список строк."""
-        while self.sellers_layout.count():
-            item = self.sellers_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        for seller in self.sellers:
-            self._add_seller_row(seller)
-
-    def save_and_close(self) -> None:
-        try:
-            self.main_window.sellers_brands_service.set_sellers_objects(self.sellers)
-            self.main_window.update_buttons_state()
-        except Exception as e:
+    def _load_items(self) -> list:
+        """Загружает продавцов с восстановленными брендами."""
+        if self.service is None:
+            self.service = self._create_service()
+        sellers = self.service.get_sellers_with_brands()
+        if not isinstance(sellers, list):
             if self.logger is not None:
                 self.logger.critical(
-                    f"Ошибка сохранения продавцов: {e}",
+                    "SellersWindow: get_sellers_with_brands "
+                    "вернул не список",
                     can_influence=False,
                 )
-        finally:
-            self.close()
+            sellers = []
+        self.items = sellers
+        return self.items
+
+    def _save_items(self) -> None:
+        """Сохраняет продавцов через сервис."""
+        if self.service is None:
+            self.service = self._create_service()
+        if not isinstance(self.items, list):
+            if self.logger is not None:
+                self.logger.critical(
+                    "SellersWindow: self.items не список, "
+                    "сохранение отменено",
+                    can_influence=False,
+                )
+            return
+        self.service.set_sellers_objects(self.items)
+
+    def _create_new_item(self) -> Seller:
+        """Создаёт нового продавца."""
+        return Seller("Новый продавец")
+
+    def _edit_company(self, item: Seller) -> None:
+        """Открывает CompanyDialog для продавца."""
+        dialog = CompanyDialog(self, item, self.log_manager_v2)
+        dialog.finished.connect(self._on_dialog_finished)
+        dialog.show()
+
+    def _edit_requisites(self, item: Seller) -> None:
+        """Открывает RequisitesDialog для продавца."""
+        dialog = RequisitesDialog(self, item, self.log_manager_v2)
+        dialog.finished.connect(self._on_dialog_finished)
+        dialog.show()
+
+    def _on_dialog_finished(self, result: int) -> None:
+        """Сохраняет продавцов после закрытия диалога."""
+        self._save_items()
+
+    def _edit_keys(self, item: Seller) -> None:
+        """Открывает редактор ключей с приоритетом."""
+        dialog = StringListDialog(
+            self,
+            title=f"Дополнительно — {self._display_name(item)}",
+            strings=item.keys,
+            seller=item,
+            log_manager_v2=self.log_manager_v2,
+        )
+        dialog.accepted.connect(self._save_items)
+        dialog.show()
+
+    def _add_extra_buttons(self, layout, item: Seller,
+                           button_bg) -> None:
+        """Добавляет «Доп» с приоритетом и «Бренды»."""
+        super()._add_extra_buttons(layout, item, button_bg)
+        brands_btn = ButtonFactory.create_button(
+            self, "Бренды", button_bg, fixed_size=(90, 30),
+        )
+        brands_btn.clicked.connect(lambda: self._on_brands(item))
+        layout.addWidget(brands_btn)
+
+    def _on_brands(self, item: Seller) -> None:
+        """Открывает чек-лист брендов продавца."""
+        brands = self.service.get_brands_objects()
+        if not isinstance(brands, list):
+            if self.logger is not None:
+                self.logger.critical(
+                    "SellersWindow: get_brands_objects вернул не список",
+                    can_influence=False,
+                )
+            return
+        dialog = BrandChecklistDialog(
+            self, item, brands, self.log_manager_v2,
+        )
+        dialog.accepted.connect(self._save_items)
+        dialog.show()
 
 class CompanyDialog(BaseEditDialog):
     """Диалог редактирования компании продавца.
@@ -399,9 +261,13 @@ class CompanyDialog(BaseEditDialog):
         """
         self.seller.inn = self.inn_edit.text().strip()
         self.seller.company = self.company_edit.text().strip()
+        tax_text = self.tax_edit.text().strip()
         try:
-            self.seller.tax = int(self.tax_edit.text().strip())
-        except Exception as e:
+            tax = int(tax_text)
+            if tax < 0:
+                raise ValueError("tax < 0")
+            self.seller.tax = tax
+        except (TypeError, ValueError) as e:
             if self.logger is not None:
                 self.logger.critical(
                     f"Налоговая ставка не была сохранена: {e}",
@@ -542,7 +408,6 @@ class RequisitesDialog(BaseEditDialog):
         # ООО — показываем КПП и Директора, иначе — скрываем.
         self._is_ooo = seller.company.strip().upper().startswith("ООО")
         _height = 280 if self._is_ooo else 220
-        print(f"[REQ] _is_ooo={self._is_ooo}, _height={_height}, company={self.seller.company!r}")
         parent_bg = WindowStyle.resolve_parent_bg(parent, (40, 30, 50))
         self.bg_color = ColorCalculator.derive(
             parent_bg,
@@ -685,7 +550,10 @@ class RequisitesDialog(BaseEditDialog):
             self.seller.address заменяется на новое, лейбл рядом
             с кнопкой обновляется. При отмене — ничего не меняется.
         """
-        dialog = AddressDialog(self, model=self.seller.address)
+        dialog = AddressDialog(
+            self, model=self.seller.address,
+            log_manager_v2=self.log_manager_v2,
+        )
         dialog.accepted.connect(self._on_address_accepted)
         dialog.show()
 

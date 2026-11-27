@@ -33,7 +33,7 @@ from ui.windows.shared_dialogs import (
 from ui.windows.unknown_resolver_dialog import (
     UnknownResolverDialog, ObjectPickerDialog,
 )
-from ui.windows.brands_window import BrandEditDialog
+from ui.windows.dict_models_windows import BrandEditDialog
 from ui.windows.message_dialog import NotificationDialog
 from models.models import Brand
 from utils.text_utils import TextUtils

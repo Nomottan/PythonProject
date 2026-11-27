@@ -132,22 +132,139 @@ class Brand:
     def __repr__(self):
         return f"<Brand: {self.name}>"
 
-
-class Seller:
-    """Модель продавца.
+class Counterparty:
+    """Базовая модель юрлица.
 
     Поля:
-        name — имя продавца.
-        inn — ИНН.
+        name — свободный лейбл. Может быть пустым: тогда UI
+               показывает краткое юр. наименование.
+        company — юр. наименование: "ИП Гаак Наталья Сергеевна"
+                  или "ООО «РВБ»".
+        org_type — "ООО" или "ИП". По умолчанию "ООО".
+        director — директор. Для ИП — ФИО, для ООО — отдельно.
+        inn, phone, mail, edo_id, ogrn, kpp, oktmo — реквизиты.
+        address — AddressModel.
         keys — ключи для распознавания.
-        brands — связанные объекты Brand.
-        company — юр. лицо.
-        tax - налоговая ставка
-        phone, mail, edo_id, ogrn, kpp, director - текстовые реквизиты
-        address - адрес в виде объекта
-        priority — приоритет при разрешении конфликтов КИЗов:
-                   1 — низкий, 2 — средний (дефолт), 3 — высокий.
-                   Существующие записи без priority получают 2.
+
+    Роль:
+        Базовая модель для Counterparty и Seller. Чистые данные.
+        Читается/пишется через CounterpartiesService по ключу
+        "counterparties". Сериализация ленивая: company и name
+        пишутся только непустыми, пустые строки опускаются.
+    """
+
+    @staticmethod
+    def _safe_org_type(value) -> str:
+        """Приводит org_type к "ООО" или "ИП".
+
+        Вход: value — любое значение из JSON.
+        Выход: "ИП" если value == "ИП", иначе "ООО".
+
+        Роль: защита от битого JSON и от попадания UI-состояния
+              "Не опознан" в модель. В модели только два типа.
+        """
+        if isinstance(value, str) and value.strip() == "ИП":
+            return "ИП"
+        return "ООО"
+
+    def __init__(self, name: str = "", company: str = "",
+                 org_type: str = "ООО", director: str = "",
+                 inn: str = "", address: AddressModel = None,
+                 phone: str = "", mail: str = "", edo_id: str = "",
+                 ogrn: str = "", kpp: str = "", oktmo: str = "",
+                 keys: list = None):
+        self.name = name or ""
+        self.company = company or ""
+        self.org_type = self._safe_org_type(org_type)
+        self.director = director or ""
+        self.inn = inn or ""
+        self.address = address if address is not None else AddressModel()
+        self.phone = phone or ""
+        self.mail = mail or ""
+        self.edo_id = edo_id or ""
+        self.ogrn = ogrn or ""
+        self.kpp = kpp or ""
+        self.oktmo = oktmo or ""
+        self.keys = keys if keys is not None else []
+
+    def has_key(self, key: str) -> bool:
+        """Проверяет, является ли ключ одним из вариантов."""
+        return key in self.keys
+
+    def to_dict(self) -> dict:
+        """Сериализация для JSON.
+
+        Правило:
+          - company — только непустой;
+          - name — только непустой;
+          - org_type — только "ИП" (ООО — дефолт);
+          - пустые строки — опускаем;
+          - keys — только непустые;
+          - address — только непустой.
+        """
+        data = {}
+        if self.company and self.company.strip():
+            data["company"] = self.company
+        if self.name and self.name.strip():
+            data["name"] = self.name
+        if self.org_type == "ИП":
+            data["org_type"] = self.org_type
+        for key in ("director", "inn", "phone", "mail",
+                    "edo_id", "ogrn", "kpp", "oktmo"):
+            value = getattr(self, key, "")
+            if value and value.strip():
+                data[key] = value
+        if self.keys:
+            data["keys"] = list(self.keys)
+        if self.address is not None and not self.address.is_empty():
+            data["address"] = self.address.to_dict()
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Counterparty":
+        """Десериализация из JSON.
+
+        Миграция:
+            если нет company, а есть name — старый Counterparty,
+            где name был юр. наименованием. Переносим name в
+            company, name оставляем для текущего окна до его
+            перевода на company.
+        """
+        data = data or {}
+        company = data.get("company", "")
+        name = data.get("name", "")
+        if not company and name:
+            company = name
+        return cls(
+            name=name if isinstance(name, str) else "",
+            company=company if isinstance(company, str) else "",
+            org_type=cls._safe_org_type(data.get("org_type", "ООО")),
+            director=data.get("director", ""),
+            inn=data.get("inn", ""),
+            address=AddressModel.from_dict(data.get("address") or {}),
+            phone=data.get("phone", ""),
+            mail=data.get("mail", ""),
+            edo_id=data.get("edo_id", ""),
+            ogrn=data.get("ogrn", ""),
+            kpp=data.get("kpp", ""),
+            oktmo=data.get("oktmo", ""),
+            keys=data.get("keys", []),
+        )
+
+    def __repr__(self) -> str:
+        """Отладочное представление."""
+        return (
+            f"Counterparty(name={self.name!r}, "
+            f"company={self.company!r}, org_type={self.org_type!r})"
+        )
+
+class Seller(Counterparty):
+    """Модель продавца — расширение Counterparty.
+
+    Добавляет:
+        brands — связанные Brand.
+        tax — налоговая ставка.
+        priority — приоритет 1..3, дефолт 2.
     """
 
     @staticmethod
@@ -170,26 +287,22 @@ class Seller:
             return 2
         return p
 
-    def __init__(self, name: str, inn: str = "", keys: list = None,
-                 brands: list = None, company: str = "", tax: int = 5,
-                 priority: int = 2, phone: str = "", mail: str = "",
-                 address: AddressModel = None, edo_id: str = "",
-                 ogrn: str = "", kpp: str = "", director: str = "",):
-        self.name = name
-        self.inn = inn
-        self.company = company
-        self.tax = tax
-        self.keys = keys if keys is not None else []
+    def __init__(self, name: str = "", company: str = "",
+                 org_type: str = "ООО", director: str = "",
+                 inn: str = "", address: AddressModel = None,
+                 phone: str = "", mail: str = "", edo_id: str = "",
+                 ogrn: str = "", kpp: str = "", oktmo: str = "",
+                 keys: list = None, brands: list = None,
+                 tax: int = 5, priority: int = 2):
+        super().__init__(
+            name=name, company=company, org_type=org_type,
+            director=director, inn=inn, address=address,
+            phone=phone, mail=mail, edo_id=edo_id,
+            ogrn=ogrn, kpp=kpp, oktmo=oktmo, keys=keys,
+        )
         self.brands = brands if brands is not None else []
+        self.tax = tax
         self.priority = priority
-        self.phone = phone
-        self.mail = mail
-        self.address = address if address is not None else AddressModel()
-        self.edo_id = edo_id
-        self.ogrn = ogrn
-        self.kpp = kpp
-        self.director = director
-
 
     def add_brand(self, brand: Brand):
         """Добавляет бренд и синхронизирует обратную сторону.
@@ -200,7 +313,7 @@ class Seller:
         if brand not in self.brands:
             self.brands.append(brand)
         if self not in brand.sellers:
-            brand.sellers.append(self)           # двусторонняя связь
+            brand.sellers.append(self)
 
     def remove_brand(self, brand: Brand):
         """Удаляет бренд и синхронизирует обратную сторону.
@@ -212,77 +325,47 @@ class Seller:
         if brand in self.brands:
             self.brands.remove(brand)
         if self in brand.sellers:
-            brand.sellers.remove(self)           # двусторонняя связь
+            brand.sellers.remove(self)
 
     def get_brand_keys(self) -> list[str]:
+        """Возвращает ключи всех брендов продавца."""
         keys = []
         for brand in self.brands:
             keys.extend(brand.get_all_keys())
         return keys
 
-    def has_key(self, key: str) -> bool:
-        """Проверяет, является ли переданный ключ одним из вариантов имени продавца."""
-        return key in self.keys
-
     def to_dict(self) -> dict:
-        """Сериализация для JSON.
-
-        Правило:
-          - name — всегда (обязательное);
-          - пустые строки/коллекции/адрес — опускаем (нет данных);
-          - tax, priority — всегда (бизнес-числа, дефолт может эволюционировать);
-          - keys/brands — копии, не ссылки.
-        """
-        data = {"name": self.name}
-
-        # Опциональные строковые идентификаторы: только непустые
-        for key in ("inn", "company", "phone", "mail",
-                    "edo_id", "ogrn", "kpp", "director"):
-            value = getattr(self, key, "")
-            if value and value.strip():
-                data[key] = value
-
+        """Сериализация Seller: общие поля + бренды/налог/приоритет."""
+        data = super().to_dict()
         if self.tax != 5:
             data["tax"] = self.tax
-        if self.priority !=2 :
+        if self.priority != 2:
             data["priority"] = self.priority
-
-        # Коллекции: только непустые, копии
-        if self.keys:
-            data["keys"] = list(self.keys)
         if self.brands:
             data["brands"] = [b.name for b in self.brands]
-
-        # Адрес: только непустой, как dict
-        if self.address is not None and not self.address.is_empty():
-            data["address"] = self.address.to_dict()
-
         return data
 
     @classmethod
-    def from_dict(cls, data: dict, brands_by_name: dict[str, Brand] = None) -> 'Seller':
+    def from_dict(cls, data: dict,
+                  brands_by_name: dict[str, Brand] = None) -> "Seller":
+        """Десериализация Seller: общие поля + бренды/налог/приоритет."""
         data = data or {}
-        seller = cls(
-            name=data["name"],
-            inn=data.get("inn", ""),
-            company=data.get("company", ""),
-            tax=data.get("tax", 5),
-            keys=data.get("keys", []),
-            priority=cls._safe_priority(data.get("priority", 2)),
-            phone=data.get("phone", ""),
-            mail=data.get("mail", ""),
-            address=AddressModel.from_dict(data.get("address") or {}),
-            edo_id=data.get("edo_id", ""),
-            ogrn=data.get("ogrn", ""),
-            kpp=data.get("kpp", ""),
-            director=data.get("director", ""),
-        )
+        seller = super().from_dict(data)
+        seller.tax = data.get("tax", 5)
+        seller.priority = cls._safe_priority(data.get("priority", 2))
         if brands_by_name:
             for brand_name in data.get("brands", []):
                 brand = brands_by_name.get(brand_name)
                 if brand:
                     seller.add_brand(brand)
         return seller
+
+    def __repr__(self) -> str:
+        """Отладочное представление."""
+        return (
+            f"Seller(name={self.name!r}, company={self.company!r}, "
+            f"org_type={self.org_type!r})"
+        )
 class Signer:
     """Модель подписанта (сотрудника).
 

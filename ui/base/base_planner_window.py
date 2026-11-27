@@ -337,7 +337,7 @@ class _BasePlannerListWindow(QMainWindow):
 
     def _on_open_checklist(self, task) -> None:
         """Открывает модальный диалог чек-листа."""
-        from ui.windows.planner_checklist_dialogs import ChecklistDialog
+        from ui.windows.planner_windows.planner_checklist_dialogs import ChecklistDialog
 
         mode = "edit" if self.EDITABLE else "view"
         dialog = ChecklistDialog(
@@ -413,7 +413,7 @@ class _BasePlannerListWindow(QMainWindow):
             except RuntimeError:
                 pass
 
-        from ui.windows.planner_themes_dialog import PlannerThemePickerDialog
+        from ui.windows.planner_windows.planner_themes_dialog import PlannerThemePickerDialog
         try:
             current_theme = ThemeKey(task.theme)
         except (ValueError, TypeError):

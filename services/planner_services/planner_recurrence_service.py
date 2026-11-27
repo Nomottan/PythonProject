@@ -8,7 +8,7 @@ from typing import Optional
 from models.planner_task import (
     PlannerTask, TaskPriority, TaskStatus, TaskType, ChecklistItem,
 )
-from services.planner_service import PlannerService
+from .planner_service import PlannerService
 from utils.planner_utils import RecurrenceCalculator
 
 

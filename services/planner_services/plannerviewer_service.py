@@ -13,7 +13,7 @@ from datetime import date
 from PySide6.QtCore import QObject, QTimer
 
 from models.planner_task import PlannerTask, TaskPriority, TaskStatus
-from services.planner_service import PlannerService
+from .planner_service import PlannerService
 
 
 class PrioritySlotFiller:
@@ -373,7 +373,7 @@ class PlannerQuickViewController(QObject):
 
         self._dialog_open = True
         try:
-            from ui.windows.planner_task_main_commentary import PlannerTaskMainCommentary
+            from ui.windows.planner_windows.planner_task_main_commentary import PlannerTaskMainCommentary
             dialog = PlannerTaskMainCommentary(
                 parent=self._view.window(),
                 task=task,

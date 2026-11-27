@@ -819,7 +819,7 @@ class SalesAccumulatorService:
 
         return verify_stats
 
-    def _load_itog_set(self, chz_folder, seller, date_str,
+    def _load_itog_set(self, chz_folder, seller_name, date_str,
                        cache, logger) -> set | None:
         """Ленивая загрузка КИЗов из ИТОГ-файла продавца.
 
@@ -844,26 +844,26 @@ class SalesAccumulatorService:
             требует заполненные столбцы kiz и owner_company;
             строки без owner пропускаются.
         """
-        if seller.name in cache:
-            return cache[seller.name]
+        if seller_name in cache:
+            return cache[seller_name]
 
         itog_name = FilenameUtils.format_with_extension(
-            f"ИТОГ {seller.name} {{date}}", date_str,
+            f"ИТОГ {seller_name} {{date}}", date_str,
         )
         itog_path = chz_folder / itog_name
 
         if not itog_path.is_file():
-            logger.report(f"ИТОГ {seller.name}: файл не найден")
-            cache[seller.name] = None
+            logger.report(f"ИТОГ {seller_name}: файл не найден")
+            cache[seller_name] = None
             return None
 
         wb = WorkbookOpener.open(
             itog_path, logger=logger, read_only=True,
-            description=f"ИТОГ {seller.name}",
+            description=f"ИТОГ {seller_name}",
         )
         if wb is None:
-            logger.report(f"ИТОГ {seller.name}: файл не открылся")
-            cache[seller.name] = None
+            logger.report(f"ИТОГ {seller_name}: файл не открылся")
+            cache[seller_name] = None
             return None
 
         kiz_set: set = set()
@@ -885,7 +885,7 @@ class SalesAccumulatorService:
                 pass
 
         logger.report(
-            f"ИТОГ {seller.name}: загружено {len(kiz_set)} КИЗов"
+            f"ИТОГ {seller_name}: загружено {len(kiz_set)} КИЗов"
         )
-        cache[seller.name] = kiz_set
+        cache[seller_name] = kiz_set
         return kiz_set
